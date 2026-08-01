@@ -418,7 +418,7 @@ performance-projects/
 - [x] E2E: capture a real site across 2 pages × (mid-mobile, desktop); assert complete run JSONs.
 
 ### Phase 3 — Storage + RAG (Google AI embeddings)
-- [ ] Implement `store/sql.py` (SQLite) and `store/artifacts.py` (file persistence).
+- [x] Implement `store/sql.py` (SQLite) and `store/artifacts.py` (file persistence).
 - [ ] Implement `store/vectordb.py` (Chroma) + `rag/knowledge.py`; embeddings via **Google AI API**
       (`text-embedding-004`) with key loaded from `.env` (never hard-coded).
 - [ ] Author initial `data/knowledge/` playbooks (images, fonts, code-splitting, caching, CWV tactics).
