@@ -1,0 +1,20 @@
+# Core runtime (pinned for reproducibility per SECURITY_PLAN.md §2.7)
+# Versions marked "verified" match the project venv (pip freeze from Phase 0).
+# Packages not yet installed are pinned to current stable releases (verify on install).
+pydantic==2.13.4          # verified in venv
+PyYAML==6.0.3             # verified in venv
+python-dotenv==1.2.2      # verified in venv
+chromadb==0.5.23          # pin to latest stable on first install
+google-genai==1.8.0       # pin to latest stable on first install
+litellm==1.40.0           # pin to latest stable on first install
+jinja2==3.1.6             # verified in venv
+matplotlib==3.10.4        # pin to latest stable on first install
+reportlab==4.4.1          # pin to latest stable on first install
+typer==0.12.5             # pin to latest stable on first install
+playwright==1.48.0        # pin to latest stable on first install
+
+# Test extras
+pytest==9.1.1             # verified in venv
+pytest-asyncio==1.4.0     # verified in venv
+pytest-mock==3.14.0       # pin to latest stable on first install
+pytest-cov==7.1.0         # verified in venv

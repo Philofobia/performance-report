@@ -1,0 +1,40 @@
+# Network / throttling presets mirroring Chrome DevTools tiers (PROJECT_SPEC §4.4).
+# Applied via CDP Network.emulateNetworkConditions (latency + downlink/uplink).
+# `downlink_mbps`/`uplink_mbps` of `null` mean "unthrottled". `offline` forces offline.
+networks:
+  - name: online
+    label: No throttling (online)
+    latency_ms: 0
+    downlink_mbps: null
+    uplink_mbps: null
+    offline: false
+  - name: fast-3g
+    label: Fast 3G (DevTools)
+    latency_ms: 150
+    downlink_mbps: 1.6
+    uplink_mbps: 0.75
+    offline: false
+  - name: slow-4g
+    label: Slow 4G (DevTools)
+    latency_ms: 170
+    downlink_mbps: 4.0
+    uplink_mbps: 3.0
+    offline: false
+  - name: slow-3g
+    label: Slow 3G (DevTools)
+    latency_ms: 200
+    downlink_mbps: 0.4
+    uplink_mbps: 0.4
+    offline: false
+  - name: offline
+    label: Offline
+    latency_ms: 0
+    downlink_mbps: 0
+    uplink_mbps: 0
+    offline: true
+  - name: custom
+    label: Custom throttle template
+    latency_ms: 100
+    downlink_mbps: 10.0
+    uplink_mbps: 5.0
+    offline: false

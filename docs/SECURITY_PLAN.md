@@ -1,0 +1,75 @@
+# Security Plan — Performance RAG & Reporting System
+
+> **Status:** Draft · **Owner:** m.parisi · **Companion skill:** `.agents/skills/security/SKILL.md`
+> Applies to every module; the `security` skill is the operational checklist.
+
+## 1. Scope & threat model
+This system ingests web performance data (manual + automated browser), stores it,
+runs LLM analysis (Google AI API), and renders PDF/MD reports. Assets: the Google
+API key, captured HAR/screenshots, and report data. Threats: secret leakage,
+SSRF via the browser layer, prompt injection into the RAG/LLM pipeline, template
+injection in report rendering, and known-vulnerable dependencies.
+
+| Surface | Risk |
+|---|---|
+| `.env` API key | committed/hard-coded → cost abuse, account compromise |
+| Browser ingestion | SSRF — user URLs point at private/internal hosts |
+| RAG/LLM | prompt injection from untrusted retrieved content |
+| Report render | HTML/template injection from LLM strings |
+| Storage/artifacts | tokens/secrets captured in HAR/screenshots |
+| Dependencies | known CVEs in pinned packages |
+
+## 2. Controls (with verification)
+### 2.1 Secrets
+- Key only in gitignored `.env`; `.env.example` = placeholders.
+- CI/pre-commit fails if `.env` in `git status` or key pattern `AIza[0-9A-Za-z_-]{35}` committed.
+- Key never logged; generic error messages on failure.
+**Verify:** `gitleaks detect` clean; `git status` shows no `.env`/secrets.
+
+### 2.2 SSRF (browser ingestion)
+Reject non-`https`; block `127.0.0.0/8`, `10/8`, `172.16/12`, `192.168/16`,
+`169.254/16`, `::1`, `fc00::/7`, `0.0.0.0/8`; forbid raw-IP + userinfo URLs;
+optionally enforce a target allow-list from `config/targets.yaml`.
+Implement in `normalize/url_safety.py`; unit-test all ranges.
+**Verify:** `url_safety` unit tests green covering each blocked category.
+
+### 2.3 Prompt-injection defense
+Retrieved web/KB content is **untrusted reference material**; system prompt
+instructs the model to ignore instructions in it; context delimited from
+instructions; no secrets in prompts; free-form problem text sanitized/truncated
+and kept out of the system block.
+
+### 2.4 Input validation
+Pydantic canonical schema on all inputs; strict metric units/ranges; URL
+validation via 2.2; length caps on problem text and matrix sizes.
+
+### 2.5 Template/rendering safety
+HTML report template escapes all LLM-derived content (no `|safe`/raw on
+untrusted data); test asserts no unescaped `<script>` survives malicious input.
+
+### 2.6 Artifact/secret hygiene
+HAR/screenshots may contain cookies/tokens — scrub `Cookie`/`Authorization` from
+stored HAR or keep artifacts in gitignored `data/`; document in README.
+
+### 2.7 Dependency & secret scanning (CI)
+`pip-audit -r requirements.txt` (fail on high/critical);
+`gitleaks detect --source . --redact` (fail on any secret);
+pin `requirements.txt`; scheduled dependency updates + advisory review.
+
+### 2.8 Logging/error redaction
+No key, no userinfo URLs, no report contents in logs; generic user-facing errors.
+
+## 3. Review workflow
+On request, run in order: (1) secrets check → (2) SSRF on new URL paths →
+(3) injection review on prompt/template changes → (4) dependency scan →
+(5) confirm `component-testing` covers hardened paths. Report per finding as
+**Severity · Location · Risk · Fix**; mark pass only when each control is
+satisfied or a limitation is explicitly documented.
+
+## 4. Definition of done (security)
+- [ ] `.gitignore` verified; no secrets committed; key-pattern scan clean.
+- [ ] `url_safety` implemented + unit-tested (all private ranges blocked).
+- [ ] All prompts delimit untrusted content; system prompt resists indirect injection.
+- [ ] Report template escapes all dynamic content; injection test green.
+- [ ] HAR scrubbing or gitignored-artifact decision documented.
+- [ ] `pip-audit` + `gitleaks` clean in CI.

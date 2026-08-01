@@ -1,0 +1,40 @@
+# Global application settings — thresholds, model choices, run defaults.
+# Loaded/validated by config/load.py (pydantic). See docs/PROJECT_SPEC.md §9.
+run_defaults:
+  # Default run count when a condition omits `runs`.
+  runs: 3
+  # Single-mode default device/network (used when a page has no explicit tests).
+  device: mid-mobile
+  network: slow-4g
+  # "One mobile + one desktop per page" default conditions (PROJECT_SPEC §4.4).
+  mobile_device: mid-mobile
+  mobile_network: slow-4g
+  desktop_device: desktop
+  desktop_network: fast-3g
+
+thresholds:
+  # CWV "good" thresholds (ms) — LCP / INP.
+  lcp_good_ms: 2500
+  lcp_fail_ms: 4000
+  cls_good: 0.1
+  cls_fail: 0.25
+  inp_good_ms: 200
+  inp_fail_ms: 500
+  fcp_good_ms: 1800
+  ttfb_good_ms: 800
+
+models:
+  embeddings: text-embedding-004
+  llm: gemini-2.0-flash
+  embed_dimensions: 768
+
+rag:
+  top_k: 5
+
+storage:
+  sqlite_path: data/processed/runs.sqlite
+  vector_dir: data/vector
+  raw_dir: data/raw
+
+report:
+  output_dir: data/reports

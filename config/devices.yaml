@@ -1,0 +1,34 @@
+# Device presets resolved to Playwright/CDP emulation (PROJECT_SPEC §4.4).
+# `playwright_device` optionally maps to a built-in Playwright descriptor used by
+# ingest/browser; viewport/CPU values are otherwise applied directly.
+devices:
+  - name: mid-mobile
+    label: Mid-level Android phone (Pixel 5-class)
+    viewport_width: 393
+    viewport_height: 851
+    device_scale_factor: 2.75
+    mobile: true
+    cpu_throttle: 4
+    playwright_device: Pixel 5
+  - name: high-mobile
+    label: High-end flagship mobile
+    viewport_width: 412
+    viewport_height: 915
+    device_scale_factor: 3
+    mobile: true
+    cpu_throttle: 2
+    playwright_device: Pixel 7
+  - name: low-mobile
+    label: Low-end budget mobile
+    viewport_width: 360
+    viewport_height: 640
+    device_scale_factor: 2
+    mobile: true
+    cpu_throttle: 6
+  - name: desktop
+    label: Desktop (Full HD)
+    viewport_width: 1350
+    viewport_height: 940
+    device_scale_factor: 1
+    mobile: false
+    cpu_throttle: 1

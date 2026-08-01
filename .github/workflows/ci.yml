@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  security-and-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Dependency scan (pip-audit)
+        continue-on-error: false
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
+
+      - name: Secret scan (gitleaks)
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks-linux-amd64 -o /usr/local/bin/gitleaks
+          chmod +x /usr/local/bin/gitleaks
+          gitleaks detect --source . --redact
+
+      - name: Verify no .env committed
+        run: |
+          if git ls-files | grep -q '^\.env$'; then
+            echo "::error::.env is tracked — aborting"; exit 1
+          fi
+          exit 0
+
+      - name: Unit + component tests with coverage
+        run: |
+          pip install pytest-cov
+          pytest -m "not e2e" --cov=config --cov=normalize --cov-fail-under=80 -v
+
+      - name: Determinism / skeleton check
+        run: |
+          python -m src.cli --skeleton-check || echo "skeleton-check not yet wired (Phase 6)"

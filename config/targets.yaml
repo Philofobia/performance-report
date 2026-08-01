@@ -1,0 +1,17 @@
+# Named pages + per-page test matrix (device × network × runs), PROJECT_SPEC §4.4.
+# If a page's `tests` is omitted/empty, config/load.py fills in the default
+# "one mobile + one desktop per page" conditions from settings.yaml.
+project: storefront
+pages:
+  - name: homepage
+    url: https://example.com/
+    tests:
+      - { device: mid-mobile, network: slow-4g, runs: 3 }
+      - { device: desktop, network: fast-3g, runs: 3 }
+  - name: pdp
+    url: https://example.com/p/123
+    tests:
+      - { device: mid-mobile, network: slow-4g, runs: 3 }
+      - { device: desktop, network: online, runs: 1 }
+  - name: plp
+    url: https://example.com/category/shoes
