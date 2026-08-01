@@ -42,7 +42,13 @@ jobs:
       - name: Unit + component tests with coverage
         run: |
           pip install pytest-cov
-          pytest -m "not e2e" --cov=config --cov=normalize --cov-fail-under=80 -v
+          pytest -m "not e2e" --cov=config --cov=normalize --cov=ingest \
+            --cov-fail-under=80 -v
+
+      - name: E2E browser tests (Chromium)
+        run: |
+          python -m playwright install --with-deps chromium
+          pytest -m e2e -v
 
       - name: Determinism / skeleton check
         run: |
