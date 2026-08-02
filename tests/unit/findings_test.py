@@ -165,3 +165,163 @@ def test_rule_based_analysis_on_a_healthy_run_says_so():
     assert "no threshold" in summary.lower()
     assert findings == []
     assert recommendations == []
+
+
+# --------------------------------------------------------------------------- #
+# analyze_page — the LLM path and its degradations
+# --------------------------------------------------------------------------- #
+from analysis.findings import PageAnalysis, analyze_page  # noqa: E402
+from analysis.llm import InvalidModelOutputError, LlmPageAnalysis  # noqa: E402
+from rag.embeddings import QuotaExceededError  # noqa: E402
+from store.vectordb import SearchHit  # noqa: E402
+
+
+def a_hit(source="images.md", **meta):
+    metadata = {"category": "images", "effort": "low",
+                "expected_lcp_reduction_pct": [15, 40], "heading_path": ["Images"]}
+    metadata.update(meta)
+    return SearchHit(doc_id=f"{source}#x", text="Serve modern formats. Use AVIF.",
+                     kind="knowledge", source=source, metadata=metadata, score=0.9)
+
+
+class FakeClient:
+    """Stands in for GoogleAnalysisClient."""
+
+    model = "fake-llm"
+
+    def __init__(self, page_result=None, error=None):
+        self._page_result = page_result
+        self._error = error
+        self.calls = 0
+
+    def analyze_page(self, prompt):
+        self.calls += 1
+        if self._error:
+            raise self._error
+        return self._page_result
+
+
+def an_llm_result(source="images.md"):
+    return LlmPageAnalysis.model_validate({
+        "summary": "The hero video dominates the LCP path.",
+        "findings": [{"title": "Hero video is the LCP element",
+                      "detail": "2140KB before first paint.",
+                      "evidence": ["lcp_ms=6200"],
+                      "symptom_codes": ["lcp_fail", "invented_code"]}],
+        "impacts": [{"audience": "ux", "text": "Empty hero for six seconds."}],
+        "recommendations": [{"title": "Replace the video with a poster",
+                             "rationale": "Removes 2MB from the critical path.",
+                             "playbook_source": source,
+                             "playbook_section": "Serve modern formats"}],
+    })
+
+
+def _setup():
+    run = make_run()
+    symptoms = retrieve.detect_symptoms(run, Thresholds())
+    chunks = knowledge.load_knowledge_dir("data/knowledge")
+    return run, symptoms, chunks
+
+
+def test_llm_path_produces_an_llm_mode_analysis():
+    run, symptoms, chunks = _setup()
+    result = analyze_page([run], hits=[a_hit()], symptoms=symptoms,
+                          client=FakeClient(an_llm_result()), chunks=chunks)
+    assert isinstance(result, PageAnalysis)
+    assert result.mode == "llm"
+    assert result.degradation_reason is None
+    assert result.summary.startswith("The hero video")
+    assert result.playbooks_cited == ["images.md"]
+
+
+def test_numbers_come_from_the_estimator_not_the_model():
+    run, symptoms, chunks = _setup()
+    result = analyze_page([run], hits=[a_hit()], symptoms=symptoms,
+                          client=FakeClient(an_llm_result()), chunks=chunks)
+    rec = result.recommendations[0]
+    assert rec.projections
+    projection = rec.projections[0]
+    assert projection.metric == "lcp_ms"
+    assert projection.before == 6200.0
+    assert projection.after_low == pytest.approx(6200 * 0.85)
+
+
+def test_unknown_symptom_codes_are_pruned_but_the_finding_survives():
+    run, symptoms, chunks = _setup()
+    result = analyze_page([run], hits=[a_hit()], symptoms=symptoms,
+                          client=FakeClient(an_llm_result()), chunks=chunks)
+    codes = result.findings[0].symptom_codes
+    assert "lcp_fail" in codes
+    assert "invented_code" not in codes
+
+
+def test_a_recommendation_citing_an_unretrieved_playbook_is_dropped():
+    run, symptoms, chunks = _setup()
+    result = analyze_page(
+        [run], hits=[a_hit("images.md")], symptoms=symptoms,
+        client=FakeClient(an_llm_result(source="fabricated.md")), chunks=chunks
+    )
+    # every recommendation was dropped -> fell back for this page
+    assert result.dropped_recommendations == 1
+    assert result.mode == "rule_based"
+    assert result.degradation_reason == "no_grounded_recommendations"
+
+
+def test_partial_drop_keeps_the_grounded_recommendations():
+    run, symptoms, chunks = _setup()
+    mixed = LlmPageAnalysis.model_validate({
+        "summary": "s",
+        "findings": [],
+        "impacts": [],
+        "recommendations": [
+            {"title": "Real", "rationale": "r", "playbook_source": "images.md",
+             "playbook_section": "Serve modern formats"},
+            {"title": "Fake", "rationale": "r", "playbook_source": "invented.md",
+             "playbook_section": "Nope"},
+        ],
+    })
+    result = analyze_page([run], hits=[a_hit("images.md")], symptoms=symptoms,
+                          client=FakeClient(mixed), chunks=chunks)
+    assert result.mode == "llm"
+    assert result.dropped_recommendations == 1
+    assert [r.title for r in result.recommendations] == ["Real"]
+
+
+def test_no_client_falls_back_with_a_reason():
+    run, symptoms, chunks = _setup()
+    result = analyze_page([run], hits=[], symptoms=symptoms, client=None,
+                          chunks=chunks)
+    assert result.mode == "rule_based"
+    assert result.degradation_reason == "no_api_key"
+    assert result.recommendations
+
+
+def test_invalid_model_output_falls_back_with_a_reason():
+    run, symptoms, chunks = _setup()
+    result = analyze_page(
+        [run], hits=[a_hit()], symptoms=symptoms,
+        client=FakeClient(error=InvalidModelOutputError("bad json")), chunks=chunks
+    )
+    assert result.mode == "rule_based"
+    assert result.degradation_reason == "invalid_model_output"
+
+
+def test_quota_exhaustion_falls_back_with_a_reason():
+    run, symptoms, chunks = _setup()
+    result = analyze_page(
+        [run], hits=[a_hit()], symptoms=symptoms,
+        client=FakeClient(error=QuotaExceededError("out")), chunks=chunks
+    )
+    assert result.mode == "rule_based"
+    assert result.degradation_reason == "quota_exhausted"
+
+
+def test_all_runs_for_the_page_are_retained_for_comparison():
+    mobile = make_run("run_m", device="mid-mobile", network="slow-4g")
+    desktop = make_run("run_d", lcp=2100, cls=0.02, inp=90,
+                       device="desktop", network="fast-3g")
+    _, symptoms, chunks = _setup()
+    result = analyze_page([desktop, mobile], hits=[a_hit()], symptoms=symptoms,
+                          client=FakeClient(an_llm_result()), chunks=chunks)
+    assert result.primary_run.run_id == "run_m"
+    assert [r.run_id for r in result.runs] == ["run_d", "run_m"]

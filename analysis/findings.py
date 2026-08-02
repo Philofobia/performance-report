@@ -16,7 +16,7 @@ says which mode produced it, so nobody has to guess.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from analysis.estimator import Candidate, Projection, by_source, effort_of, project
@@ -326,3 +326,165 @@ def rule_based_analysis(
     impacts = _impacts_for(symptoms)
     recommendations = _rule_based_recommendations(run, symptoms, chunks)
     return summary, findings, impacts, recommendations
+
+
+@dataclass
+class PageAnalysis:
+    """Everything the report needs about one page."""
+
+    page_name: str
+    page_url: str
+    primary_run: Run
+    runs: List[Run]
+    symptoms: List[Symptom]
+    summary: str
+    findings: List[Finding]
+    impacts: List[Impact]
+    recommendations: List[Recommendation]
+    projections: Dict[str, Projection]
+    mode: str = "rule_based"
+    degradation_reason: Optional[str] = None
+    dropped_recommendations: int = 0
+    playbooks_cited: List[str] = field(default_factory=list)
+
+
+def _rule_based_page(
+    runs: List[Run],
+    primary: Run,
+    symptoms: List[Symptom],
+    chunks: Sequence[Chunk],
+    reason: Optional[str],
+    dropped: int = 0,
+) -> PageAnalysis:
+    """Build a PageAnalysis from the no-model path."""
+    from analysis.estimator import aggregate
+
+    summary, findings, impacts, recommendations = rule_based_analysis(
+        primary, symptoms, chunks
+    )
+    flat = [p for rec in recommendations for p in rec.projections]
+    return PageAnalysis(
+        page_name=primary.page.name,
+        page_url=primary.page.url,
+        primary_run=primary,
+        runs=runs,
+        symptoms=list(symptoms),
+        summary=summary,
+        findings=findings,
+        impacts=impacts,
+        recommendations=recommendations,
+        projections=aggregate(flat, _metrics_map(primary)),
+        mode="rule_based",
+        degradation_reason=reason,
+        dropped_recommendations=dropped,
+        playbooks_cited=sorted({r.playbook_source for r in recommendations}),
+    )
+
+
+def analyze_page(
+    runs: Sequence[Run],
+    *,
+    hits: Sequence[Any],
+    symptoms: Sequence[Symptom],
+    client: Optional[Any] = None,
+    prior_findings: Sequence[Any] = (),
+    chunks: Optional[Sequence[Chunk]] = None,
+    knowledge_dir: str = "data/knowledge",
+) -> PageAnalysis:
+    """Analyse one page, with a model when there is one and rules when not.
+
+    ``hits`` are the retrieved playbook chunks; their ``source`` values are the
+    *only* citations a recommendation may claim. ``chunks`` is the on-disk
+    playbook corpus used by the fallback — passed in so tests and repeated
+    pages do not re-read the directory.
+    """
+    from analysis.estimator import aggregate
+    from analysis.llm import AnalysisError, InvalidModelOutputError
+    from rag.embeddings import EmbeddingError, MissingApiKeyError, QuotaExceededError
+    from rag.knowledge import load_knowledge_dir
+    from rag.prompt import build_analysis_prompt
+
+    ordered_runs = sorted(
+        runs, key=lambda r: (r.condition.device, r.condition.network, r.run_id)
+    )
+    primary = select_primary(ordered_runs)
+    corpus = list(chunks) if chunks is not None else load_knowledge_dir(knowledge_dir)
+
+    if client is None:
+        return _rule_based_page(
+            ordered_runs, primary, list(symptoms), corpus, "no_api_key"
+        )
+
+    prompt = build_analysis_prompt(
+        primary, hits, symptoms=symptoms, prior_findings=prior_findings
+    )
+    try:
+        result = client.analyze_page(prompt)
+    except QuotaExceededError:
+        return _rule_based_page(
+            ordered_runs, primary, list(symptoms), corpus, "quota_exhausted"
+        )
+    except MissingApiKeyError:
+        return _rule_based_page(
+            ordered_runs, primary, list(symptoms), corpus, "no_api_key"
+        )
+    except (InvalidModelOutputError, AnalysisError, EmbeddingError):
+        return _rule_based_page(
+            ordered_runs, primary, list(symptoms), corpus, "invalid_model_output"
+        )
+
+    # -- citation validation: the model may cite only what it was shown ----- #
+    allowed = {hit.source: hit.metadata for hit in hits if hit.source}
+    kept = [r for r in result.recommendations if r.playbook_source in allowed]
+    dropped = len(result.recommendations) - len(kept)
+
+    if not kept:
+        return _rule_based_page(
+            ordered_runs, primary, list(symptoms), corpus,
+            "no_grounded_recommendations", dropped=dropped,
+        )
+
+    metrics = _metrics_map(primary)
+    candidates = [
+        Candidate(source=rec.playbook_source, metadata=allowed[rec.playbook_source])
+        for rec in kept
+    ]
+    projections = by_source(project(candidates, metrics))
+
+    recommendations = build_recommendations(
+        [
+            (rec.title, rec.rationale, rec.playbook_source, rec.playbook_section,
+             allowed[rec.playbook_source])
+            for rec in kept
+        ],
+        projections,
+    )
+
+    detected = {s.code for s in symptoms}
+    findings = [
+        Finding(
+            title=f.title,
+            detail=f.detail,
+            evidence=tuple(f.evidence),
+            symptom_codes=tuple(c for c in f.symptom_codes if c in detected),
+        )
+        for f in result.findings
+    ]
+
+    flat = [p for rec in recommendations for p in rec.projections]
+    return PageAnalysis(
+        page_name=primary.page.name,
+        page_url=primary.page.url,
+        primary_run=primary,
+        runs=ordered_runs,
+        symptoms=list(symptoms),
+        summary=result.summary,
+        findings=findings,
+        impacts=[Impact(audience=i.audience, text=i.text) for i in result.impacts],
+        recommendations=recommendations,
+        projections=aggregate(flat, metrics),
+        mode="llm",
+        degradation_reason=None,
+        dropped_recommendations=dropped,
+        playbooks_cited=sorted({r.playbook_source for r in recommendations}),
+    )
