@@ -54,7 +54,7 @@ jobs:
       - name: Unit + component tests with coverage
         run: |
           pip install pytest-cov
-          pytest -m "not e2e" --cov=config --cov=normalize --cov=ingest --cov=store \
+          pytest -m "not e2e" --cov=config --cov=normalize --cov=ingest --cov=store --cov=rag \
             --cov-fail-under=80 -v
 
       - name: E2E browser tests (Chromium)

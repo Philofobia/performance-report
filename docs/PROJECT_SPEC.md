@@ -467,9 +467,11 @@ performance-projects/
 - [x] Implement `store/sql.py` (SQLite) and `store/artifacts.py` (file persistence).
 - [x] Implement `store/vectordb.py` (SQLite + numpy exact search, §8.1); `rag/knowledge.py` embeds via **Google AI API**
       (`text-embedding-004`) with key loaded from `.env` (never hard-coded).
-- [ ] Author initial `data/knowledge/` playbooks (images, fonts, code-splitting, caching, CWV tactics).
-- [ ] Implement `rag/retrieve.py` + `rag/prompt.py`; write tests for retrieval quality.
-- [ ] Graceful behavior when API key missing / free-tier quota hit (clear error, retry/backoff).
+- [x] Author initial `data/knowledge/` playbooks (images, fonts, code-splitting, caching, CWV tactics).
+- [x] Implement `rag/retrieve.py` (rule-based symptom detection -> prose query) + `rag/prompt.py`
+      (delimited, neutralised untrusted context per SECURITY_PLAN §2.3).
+- [x] Graceful behavior when API key missing / free-tier quota hit (clear error, retry/backoff,
+      content-addressed embedding cache so unchanged playbooks cost no API calls).
 
 ### Phase 4 — Analysis + report model
 - [ ] Implement `analysis/llm.py`, `analysis/findings.py` (localize problem + impact), `estimator.py`.
