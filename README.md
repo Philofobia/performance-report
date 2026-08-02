@@ -7,9 +7,27 @@ placement every run. Only the numbers, findings, and recommendations differ.
 That constraint is the point: it turns every performance investigation into a
 comparable, automatable artifact instead of a bespoke write-up.
 
-> **Status: in development.** Phases 0–3b are implemented and tested (ingestion,
-> storage, RAG). Analysis, report rendering, and the unified CLI are not built yet —
-> see [Roadmap](#roadmap).
+## Where the project is
+
+**In development — data goes in and is retrievable; nothing comes out as a report yet.**
+
+**Working today (phases 0–3b):** config and test-matrix resolution · canonical Pydantic
+schema · manual ingestion CLI · automated multi-page browser campaigns with device and
+network emulation · SSRF-gated navigation · SQLite run store with scrubbed artifacts ·
+RAG over the knowledge base (embeddings, chunking, symptom detection, grounded prompts) ·
+optional per-target request headers for bot-protected sites.
+
+**Missing — the entire output half (phases 4–6):**
+
+| Gap | Consequence today |
+|---|---|
+| `analysis/` — findings, impact statements, improvement estimator | Retrieved context is never turned into conclusions; no LLM call is made |
+| `report/` — HTML skeleton, charts, PDF + Markdown renderers | **No report is produced at all** — the project's headline deliverable |
+| `src/cli.py` — unified `ingest` / `analyze` / `report` entry point | Each stage is invoked separately as a module; the RAG layer has no CLI |
+| `--skeleton-check` drift guard | The "identical skeleton" guarantee is unverified |
+
+Full breakdown in [Roadmap](#roadmap). Phases 4–7 below are **planned, not built** —
+nothing in this README describes them as working.
 
 ---
 
@@ -89,6 +107,26 @@ pages:
 
 Unknown device or network names are rejected at load time, naming the offending page.
 
+### Targets behind bot protection (optional)
+
+Sites fronted by a bot filter such as Akamai answer automated traffic with `403`/`429`.
+If you have an allowlist token, declare the header name in config and keep the value in
+`.env`:
+
+```yaml
+project: oakley
+headers:
+  X-Akamai-Bot: ${AKAMAI_BOT_TOKEN}     # value resolved from .env, never committed
+pages:
+  - name: homepage
+    url: https://www.oakley.com/en-us
+```
+
+Headers are applied at the browser-context level, so they cover the document *and*
+every sub-resource. This is **fully opt-in**: declare none and nothing changes. Use
+`--no-headers` to run without them, and see [CUSTOM_HEADERS.md](docs/CUSTOM_HEADERS.md)
+for scoping rules and how to confirm the token was accepted.
+
 ---
 
 ## Running it
@@ -100,6 +138,7 @@ python -m ingest.automated                          # the full configured matrix
 python -m ingest.automated --pages homepage,plp     # only named pages
 python -m ingest.automated --device desktop --runs 5
 python -m ingest.automated --dry-run                # print the resolved matrix, no browser
+python -m ingest.automated --no-headers             # ignore configured request headers
 ```
 
 `--device`, `--network`, and `--runs` override every condition for that invocation,
@@ -178,7 +217,7 @@ rule. Full reasoning in [PROJECT_SPEC.md §8.1](docs/PROJECT_SPEC.md).
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 311 offline tests, no browser, no network
+pytest -m "not e2e"      # 353 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 ```
 
@@ -218,7 +257,8 @@ affect day-to-day use:
 | 2 | Automated multi-page browser campaigns | Done |
 | 3 | SQLite run store + artifact persistence | Done |
 | 3b | RAG — embeddings, knowledge base, retrieval, prompts | Done |
-| 4 | Analysis — findings, impact, improvement estimator | Planned |
+| — | Optional per-target request headers (bot-protected targets) | Done |
+| 4 | Analysis — findings, impact, improvement estimator | **Next** |
 | 5 | Report rendering — fixed HTML skeleton → PDF + Markdown mirror | Planned |
 | 6 | Unified CLI (`ingest` / `analyze` / `report`) + skeleton-drift check | Planned |
 | 7 | Prior-run memory, trend comparison, optional web UI | Planned |
@@ -228,3 +268,4 @@ affect day-to-day use:
 - [PROJECT_SPEC.md](docs/PROJECT_SPEC.md) — full specification and design decisions
 - [SECURITY_PLAN.md](docs/SECURITY_PLAN.md) — threat model and controls
 - [TESTING_PLAN.md](docs/TESTING_PLAN.md) — test strategy
+- [CUSTOM_HEADERS.md](docs/CUSTOM_HEADERS.md) — optional request headers for bot-protected targets

@@ -1,6 +1,26 @@
 # Named pages + per-page test matrix (device × network × runs), PROJECT_SPEC §4.4.
 # If a page's `tests` is omitted/empty, config/load.py fills in the default
 # "one mobile + one desktop per page" conditions from settings.yaml.
+#
+# OPTIONAL custom request headers (docs/CUSTOM_HEADERS.md): add a `headers:`
+# block here (project-wide) and/or on a page (overrides per key; `headers: {}`
+# opts a page out). Values use ${ENV_VAR} references resolved from .env, so no
+# secret is committed. Omit the block entirely and nothing changes — headers are
+# opt-in and header-less runs behave exactly as they always have.
+#
+# Worked example for a target behind Akamai bot protection — uncomment and set
+# AKAMAI_BOT_TOKEN in .env:
+#
+# project: oakley
+# headers:
+#   X-Akamai-Bot: ${AKAMAI_BOT_TOKEN}
+# pages:
+#   - name: homepage
+#     url: https://www.oakley.com/en-us
+#   - name: plp
+#     url: https://www.oakley.com/en-us/category/sunglasses
+#   - name: pdp
+#     url: https://www.oakley.com/en-us/product/W0OO9102?variant=888392335937
 project: storefront
 pages:
   - name: homepage
