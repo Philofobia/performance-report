@@ -474,9 +474,11 @@ performance-projects/
       content-addressed embedding cache so unchanged playbooks cost no API calls).
 
 ### Phase 4 — Analysis + report model
-- [ ] Implement `analysis/llm.py`, `analysis/findings.py` (localize problem + impact), `estimator.py`.
-- [ ] Implement `analysis/reportmodel.py` producing the Report JSON (Section 6).
-- [ ] Unit-test estimator math (projected before/after deltas).
+- [x] Implement `analysis/llm.py`, `analysis/findings.py` (localize problem + impact), `estimator.py`.
+- [x] Implement `analysis/reportmodel.py` producing the Report JSON (Section 6).
+- [x] Unit-test estimator math (projected before/after deltas).
+- [x] Rule-based degradation path (no key / quota / invalid output) + `meta.analysis_mode`.
+- [x] `python -m analysis` interim entry point; findings persisted as `kind="finding"`.
 
 ### Phase 5 — Report rendering (fixed skeleton, frontend-design styling)
 - [ ] Use the **`frontend-design`** skill to establish the report's visual identity (palette,
