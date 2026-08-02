@@ -32,7 +32,7 @@ Setup: `pip install -e ".[test]"` and `python -m playwright install chromium`.
 | `store/sql.py` | `tests/integration/store_test.py` | in-memory insert/query/round-trip |
 | `store/artifacts.py` | `tests/integration/store_test.py` | write/read screenshots+HAR to tmp |
 | `store/vectordb.py` | `tests/integration/vectordb_test.py` | in-memory SQLite add/query/delete; exact top-k; deterministic tie-breaks; dim-mismatch refused |
-| `rag/*` | `tests/unit/rag_test.py` | KB load+embed; retrieval ranking; prompt build; quota/429 backoff |
+| `rag/*` | `tests/unit/rag_test.py` | KB load+chunk+embed; symptom detection vs thresholds; query build; prompt build; **injection defence** (delimiter forgery, control chars); quota/429 backoff; key-missing; embedding cache |
 | `analysis/estimator.py` | `tests/unit/estimator_test.py` | before/after delta math; range clamping |
 | `analysis/findings.py` | `tests/unit/findings_test.py` | localize problem; derive impact |
 | `analysis/reportmodel.py` | `tests/unit/reportmodel_test.py` | fixed-skeleton Report JSON |
