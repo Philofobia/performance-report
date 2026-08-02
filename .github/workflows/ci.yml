@@ -27,10 +27,22 @@ jobs:
           pip-audit -r requirements.txt
 
       - name: Secret scan (gitleaks)
+        env:
+          # Pinned rather than "latest": a moving scanner version makes CI
+          # non-reproducible, and /releases/latest/download has no bare-binary
+          # asset — gitleaks ships tarballs (that 404 broke this step).
+          GITLEAKS_VERSION: 8.30.1
         run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks-linux-amd64 -o /usr/local/bin/gitleaks
-          chmod +x /usr/local/bin/gitleaks
-          gitleaks detect --source . --redact
+          curl -sSfL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+          # Scan the working tree, then the full commit history: a secret that
+          # was committed and later removed is still a leaked secret.
+          gitleaks dir . --redact --no-banner
+          gitleaks git . --redact --no-banner
 
       - name: Verify no .env committed
         run: |
@@ -42,7 +54,13 @@ jobs:
       - name: Unit + component tests with coverage
         run: |
           pip install pytest-cov
-          pytest -m "not e2e" --cov=config --cov=normalize --cov-fail-under=80 -v
+          pytest -m "not e2e" --cov=config --cov=normalize --cov=ingest \
+            --cov-fail-under=80 -v
+
+      - name: E2E browser tests (Chromium)
+        run: |
+          python -m playwright install --with-deps chromium
+          pytest -m e2e -v
 
       - name: Determinism / skeleton check
         run: |

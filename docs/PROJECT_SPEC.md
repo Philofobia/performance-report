@@ -128,11 +128,16 @@ Every run (manual or automated) converges to this schema; the report generator c
   "metrics": {
     "cwp": {
       "lcp_ms": 6200, "cls": 0.42, "inp_ms": 480,
-      "fcp_ms": 3100, "ttfb_ms": 1800,
+      "fcp_ms": 3100, "ttfb_ms": 1800, "tbt_ms": 620,
       "target_lcp_ms": 2500, "target_cls": 0.1, "target_inp_ms": 200
     },
     "lighthouse": { "performance": 54, "accessibility": 88, "best_practices": 79, "seo": 90 },
-    "network": { "total_transfer_kb": 4820, "request_count": 118, "render_blocking_css": 6 }
+    "network": { "total_transfer_kb": 4820, "request_count": 118, "render_blocking_css": 6 },
+    "main_thread": {
+      "script_ms": 1820, "layout_ms": 240, "style_ms": 90, "task_ms": 3100,
+      "js_heap_kb": 24500, "dom_nodes": 3200, "layout_count": 42,
+      "js_event_listeners": 380, "resource_count": 118
+    }
   },
   "resource_timings": [ { "name": "/hero.mp4", "type": "media", "transfer_kb": 2140, "duration_ms": 390 } ],
   "captures": { "screenshot": "file.png", "har": "capture.har", "trace": "trace.json" }
@@ -146,6 +151,17 @@ Every run (manual or automated) converges to this schema; the report generator c
 ### 4.3 Validation rules
 - Units enforced (ms vs s, ratios 0–1 vs %). Reject out-of-range values with a clear error.
 - Required CWV trio for automated runs: **LCP, CLS, INP** (plus FCP/TTFB when available).
+
+> **INP in a lab run (measured, not assumed).** INP only exists once a real
+> interaction has happened, so the runner drives a *synthetic* one (Escape key +
+> a click on a point proven non-interactive) after LCP settles. On a page with
+> real handlers this yields a true latency (measured: a 120 ms handler reports
+> INP ≈ 128 ms, stable across runs). On a page with **no** event handlers at all
+> — e.g. `example.com` — interactions resolve faster than the Event Timing API's
+> 16 ms `durationThreshold` floor, so no entry is emitted and the run fails
+> validation rather than reporting the floor as if it were a measurement.
+> **TBT** (`tbt_ms`) is therefore also collected as the always-available lab
+> responsiveness metric, derived from long tasks after FCP.
 - Each run must reference a `page` (named, with url) and a `condition` (device + network + runs)
   so reports are comparable per page and per condition.
 
@@ -260,8 +276,16 @@ content scales with the page count.
 - **Network / throttling:** resolve `page.tests[].network` from `config/networks.yaml` to CDP
   `Network.emulateNetworkConditions` (latency / downlink / uplink) — the same presets as Chrome
   DevTools — optionally combined with CPU throttle.
-- **Metrics per run:** Lighthouse programmatically over CDP + injected `web-vitals` listeners;
-  capture HAR, trace, and a screenshot for the appendix.
+- **Metrics per run (CDP-direct, decision #4):** Core Web Vitals via native
+  `PerformanceObserver` collectors installed **before navigation** (LCP/CLS/FCP are buffered
+  entries and are lost if attached after `load`), plus DevTools main-thread counters read over
+  CDP `Performance.getMetrics` (script / layout / style / task time, DOM nodes, heap, listeners).
+  The domain is enabled **before navigation** — counters only accumulate while enabled.
+  Capture HAR (bodies omitted), trace, and a screenshot for the appendix.
+- **Why not the Lighthouse Node bridge:** a faithful programmatic Lighthouse audit needs a Node
+  process wired to the page's CDP websocket. CDP gives the same main-thread data natively with no
+  extra runtime, so Lighthouse category scores are **opt-in** (inject `run_lighthouse_fn`) rather
+  than required; the schema treats them as optional.
 - **Reproducibility:** N runs per condition (default 3), report the **median**; store every run's
   raw artifacts so results are auditable.
 - **Budget guardrails:** request caps, navigation timeouts, and a per-page target list so long
@@ -277,10 +301,10 @@ content scales with the page count.
 | Browser automation | Playwright (Python) + CDP | emulation + throttling + HAR capture |
 | Performance metrics | Lighthouse (via CDP) + web-vitals | industry-standard CWV |
 | Structured storage | SQLite (or DuckDB) | zero-config, queryable |
-| Vector DB | ChromaDB (or LanceDB) | lightweight local RAG, no server |
+| Vector DB | ChromaDB **0.5.x** (or LanceDB) | lightweight local RAG, no server. Pinned off 1.x: PYSEC-2026-311 is an unfixed pre-auth RCE affecting 1.0.0-1.5.9. |
 | Embeddings | **Google AI API** — free tier, e.g. `text-embedding-004` | API embeddings (decision #1); key via `.env` |
 | Secrets / env | `python-dotenv` + `.env` (gitignored) + `.env.example` | keeps the shared Google API key out of git |
-| LLM orchestration | LangChain / LiteLLM (pluggable) | retrieval + grounded generation |
+| LLM orchestration | **`google-genai` directly** (decision #5) | LiteLLM dropped: it requires `tokenizers>=0.21` while ChromaDB 0.5.x pins `<=0.20.3`, and 1.40.0 carried 19 CVEs. One client for both embeddings and generation. |
 | Charts | Matplotlib / Plotly→static | deterministic, embeds in PDF |
 | PDF | HTML template → headless Chromium print-to-PDF **or** ReportLab | fixed skeleton via template |
 | MD mirror | Jinja2 template | same content, markdown form |
@@ -367,31 +391,31 @@ performance-projects/
 ## 10. Development phases (steps before we start coding the real system)
 
 ### Phase 0 — Foundations
-- [ ] Set up Python 3.11 virtual env + `requirements.txt` (playwright, chromadb, langchain/litellm,
+- [x] Set up Python 3.11 virtual env + `requirements.txt` (playwright, chromadb, langchain/litellm,
       matplotlib, jinja2, pydantic, python-dotenv, typer/click, reportlab fallback, sqlite driver,
       google-genai).
-- [ ] `playwright install chromium`; verify mobile emulation + CDP throttling on a sample site.
-- [ ] Create `.gitignore` (ignore `.env`, `data/vector`, `data/raw`, `data/reports`, `__pycache__`)
+- [x] `playwright install chromium`; verify mobile emulation + CDP throttling on a sample site.
+- [x] Create `.gitignore` (ignore `.env`, `data/vector`, `data/raw`, `data/reports`, `__pycache__`)
       and `.env.example` (placeholders) — confirm `git status` shows no secrets.
-- [ ] Author `config/settings.yaml`, `config/devices.yaml`, `config/networks.yaml` (presets),
+- [x] Author `config/settings.yaml`, `config/devices.yaml`, `config/networks.yaml` (presets),
       and a sample `config/targets.yaml` with named pages + default mobile/desktop matrix.
 
 ### Phase 1 — Data model & manual ingestion
-- [ ] Implement `normalize/schema.py` (Pydantic) for the canonical run object (Section 4.2),
+- [x] Implement `normalize/schema.py` (Pydantic) for the canonical run object (Section 4.2),
       including `page`, `condition`, and multi-run grouping.
-- [ ] Implement `ingest/manual.py` CLI: accept problem text + metric pairs + optional scores; validate.
-- [ ] Write unit tests for validation (units, ranges, required fields).
+- [x] Implement `ingest/manual.py` CLI: accept problem text + metric pairs + optional scores; validate.
+- [x] Write unit tests for validation (units, ranges, required fields).
 
 ### Phase 2 — Automated browser testing (multi-page matrix)
-- [ ] Implement `config` loaders for `targets.yaml` / `devices.yaml` / `networks.yaml`; resolve each
+- [x] Implement `config` loaders for `targets.yaml` / `devices.yaml` / `networks.yaml`; resolve each
       named page into its list of (device × network × runs) test conditions (§4.4).
-- [ ] Implement `ingest/browser/runner.py`: Playwright lifecycle, device emulation, throttle
+- [x] Implement `ingest/browser/runner.py`: Playwright lifecycle, device emulation, throttle
       presets (CDP latency/downlink/uplink + CPU throttle), HAR/trace/screenshot.
-- [ ] Implement `ingest/browser/lighthouse.py` (Lighthouse over CDP) + `webser.py` (web-vitals).
-- [ ] Implement `ingest/automated.py` campaign loop: for each page & condition, run N times, take
+- [x] Implement `ingest/browser/lighthouse.py` (Lighthouse over CDP) + `webser.py` (web-vitals).
+- [x] Implement `ingest/automated.py` campaign loop: for each page & condition, run N times, take
       median, emit one normalized run per (page × condition).
-- [ ] Support CLI overrides `--device`, `--network`, `--runs`, `--pages`.
-- [ ] E2E: capture a real site across 2 pages × (mid-mobile, desktop); assert complete run JSONs.
+- [x] Support CLI overrides `--device`, `--network`, `--runs`, `--pages`.
+- [x] E2E: capture a real site across 2 pages × (mid-mobile, desktop); assert complete run JSONs.
 
 ### Phase 3 — Storage + RAG (Google AI embeddings)
 - [ ] Implement `store/sql.py` (SQLite) and `store/artifacts.py` (file persistence).

@@ -49,6 +49,10 @@ class CwpMetrics(BaseModel):
     inp_ms: Optional[float] = Field(default=None, ge=0)
     fcp_ms: Optional[float] = Field(default=None, ge=0)
     ttfb_ms: Optional[float] = Field(default=None, ge=0)
+    # Total Blocking Time — the lab responsiveness metric derived from long
+    # tasks (DevTools/Lighthouse definition). Complements INP, which is a
+    # field metric requiring a real interaction.
+    tbt_ms: Optional[float] = Field(default=None, ge=0)
     target_lcp_ms: Optional[float] = Field(default=None, ge=0)
     target_cls: Optional[float] = Field(default=None, ge=0, le=1)
     target_inp_ms: Optional[float] = Field(default=None, ge=0)
@@ -67,10 +71,31 @@ class NetworkMetrics(BaseModel):
     render_blocking_css: Optional[int] = Field(default=None, ge=0)
 
 
+class MainThreadMetrics(BaseModel):
+    """DevTools main-thread breakdown, read over CDP ``Performance.getMetrics``.
+
+    Answers *where* the time went (script vs. layout vs. style) and how heavy
+    the document is — the grounding for the report's "where the problem is"
+    section. All fields optional: a counter the browser did not report stays
+    ``None`` rather than being coerced to 0.
+    """
+
+    script_ms: Optional[float] = Field(default=None, ge=0)
+    layout_ms: Optional[float] = Field(default=None, ge=0)
+    style_ms: Optional[float] = Field(default=None, ge=0)
+    task_ms: Optional[float] = Field(default=None, ge=0)
+    js_heap_kb: Optional[float] = Field(default=None, ge=0)
+    dom_nodes: Optional[int] = Field(default=None, ge=0)
+    layout_count: Optional[int] = Field(default=None, ge=0)
+    js_event_listeners: Optional[int] = Field(default=None, ge=0)
+    resource_count: Optional[int] = Field(default=None, ge=0)
+
+
 class Metrics(BaseModel):
     cwp: CwpMetrics = Field(default_factory=CwpMetrics)
     lighthouse: LighthouseScores = Field(default_factory=LighthouseScores)
     network: NetworkMetrics = Field(default_factory=NetworkMetrics)
+    main_thread: MainThreadMetrics = Field(default_factory=MainThreadMetrics)
 
 
 class ResourceTiming(BaseModel):
