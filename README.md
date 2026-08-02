@@ -7,9 +7,27 @@ placement every run. Only the numbers, findings, and recommendations differ.
 That constraint is the point: it turns every performance investigation into a
 comparable, automatable artifact instead of a bespoke write-up.
 
-> **Status: in development.** Phases 0–3b are implemented and tested (ingestion,
-> storage, RAG). Analysis, report rendering, and the unified CLI are not built yet —
-> see [Roadmap](#roadmap).
+## Where the project is
+
+**In development — data goes in and is retrievable; nothing comes out as a report yet.**
+
+**Working today (phases 0–3b):** config and test-matrix resolution · canonical Pydantic
+schema · manual ingestion CLI · automated multi-page browser campaigns with device and
+network emulation · SSRF-gated navigation · SQLite run store with scrubbed artifacts ·
+RAG over the knowledge base (embeddings, chunking, symptom detection, grounded prompts) ·
+optional per-target request headers for bot-protected sites.
+
+**Missing — the entire output half (phases 4–6):**
+
+| Gap | Consequence today |
+|---|---|
+| `analysis/` — findings, impact statements, improvement estimator | Retrieved context is never turned into conclusions; no LLM call is made |
+| `report/` — HTML skeleton, charts, PDF + Markdown renderers | **No report is produced at all** — the project's headline deliverable |
+| `src/cli.py` — unified `ingest` / `analyze` / `report` entry point | Each stage is invoked separately as a module; the RAG layer has no CLI |
+| `--skeleton-check` drift guard | The "identical skeleton" guarantee is unverified |
+
+Full breakdown in [Roadmap](#roadmap). Phases 4–7 below are **planned, not built** —
+nothing in this README describes them as working.
 
 ---
 
@@ -239,7 +257,8 @@ affect day-to-day use:
 | 2 | Automated multi-page browser campaigns | Done |
 | 3 | SQLite run store + artifact persistence | Done |
 | 3b | RAG — embeddings, knowledge base, retrieval, prompts | Done |
-| 4 | Analysis — findings, impact, improvement estimator | Planned |
+| — | Optional per-target request headers (bot-protected targets) | Done |
+| 4 | Analysis — findings, impact, improvement estimator | **Next** |
 | 5 | Report rendering — fixed HTML skeleton → PDF + Markdown mirror | Planned |
 | 6 | Unified CLI (`ingest` / `analyze` / `report`) + skeleton-drift check | Planned |
 | 7 | Prior-run memory, trend comparison, optional web UI | Planned |
