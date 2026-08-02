@@ -4,13 +4,14 @@
 pydantic==2.13.4          # verified in venv
 PyYAML==6.0.3             # verified in venv
 python-dotenv==1.2.2      # verified in venv
-chromadb==0.5.23          # pin to latest stable on first install
-google-genai==1.8.0       # pin to latest stable on first install
-litellm==1.40.0           # pin to latest stable on first install
+chromadb==0.5.23          # NOT 1.x: PYSEC-2026-311 (pre-auth RCE, CVSS critical)
+                          # affects 1.0.0-1.5.9 with no fixed release yet. Revisit on fix.
+google-genai==2.16.0      # sole LLM/embeddings client (litellm dropped: it
+                          # required tokenizers>=0.21 vs chromadb's <=0.20.3)
 jinja2==3.1.6             # verified in venv
-matplotlib==3.10.4        # pin to latest stable on first install
-reportlab==4.4.1          # pin to latest stable on first install
-typer==0.12.5             # pin to latest stable on first install
+matplotlib==3.11.1        # 3.10.4 was never published; broke CI install
+reportlab==5.0.0          # verified on PyPI 2026-08-02
+typer==0.27.0             # verified on PyPI 2026-08-02
 playwright==1.48.0        # verified in venv (chromium installed)
 
 # Test extras

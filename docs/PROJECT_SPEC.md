@@ -301,10 +301,10 @@ content scales with the page count.
 | Browser automation | Playwright (Python) + CDP | emulation + throttling + HAR capture |
 | Performance metrics | Lighthouse (via CDP) + web-vitals | industry-standard CWV |
 | Structured storage | SQLite (or DuckDB) | zero-config, queryable |
-| Vector DB | ChromaDB (or LanceDB) | lightweight local RAG, no server |
+| Vector DB | ChromaDB **0.5.x** (or LanceDB) | lightweight local RAG, no server. Pinned off 1.x: PYSEC-2026-311 is an unfixed pre-auth RCE affecting 1.0.0-1.5.9. |
 | Embeddings | **Google AI API** — free tier, e.g. `text-embedding-004` | API embeddings (decision #1); key via `.env` |
 | Secrets / env | `python-dotenv` + `.env` (gitignored) + `.env.example` | keeps the shared Google API key out of git |
-| LLM orchestration | LangChain / LiteLLM (pluggable) | retrieval + grounded generation |
+| LLM orchestration | **`google-genai` directly** (decision #5) | LiteLLM dropped: it requires `tokenizers>=0.21` while ChromaDB 0.5.x pins `<=0.20.3`, and 1.40.0 carried 19 CVEs. One client for both embeddings and generation. |
 | Charts | Matplotlib / Plotly→static | deterministic, embeds in PDF |
 | PDF | HTML template → headless Chromium print-to-PDF **or** ReportLab | fixed skeleton via template |
 | MD mirror | Jinja2 template | same content, markdown form |
