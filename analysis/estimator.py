@@ -120,3 +120,120 @@ def effort_of(metadata: Mapping[str, Any]) -> str:
     """Playbook effort level, or ``"unknown"`` when absent or unrecognised."""
     value = str(metadata.get("effort", "")).strip().lower()
     return value if value in _VALID_EFFORTS else "unknown"
+
+
+@dataclass(frozen=True)
+class Projection:
+    """One recommendation's projected effect on one metric.
+
+    ``after_low`` is the conservative end and drives the headline and the
+    chart; ``after_high`` is the optimistic edge of the playbook's own band.
+    Under-promising and landing beats a midpoint that misses.
+    """
+
+    metric: str
+    before: float
+    after_low: float
+    after_high: float
+    reduction_pct: float
+    source: str
+
+
+def _apply(value: float, amount: float, absolute: bool, floor: float) -> float:
+    """Apply one reduction to ``value``, clamped at ``floor`` and at zero."""
+    reduced = value - amount if absolute else value * (1.0 - amount)
+    return max(0.0, floor, reduced)
+
+
+def project(
+    candidates: Sequence[Candidate],
+    metrics: Mapping[str, Optional[float]],
+) -> List[Projection]:
+    """Project each candidate's effect, stacking per metric with decay.
+
+    Candidates affecting the same metric are applied in descending order of
+    their low bound (ties broken by source, so the order never depends on how
+    the caller happened to sort them). Each subsequent fix on that metric is
+    discounted by ``DECAY`` and applied to what the previous one left.
+
+    A candidate with no usable range for any *measured* metric contributes
+    nothing — the caller still lists it, with magnitude "unknown", per the
+    system prompt's rule 3.
+    """
+    # Bucket (source, range) pairs by metric, keeping only measured metrics.
+    buckets: Dict[str, List[tuple]] = {}
+    for candidate in candidates:
+        for rng in parse_impact_ranges(candidate.metadata):
+            measured = metrics.get(rng.metric)
+            if measured is None:
+                continue
+            buckets.setdefault(rng.metric, []).append((candidate.source, rng))
+
+    projections: List[Projection] = []
+    for metric in sorted(buckets):
+        baseline = float(metrics[metric])
+        floor = baseline * (1.0 - MAX_TOTAL_REDUCTION)
+        entries = sorted(buckets[metric], key=lambda pair: (-pair[1].low, pair[0]))
+
+        current_low = baseline
+        current_high = baseline
+        for position, (source, rng) in enumerate(entries):
+            decay = DECAY ** position
+            before = current_low
+            after_low = _apply(current_low, rng.low * decay, rng.absolute, floor)
+            after_high = _apply(current_high, rng.high * decay, rng.absolute, floor)
+            reduction = 0.0 if before <= 0 else (before - after_low) / before
+            projections.append(
+                Projection(
+                    metric=metric,
+                    before=before,
+                    after_low=after_low,
+                    after_high=after_high,
+                    reduction_pct=reduction,
+                    source=source,
+                )
+            )
+            current_low, current_high = after_low, after_high
+
+    return projections
+
+
+def aggregate(
+    projections: Sequence[Projection],
+    metrics: Mapping[str, Optional[float]],
+) -> Dict[str, Projection]:
+    """Collapse per-metric chains into one before/after each (§6 chart)."""
+    out: Dict[str, Projection] = {}
+    for metric in sorted({p.metric for p in projections}):
+        chain = [p for p in projections if p.metric == metric]
+        baseline = float(metrics[metric])
+        last = chain[-1]
+        reduction = 0.0 if baseline <= 0 else (baseline - last.after_low) / baseline
+        out[metric] = Projection(
+            metric=metric,
+            before=baseline,
+            after_low=last.after_low,
+            after_high=last.after_high,
+            reduction_pct=reduction,
+            source="aggregate",
+        )
+    return out
+
+
+def by_source(projections: Sequence[Projection]) -> Dict[str, List[Projection]]:
+    """Group projections by the playbook that produced them."""
+    out: Dict[str, List[Projection]] = {}
+    for projection in projections:
+        out.setdefault(projection.source, []).append(projection)
+    return out
+
+
+def rank_key(source: str, title: str, projections: Sequence[Projection]) -> tuple:
+    """Deterministic sort key for recommendations (§7.1).
+
+    Percentage, not absolute delta: 600ms and 0.2 CLS are not comparable, but
+    "cuts this metric by 20%" is. Recommendations with no projection sort last
+    rather than being dropped.
+    """
+    best = max((p.reduction_pct for p in projections), default=0.0)
+    return (-best, source, title)
