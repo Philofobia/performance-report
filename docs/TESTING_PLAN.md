@@ -31,7 +31,7 @@ Setup: `pip install -e ".[test]"` and `python -m playwright install chromium`.
 | `ingest/browser` (E2E) | `tests/e2e/test_browser_e2e.py` | real Playwright, 1 page × (mid-mobile, desktop), complete run JSON |
 | `store/sql.py` | `tests/integration/store_test.py` | in-memory insert/query/round-trip |
 | `store/artifacts.py` | `tests/integration/store_test.py` | write/read screenshots+HAR to tmp |
-| `store/vectordb.py` | `tests/integration/store_test.py` | ephemeral Chroma embed/add/query/delete; key-missing graceful |
+| `store/vectordb.py` | `tests/integration/vectordb_test.py` | in-memory SQLite add/query/delete; exact top-k; deterministic tie-breaks; dim-mismatch refused |
 | `rag/*` | `tests/unit/rag_test.py` | KB load+embed; retrieval ranking; prompt build; quota/429 backoff |
 | `analysis/estimator.py` | `tests/unit/estimator_test.py` | before/after delta math; range clamping |
 | `analysis/findings.py` | `tests/unit/findings_test.py` | localize problem; derive impact |
@@ -43,7 +43,7 @@ Setup: `pip install -e ".[test]"` and `python -m playwright install chromium`.
 | Full flow | `tests/integration/e2e_flow_test.py` | manual→storage→RAG(mock)→analysis(mock)→report |
 
 ## 4. Fixtures (shared `conftest.py`)
-- `tmp_path`-scoped dirs; in-memory SQLite; ephemeral Chroma.
+- `tmp_path`-scoped dirs; in-memory SQLite (runs *and* embeddings share one db).
 - `sample_problem` (valid run), `sample_metrics`, `canned_embeddings`, `canned_llm_answer`.
 - Mocks: Google AI client, Playwright context/page, network/HTTP.
 
