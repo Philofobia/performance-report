@@ -25,7 +25,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from config.load import PageTarget, PageTest, ProjectConfig
 from normalize.schema import Run
@@ -186,14 +186,23 @@ def run_campaign(
     runs: Optional[int] = None,
     pages: Optional[List[str]] = None,
     artifacts_root: Optional[str] = None,
+    no_headers: bool = False,
+    env: Optional[Mapping[str, str]] = None,
 ) -> List[Run]:
-    """Run the full campaign; return one normalized Run per (page x condition)."""
+    """Run the full campaign; return one normalized Run per (page x condition).
+
+    ``no_headers=True`` discards any configured request headers for this
+    invocation — useful for measuring the same targets with and without a bot
+    allowlist token. Headers are resolved per page only when they are actually
+    wanted, so an unset token cannot break a campaign that does not use it.
+    """
     plan = plan_conditions(cfg, device=device, network=network, runs=runs, pages=pages)
     result: List[Run] = []
 
     for page, condition in plan:
         device_obj = cfg.devices[condition.device]
         network_obj = cfg.networks[condition.network]
+        headers = {} if no_headers else cfg.headers_for(page, env=env)
         measurements: List[Dict[str, Any]] = []
         for i in range(condition.runs):
             artifacts_dir = None
@@ -212,6 +221,7 @@ def run_campaign(
                     network_obj,
                     artifacts_dir=artifacts_dir,
                     run_id=token,
+                    extra_http_headers=headers,
                 )
             )
         result.append(make_automated_run(cfg, page, condition, measurements))
@@ -233,6 +243,9 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Dir to write one JSON file per emitted run.")
     p.add_argument("--dry-run", action="store_true",
                    help="Resolve the matrix + write runs without a browser (for CI yet overridable).")
+    p.add_argument("--no-headers", action="store_true",
+                   help="Ignore any request headers configured in targets.yaml "
+                        "for this run (e.g. to measure without a bot-allowlist token).")
     return p
 
 
@@ -249,6 +262,16 @@ def _real_runner():
 def main(argv: Optional[List[str]] = None) -> int:
     """CLI entry point; returns a process exit code (0 = success)."""
     from config.load import load_config
+
+    # Load .env (gitignored) so ${VAR} header references resolve without the
+    # caller having to export secrets into the shell. Never overrides a value
+    # already set in the real environment.
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(override=False)
+    except ImportError:  # pragma: no cover - python-dotenv is a pinned dependency
+        pass
 
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -294,6 +317,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             runs=args.runs,
             pages=pages,
             artifacts_root=args.artifacts_root,
+            no_headers=args.no_headers,
         )
     except Exception as exc:
         print(f"error: campaign failed: {exc}", file=sys.stderr)

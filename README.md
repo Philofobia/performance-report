@@ -89,6 +89,26 @@ pages:
 
 Unknown device or network names are rejected at load time, naming the offending page.
 
+### Targets behind bot protection (optional)
+
+Sites fronted by a bot filter such as Akamai answer automated traffic with `403`/`429`.
+If you have an allowlist token, declare the header name in config and keep the value in
+`.env`:
+
+```yaml
+project: oakley
+headers:
+  X-Akamai-Bot: ${AKAMAI_BOT_TOKEN}     # value resolved from .env, never committed
+pages:
+  - name: homepage
+    url: https://www.oakley.com/en-us
+```
+
+Headers are applied at the browser-context level, so they cover the document *and*
+every sub-resource. This is **fully opt-in**: declare none and nothing changes. Use
+`--no-headers` to run without them, and see [CUSTOM_HEADERS.md](docs/CUSTOM_HEADERS.md)
+for scoping rules and how to confirm the token was accepted.
+
 ---
 
 ## Running it
@@ -100,6 +120,7 @@ python -m ingest.automated                          # the full configured matrix
 python -m ingest.automated --pages homepage,plp     # only named pages
 python -m ingest.automated --device desktop --runs 5
 python -m ingest.automated --dry-run                # print the resolved matrix, no browser
+python -m ingest.automated --no-headers             # ignore configured request headers
 ```
 
 `--device`, `--network`, and `--runs` override every condition for that invocation,
@@ -178,7 +199,7 @@ rule. Full reasoning in [PROJECT_SPEC.md §8.1](docs/PROJECT_SPEC.md).
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 311 offline tests, no browser, no network
+pytest -m "not e2e"      # 353 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 ```
 
@@ -228,3 +249,4 @@ affect day-to-day use:
 - [PROJECT_SPEC.md](docs/PROJECT_SPEC.md) — full specification and design decisions
 - [SECURITY_PLAN.md](docs/SECURITY_PLAN.md) — threat model and controls
 - [TESTING_PLAN.md](docs/TESTING_PLAN.md) — test strategy
+- [CUSTOM_HEADERS.md](docs/CUSTOM_HEADERS.md) — optional request headers for bot-protected targets

@@ -10,9 +10,11 @@ filled in for any page whose ``tests`` are omitted/empty (PROJECT_SPEC §4.4).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, ValidationError
@@ -26,6 +28,77 @@ TARGETS_FILE = CONFIG_DIR / "targets.yaml"
 
 class ConfigError(Exception):
     """Clean, user-facing error for any config loading/validation failure."""
+
+
+# --------------------------------------------------------------------------- #
+# optional custom request headers
+# --------------------------------------------------------------------------- #
+# `${VAR}` references, resolved from the environment at use time.
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+# RFC 7230 header field-name token characters.
+_HEADER_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+
+
+def resolve_headers(
+    raw: Optional[Mapping[str, Any]],
+    *,
+    env: Optional[Mapping[str, str]] = None,
+) -> Dict[str, str]:
+    """Resolve a header mapping, expanding ``${VAR}`` references from ``env``.
+
+    Header *names* are committed in config (they document which sites need
+    which header); header *values* reference environment variables so secrets
+    such as a bot-allowlist token never enter git.
+
+    Returns ``{}`` for ``None``/empty input — the common case, since headers are
+    opt-in. Raises :class:`ConfigError`, naming the header and the missing
+    variable but **never** a resolved value, on:
+
+    * a referenced variable that is unset or empty (an exported-but-blank token
+      would silently disable the allowlist instead of failing),
+    * a header name that is not a valid RFC 7230 token,
+    * CR/LF anywhere in a resolved value (header injection — a token carrying
+      newlines could smuggle an extra header onto every request).
+    """
+    if not raw:
+        return {}
+    environ = os.environ if env is None else env
+
+    resolved: Dict[str, str] = {}
+    for name, value in raw.items():
+        name = "" if name is None else str(name)
+        if not _HEADER_NAME.match(name.strip()) or name != name.strip():
+            raise ConfigError(
+                f"Invalid HTTP header name in config: {name!r}. "
+                "Names must be a single RFC 7230 token (no spaces or separators)."
+            )
+        if not isinstance(value, str):
+            raise ConfigError(
+                f"Header {name!r} must be a string, got {type(value).__name__}. "
+                "Use a literal or a ${ENV_VAR} reference."
+            )
+
+        def _expand(match: re.Match) -> str:
+            var = match.group(1)
+            got = environ.get(var)
+            if not got:
+                raise ConfigError(
+                    f"Header {name!r} references environment variable "
+                    f"${{{var}}}, which is unset or empty. Set it in .env "
+                    "(gitignored) or the environment, or remove the header."
+                )
+            return got
+
+        expanded = _ENV_REF.sub(_expand, value)
+        if "\r" in expanded or "\n" in expanded:
+            # Do not echo the value — it is a secret.
+            raise ConfigError(
+                f"Resolved value for header {name!r} contains CR/LF, which "
+                "would allow header injection. Check the source variable."
+            )
+        resolved[name] = expanded
+    return resolved
 
 
 # --------------------------------------------------------------------------- #
@@ -62,11 +135,15 @@ class PageTarget(BaseModel):
     name: str = Field(min_length=1)
     url: str = Field(min_length=1)
     tests: List[PageTest] = Field(default_factory=list)
+    # None = inherit the project headers; {} = explicitly send none.
+    headers: Optional[Dict[str, str]] = None
 
 
 class TargetsConfig(BaseModel):
     project: str = Field(min_length=1)
     pages: List[PageTarget]
+    # Project-wide request headers, applied to every page unless overridden.
+    headers: Dict[str, str] = Field(default_factory=dict)
 
     @field_validator("pages")
     @classmethod
@@ -220,6 +297,29 @@ class ProjectConfig:
     networks: Dict[str, Network]
     project: str
     pages: List[PageTarget]  # pages with default conditions already resolved
+    headers: Dict[str, str] = field(default_factory=dict)  # unresolved ${VAR} refs
+
+    def headers_for(
+        self,
+        page: PageTarget,
+        *,
+        env: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, str]:
+        """Resolve the effective request headers for one page.
+
+        Project headers with the page's own merged over them per key; a page
+        declaring an explicitly empty ``headers: {}`` sends none. Resolution is
+        **lazy** — done here rather than at load time — so a config that
+        declares headers can still be loaded and used by campaigns that do not
+        need them (e.g. under ``--no-headers``, or with the token unset).
+        """
+        if page.headers is None:
+            merged = dict(self.headers)  # omitted -> inherit
+        elif not page.headers:
+            merged = {}  # explicit `headers: {}` -> opt out
+        else:
+            merged = {**self.headers, **page.headers}
+        return resolve_headers(merged, env=env)
 
     def default_tests(self) -> List[PageTest]:
         d = self.settings.run_defaults
@@ -282,5 +382,6 @@ def load_config(
         networks=network_map,
         project=targets_obj.project,
         pages=targets_obj.pages,
+        headers=targets_obj.headers,
     )
 

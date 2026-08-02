@@ -16,6 +16,7 @@ from config.load import Device, Network, PageTarget, PageTest, ProjectConfig, Se
 from ingest import automated
 from ingest.browser import cdp_metrics, lighthouse, webser
 from ingest.browser.runner import (
+    BlockedResponseError,
     BrowserRunner,
     apply_cpu_throttle,
     apply_network_throttle,
@@ -76,16 +77,37 @@ class FakeMouse:
         self._log.append("click")
 
 
-class FakePage:
-    """Fake Playwright page recording an ordered event log."""
+class FakeResponse:
+    """Minimal stand-in for a Playwright Response."""
 
-    def __init__(self, log, cwp=None, entries=None, goto_error=None):
+    def __init__(self, status):
+        self.status = status
+
+
+class FakePage:
+    """Fake Playwright page recording an ordered event log.
+
+    ``main_status`` is the status of the document response returned by ``goto``;
+    ``sub_statuses`` are sub-resource responses replayed to any ``response``
+    listener when navigation happens.
+    """
+
+    def __init__(
+        self,
+        log,
+        cwp=None,
+        entries=None,
+        goto_error=None,
+        main_status=200,
+        sub_statuses=(),
+    ):
         self.log = log
         self.gotos = []
         self.screenshots = []
         self.wait_states = []
         self.init_scripts = []
         self.waited_functions = []
+        self.listeners = {}
         self.keyboard = FakeKeyboard(log)
         self.mouse = FakeMouse(log)
         self._cwp = cwp if cwp is not None else {
@@ -93,6 +115,12 @@ class FakePage:
         }
         self._entries = entries or []
         self._goto_error = goto_error
+        self._main_status = main_status
+        self._sub_statuses = list(sub_statuses)
+
+    def on(self, event, handler):
+        self.listeners.setdefault(event, []).append(handler)
+        self.log.append(f"on:{event}")
 
     def add_init_script(self, script):
         self.init_scripts.append(script)
@@ -103,6 +131,10 @@ class FakePage:
         if self._goto_error:
             raise self._goto_error
         self.gotos.append((url, kwargs))
+        for status in self._sub_statuses:
+            for handler in self.listeners.get("response", []):
+                handler(FakeResponse(status))
+        return FakeResponse(self._main_status)
 
     def wait_for_load_state(self, *args, **kwargs):
         self.log.append(f"wait_for_load_state:{args[0] if args else ''}")
@@ -262,7 +294,8 @@ def test_run_condition_returns_full_measurement_shape(public_dns):
     browser = FakeBrowser()
     result = make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
     assert set(result) == {
-        "cwp", "main_thread", "network", "resource_timings", "lighthouse", "captures"
+        "cwp", "main_thread", "network", "resource_timings", "lighthouse",
+        "captures", "guard",
     }
     assert result["cwp"]["lcp_ms"] == 6200
     assert result["lighthouse"]["performance"] == 80
@@ -913,6 +946,84 @@ def test_make_automated_run_carries_representative_artifacts():
 
 
 # --------------------------------------------------------------------------- #
+# Optional custom request headers (opt-in; see tests/unit/headers_test.py)
+# --------------------------------------------------------------------------- #
+def test_headers_are_applied_at_context_level(public_dns):
+    """Context-level headers cover the document AND every sub-resource.
+
+    Playwright applies ``extra_http_headers`` set on a context to every request
+    made by every page in it. Setting them per-navigation would leave scripts,
+    images and XHR unprotected — exactly the requests a bot filter blocks.
+    """
+    browser = FakeBrowser()
+    runner = make_runner(browser)
+    runner.run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK,
+        extra_http_headers={"X-Akamai-Bot": "tok"},
+    )
+    ctx_kwargs, _ = browser.contexts[0]
+    assert ctx_kwargs["extra_http_headers"] == {"X-Akamai-Bot": "tok"}
+
+
+def test_no_headers_omits_extra_http_headers_key_entirely(public_dns):
+    """The optionality guarantee: not configuring headers changes nothing.
+
+    The key must be ABSENT, not present-and-empty — a run without headers must
+    construct the browser context exactly as it did before the feature existed.
+    """
+    browser = FakeBrowser()
+    runner = make_runner(browser)
+    runner.run_condition("https://example.com/", DEVICE, NETWORK)
+    ctx_kwargs, _ = browser.contexts[0]
+    assert "extra_http_headers" not in ctx_kwargs
+
+
+def test_empty_headers_mapping_also_omits_the_key(public_dns):
+    browser = FakeBrowser()
+    runner = make_runner(browser)
+    runner.run_condition("https://example.com/", DEVICE, NETWORK, extra_http_headers={})
+    ctx_kwargs, _ = browser.contexts[0]
+    assert "extra_http_headers" not in ctx_kwargs
+
+
+# --------------------------------------------------------------------------- #
+# Block detection (403/429) — records always, fails only on the main document
+# --------------------------------------------------------------------------- #
+def test_successful_run_reports_main_status_and_zero_blocks(public_dns):
+    browser = FakeBrowser(page_kwargs={"main_status": 200, "sub_statuses": [200, 200]})
+    result = make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    assert result["guard"]["main_status"] == 200
+    assert result["guard"]["blocked_requests"] == 0
+
+
+def test_blocked_sub_resources_are_counted_but_do_not_fail_the_run(public_dns):
+    """Running deliberately without a token is supported; a stray 403 is not fatal."""
+    browser = FakeBrowser(
+        page_kwargs={"main_status": 200, "sub_statuses": [200, 403, 429, 200]}
+    )
+    result = make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    assert result["guard"]["blocked_requests"] == 2
+    assert result["cwp"]["lcp_ms"] == 6200  # measurement still returned
+
+
+@pytest.mark.parametrize("status", [403, 429, 404, 500])
+def test_non_2xx_main_document_fails_the_run(public_dns, status):
+    """A block page has real, fast CWV numbers — storing them would poison the report."""
+    browser = FakeBrowser(page_kwargs={"main_status": status})
+    with pytest.raises(BlockedResponseError) as exc:
+        make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    assert str(status) in str(exc.value)
+
+
+def test_blocked_main_document_still_closes_the_context(public_dns):
+    browser = FakeBrowser(page_kwargs={"main_status": 403})
+    with pytest.raises(BlockedResponseError):
+        make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    _, ctx = browser.contexts[0]
+    assert ctx.closed is True
+
+
+# --------------------------------------------------------------------------- #
 # run_campaign
 # --------------------------------------------------------------------------- #
 class RecordingRunner:
@@ -921,10 +1032,14 @@ class RecordingRunner:
     def __init__(self):
         self.calls = []
 
-    def run_condition(self, url, device, network, *, artifacts_dir=None, run_id=None):
+    def run_condition(
+        self, url, device, network, *, artifacts_dir=None, run_id=None,
+        extra_http_headers=None,
+    ):
         self.calls.append(
             {"url": url, "device": device.name, "network": network.name,
-             "artifacts_dir": artifacts_dir, "run_id": run_id}
+             "artifacts_dir": artifacts_dir, "run_id": run_id,
+             "extra_http_headers": extra_http_headers}
         )
         n = len(self.calls)
         return {
@@ -966,6 +1081,43 @@ def test_run_campaign_without_artifacts_root_passes_none():
     runner = RecordingRunner()
     automated.run_campaign(cfg, runner, pages=["pdp"])
     assert runner.calls[0]["artifacts_dir"] is None
+
+
+def test_run_campaign_passes_no_headers_when_none_configured():
+    """Default config declares no headers, so the runner receives none."""
+    runner = RecordingRunner()
+    automated.run_campaign(make_cfg(), runner, pages=["pdp"])
+    assert runner.calls[0]["extra_http_headers"] == {}
+
+
+def test_run_campaign_resolves_and_passes_configured_headers():
+    cfg = make_cfg()
+    cfg.headers = {"X-Akamai-Bot": "${AKAMAI_BOT_TOKEN}"}
+    runner = RecordingRunner()
+    automated.run_campaign(
+        cfg, runner, pages=["pdp"], env={"AKAMAI_BOT_TOKEN": "tok"}
+    )
+    assert runner.calls[0]["extra_http_headers"] == {"X-Akamai-Bot": "tok"}
+
+
+def test_run_campaign_no_headers_flag_suppresses_configured_headers():
+    """`--no-headers` measures the same targets without the allowlist token."""
+    cfg = make_cfg()
+    cfg.headers = {"X-Akamai-Bot": "${AKAMAI_BOT_TOKEN}"}
+    runner = RecordingRunner()
+    automated.run_campaign(
+        cfg, runner, pages=["pdp"], no_headers=True, env={"AKAMAI_BOT_TOKEN": "tok"}
+    )
+    assert runner.calls[0]["extra_http_headers"] == {}
+
+
+def test_run_campaign_no_headers_flag_does_not_require_the_token():
+    """With headers suppressed, an unset token must not fail the campaign."""
+    cfg = make_cfg()
+    cfg.headers = {"X-Akamai-Bot": "${AKAMAI_BOT_TOKEN}"}
+    runner = RecordingRunner()
+    runs = automated.run_campaign(cfg, runner, pages=["pdp"], no_headers=True, env={})
+    assert len(runs) == 1
 
 
 def test_run_campaign_respects_overrides():
@@ -1023,6 +1175,49 @@ def test_cli_config_error_returns_nonzero(monkeypatch, capsys):
     code = automated.main(["--dry-run"])
     assert code == 1
     assert "error" in capsys.readouterr().err.lower()
+
+
+def test_cli_sends_configured_headers_by_default(monkeypatch, tmp_path):
+    cfg = make_cfg()
+    cfg.headers = {"X-Akamai-Bot": "${AKAMAI_BOT_TOKEN}"}
+    monkeypatch.setenv("AKAMAI_BOT_TOKEN", "tok")
+    monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
+    runner = RecordingRunner()
+    monkeypatch.setattr(automated, "_real_runner", lambda: (None, None, runner))
+
+    assert automated.main(["--pages", "pdp", "--output-dir", str(tmp_path)]) == 0
+    assert runner.calls[0]["extra_http_headers"] == {"X-Akamai-Bot": "tok"}
+
+
+def test_cli_no_headers_flag_suppresses_them(monkeypatch, tmp_path):
+    cfg = make_cfg()
+    cfg.headers = {"X-Akamai-Bot": "${AKAMAI_BOT_TOKEN}"}
+    monkeypatch.setenv("AKAMAI_BOT_TOKEN", "tok")
+    monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
+    runner = RecordingRunner()
+    monkeypatch.setattr(automated, "_real_runner", lambda: (None, None, runner))
+
+    assert automated.main(
+        ["--pages", "pdp", "--no-headers", "--output-dir", str(tmp_path)]
+    ) == 0
+    assert runner.calls[0]["extra_http_headers"] == {}
+
+
+def test_cli_reports_missing_token_without_leaking_it(monkeypatch, tmp_path, capsys):
+    """An unset token is a clear config error, not a stack trace."""
+    cfg = make_cfg()
+    cfg.headers = {"X-Akamai-Bot": "${AKAMAI_BOT_TOKEN}"}
+    monkeypatch.delenv("AKAMAI_BOT_TOKEN", raising=False)
+    # main() loads .env; without this the developer's own token would leak into
+    # the test environment and undo the delenv above.
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
+    monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
+    monkeypatch.setattr(automated, "_real_runner", lambda: (None, None, RecordingRunner()))
+
+    code = automated.main(["--pages", "pdp", "--output-dir", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert code == 1
+    assert "AKAMAI_BOT_TOKEN" in err
 
 
 def test_cli_writes_one_json_per_run(monkeypatch, tmp_path, capsys):

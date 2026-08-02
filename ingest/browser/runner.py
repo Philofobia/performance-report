@@ -9,6 +9,13 @@ SECURITY (SECURITY_PLAN.md §2.2 / `security` skill): every user-supplied URL is
 passed through ``normalize.url_safety.validate_url(url, resolve=True)`` BEFORE
 any navigation — rejecting non-https, private/internal/IP ranges (SSRF).
 
+**Optional custom request headers.** ``extra_http_headers`` (e.g. a bot-allowlist
+token for a site behind Akamai) is applied at *context* level, so it covers the
+document and every sub-resource — scripts, images, XHR — which is precisely what
+a bot filter inspects. It is entirely opt-in: when no headers are supplied the
+key is not added to the context kwargs at all, and the context is built exactly
+as it was before the feature existed.
+
 Mockability: the Playwright surface (browser/context/page/CDP session) and the
 measurement collectors are injected. Tests supply fakes + canned metrics, so no
 real browser is ever launched in offline tests.
@@ -21,6 +28,19 @@ from typing import Any, Callable, Dict, Optional
 from config.load import Device, Network
 from normalize import url_safety
 from ingest.browser import cdp_metrics, webser, lighthouse
+
+
+# Statuses a bot filter (Akamai et al.) returns when it rejects a request.
+BLOCKED_STATUSES = frozenset({403, 429})
+
+
+class BlockedResponseError(RuntimeError):
+    """The main document did not return 2xx — the measurement is not of the site.
+
+    Raised rather than returned: a block/error page produces real, fast CWV
+    numbers, and storing them would silently poison both the report and the
+    accumulated RAG findings.
+    """
 
 
 def _no_lighthouse(url: str, cdp: object) -> dict:
@@ -123,17 +143,27 @@ class BrowserRunner:
         *,
         artifacts_dir: Optional[str] = None,
         run_id: Optional[str] = None,
+        extra_http_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Run one (url, device, network) measurement and return raw measurements.
 
-        Returns a dict with ``cwp``, ``network``, ``resource_timings``,
-        ``lighthouse`` and ``captures`` keys.
+        Returns a dict with ``cwp``, ``main_thread``, ``network``,
+        ``resource_timings``, ``lighthouse``, ``captures`` and ``guard`` keys.
+
+        ``extra_http_headers`` is optional; when falsy, nothing about context
+        construction changes. Raises :class:`BlockedResponseError` if the main
+        document returns a non-2xx status.
         """
         # --- SSRF gate: validate BEFORE any navigation (non-negotiable) ---
         url = url_safety.validate_url(url, resolve=True)
 
         run_token = run_id or "run"
         ctx_kwargs = device_context_kwargs(device)
+
+        # Opt-in: only add the key when headers were actually supplied, so a
+        # header-less run builds an identical context to before this existed.
+        if extra_http_headers:
+            ctx_kwargs["extra_http_headers"] = dict(extra_http_headers)
 
         har_path: Optional[str] = None
         if artifacts_dir:
@@ -158,6 +188,20 @@ class BrowserRunner:
             # nothing for the page load we are measuring.
             cdp_metrics.enable(cdp)
 
+            # Count filter rejections across every sub-resource. Recorded
+            # always: it is the signal that tells you whether an allowlist
+            # header was accepted (see docs/CUSTOM_HEADERS.md).
+            blocked = {"count": 0}
+
+            def _on_response(response) -> None:
+                try:
+                    if response.status in BLOCKED_STATUSES:
+                        blocked["count"] += 1
+                except Exception:  # pragma: no cover - defensive
+                    pass
+
+            page.on("response", _on_response)
+
             if self._setup_page is not None:
                 self._setup_page(page)
 
@@ -173,7 +217,19 @@ class BrowserRunner:
                 # Trace + screenshot capture.
                 context.tracing.start(screenshots=True, snapshots=True)
 
-            page.goto(url, wait_until="load", timeout=self._navigation_timeout_ms)
+            response = page.goto(
+                url, wait_until="load", timeout=self._navigation_timeout_ms
+            )
+            main_status = getattr(response, "status", None) if response else None
+            # Fail fast, before spending the LCP/INP settle time on a block page.
+            if main_status is not None and not 200 <= main_status < 300:
+                raise BlockedResponseError(
+                    f"Main document returned HTTP {main_status} for {url}. "
+                    "The page measured is an error/block page, not the site. "
+                    "If the target is behind a bot filter, configure the "
+                    "allowlist header in config/targets.yaml."
+                )
+
             if not network.offline:
                 page.wait_for_load_state(
                     "networkidle", timeout=self._network_idle_timeout_ms
@@ -207,6 +263,10 @@ class BrowserRunner:
             "network": collected.get("network", {}),
             "resource_timings": collected.get("resource_timings", []),
             "lighthouse": lh_scores,
+            "guard": {
+                "main_status": main_status,
+                "blocked_requests": blocked["count"],
+            },
             "captures": {
                 "screenshot": screenshot_path,
                 "har": har_path,

@@ -256,6 +256,63 @@ def test_scrub_har_redacts_credential_headers():
     assert headers["Accept"] == "text/html"  # innocuous headers preserved
 
 
+def test_scrub_har_redacts_configured_custom_headers():
+    """A bot-allowlist token is a secret; it must not survive into the store.
+
+    Its header name is project-specific, so it cannot live in the built-in
+    SENSITIVE_HEADERS set — the configured names are passed in.
+    """
+    har = har_with_secrets()
+    har["log"]["entries"][0]["request"]["headers"].append(
+        {"name": "X-Akamai-Bot", "value": "super-secret-token"}
+    )
+    scrubbed = art.scrub_har(har, extra_headers=["X-Akamai-Bot"])
+    headers = {h["name"]: h["value"] for h in scrubbed["log"]["entries"][0]["request"]["headers"]}
+    assert headers["X-Akamai-Bot"] == art.REDACTED
+    assert "super-secret-token" not in json.dumps(scrubbed)
+
+
+def test_extra_header_matching_is_case_insensitive():
+    har = har_with_secrets()
+    har["log"]["entries"][0]["request"]["headers"].append(
+        {"name": "x-akamai-bot", "value": "super-secret-token"}
+    )
+    scrubbed = art.scrub_har(har, extra_headers=["X-Akamai-Bot"])
+    assert "super-secret-token" not in json.dumps(scrubbed)
+
+
+def test_scrub_har_without_extra_headers_is_unchanged_behaviour():
+    """Omitting extra_headers must behave exactly as before the parameter existed."""
+    har = har_with_secrets()
+    assert art.scrub_har(har) == art.scrub_har(har, extra_headers=None)
+
+
+def test_scrub_har_file_honours_extra_headers(tmp_path):
+    har = har_with_secrets()
+    har["log"]["entries"][0]["request"]["headers"].append(
+        {"name": "X-Akamai-Bot", "value": "super-secret-token"}
+    )
+    source = tmp_path / "in.har"
+    source.write_text(json.dumps(har), encoding="utf-8")
+    target = art.scrub_har_file(source, tmp_path / "out.har", extra_headers=["X-Akamai-Bot"])
+    assert "super-secret-token" not in target.read_text(encoding="utf-8")
+
+
+def test_store_artifacts_redacts_extra_headers_on_the_way_in(tmp_path):
+    """The store must never receive an unredacted allowlist token."""
+    har = har_with_secrets()
+    har["log"]["entries"][0]["request"]["headers"].append(
+        {"name": "X-Akamai-Bot", "value": "super-secret-token"}
+    )
+    source = tmp_path / "capture.har"
+    source.write_text(json.dumps(har), encoding="utf-8")
+    run = make_run(captures={"har": str(source)})
+
+    stored = art.store_artifacts(tmp_path / "store", run, extra_headers=["X-Akamai-Bot"])
+    content = open(stored["har"], encoding="utf-8").read()
+    assert "super-secret-token" not in content
+
+
 def test_scrub_har_redacts_set_cookie_on_responses():
     scrubbed = art.scrub_har(har_with_secrets())
     response = scrubbed["log"]["entries"][0]["response"]

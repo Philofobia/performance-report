@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 REDACTED = "[REDACTED]"
@@ -70,13 +70,13 @@ def _safe_segment(value: str) -> str:
     return cleaned or "unnamed"
 
 
-def _redact_headers(headers: Any) -> List[Dict[str, Any]]:
+def _redact_headers(headers: Any, sensitive: frozenset) -> List[Dict[str, Any]]:
     """Redact credential-bearing headers in a HAR header list."""
     if not isinstance(headers, list):
         return headers
     out = []
     for header in headers:
-        if isinstance(header, dict) and str(header.get("name", "")).lower() in SENSITIVE_HEADERS:
+        if isinstance(header, dict) and str(header.get("name", "")).lower() in sensitive:
             out.append({**header, "value": REDACTED})
         else:
             out.append(header)
@@ -110,15 +110,29 @@ def redact_url(url: Any) -> Any:
     return urlunsplit((parts.scheme, netloc, parts.path, query, parts.fragment))
 
 
-def scrub_har(har: Dict[str, Any]) -> Dict[str, Any]:
+def scrub_har(
+    har: Dict[str, Any],
+    *,
+    extra_headers: Optional[Iterable[str]] = None,
+) -> Dict[str, Any]:
     """Return a copy of a HAR with credentials removed.
 
     Redacts sensitive request/response headers, the parsed ``cookies`` arrays,
     and credential-looking query parameters (in both ``request.url`` and the
     ``queryString`` array).
+
+    ``extra_headers`` names additional headers to redact, matched
+    case-insensitively. Custom request headers configured per target — a bot
+    allowlist token, for instance — are secrets whose *names* are
+    project-specific, so they cannot be enumerated in :data:`SENSITIVE_HEADERS`
+    ahead of time and are supplied by the caller instead.
     """
     if not isinstance(har, dict):
         raise ArtifactError("HAR must be a JSON object")
+
+    sensitive = SENSITIVE_HEADERS
+    if extra_headers:
+        sensitive = sensitive | {str(name).lower() for name in extra_headers}
 
     scrubbed = json.loads(json.dumps(har))  # deep copy; HARs are plain JSON
     entries = scrubbed.get("log", {}).get("entries")
@@ -133,7 +147,7 @@ def scrub_har(har: Dict[str, Any]) -> Dict[str, Any]:
             if not isinstance(part, dict):
                 continue
             if "headers" in part:
-                part["headers"] = _redact_headers(part["headers"])
+                part["headers"] = _redact_headers(part["headers"], sensitive)
             if isinstance(part.get("cookies"), list):
                 part["cookies"] = [
                     {**c, "value": REDACTED} if isinstance(c, dict) else c
@@ -153,7 +167,12 @@ def scrub_har(har: Dict[str, Any]) -> Dict[str, Any]:
     return scrubbed
 
 
-def scrub_har_file(source: str | Path, target: str | Path) -> Path:
+def scrub_har_file(
+    source: str | Path,
+    target: str | Path,
+    *,
+    extra_headers: Optional[Iterable[str]] = None,
+) -> Path:
     """Read a HAR, scrub it, and write the redacted copy to ``target``."""
     src, dst = Path(source), Path(target)
     try:
@@ -164,7 +183,8 @@ def scrub_har_file(source: str | Path, target: str | Path) -> Path:
         raise ArtifactError(f"Malformed HAR {src}: {exc}") from exc
 
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(json.dumps(scrub_har(raw), indent=2), encoding="utf-8")
+    scrubbed = scrub_har(raw, extra_headers=extra_headers)
+    dst.write_text(json.dumps(scrubbed, indent=2), encoding="utf-8")
     return dst
 
 
@@ -173,12 +193,17 @@ def store_artifacts(
     run,
     *,
     move: bool = False,
+    extra_headers: Optional[Iterable[str]] = None,
 ) -> Dict[str, Optional[str]]:
     """Persist a run's captures into the store, scrubbing the HAR on the way in.
 
     Returns the stored paths keyed by artifact kind. Missing captures are
     reported as ``None`` rather than raising — a run without a trace is valid.
     ``move=True`` relocates the source files instead of copying them.
+
+    Pass ``extra_headers`` with the names of any custom request headers the
+    campaign sent (e.g. a bot-allowlist token) so their values are redacted
+    alongside the built-in credential headers.
     """
     target_dir = run_dir(root, run.project.name, run.page.name, run.run_id)
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -197,7 +222,7 @@ def store_artifacts(
         dest = target_dir / filename
         if kind == "har":
             # Never copy an unredacted HAR into the store.
-            scrub_har_file(src, dest)
+            scrub_har_file(src, dest, extra_headers=extra_headers)
             if move:
                 src.unlink(missing_ok=True)
         elif move:
