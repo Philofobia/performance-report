@@ -53,8 +53,23 @@ stored HAR or keep artifacts in gitignored `data/`; document in README.
 
 ### 2.7 Dependency & secret scanning (CI)
 `pip-audit -r requirements.txt` (fail on high/critical);
-`gitleaks detect --source . --redact` (fail on any secret);
+gitleaks (pinned version) over both the working tree and full commit history —
+a secret committed and later removed is still leaked;
 pin `requirements.txt`; scheduled dependency updates + advisory review.
+
+**No suppressions.** CI must fail on a real advisory rather than pass via
+`--ignore-vuln`. When an advisory has no fixed release, we change the dependency
+instead of silencing the finding. Applied so far:
+
+| Package | Finding | Resolution |
+|---|---|---|
+| `chromadb` | `CVE-2026-45829` pre-auth RCE (CVSS 10.0), 1.0.0-1.5.9, **no patch**, maintainers unresponsive | **Removed.** Replaced by SQLite BLOBs + numpy exact search (PROJECT_SPEC §8.1) — dropped 84 packages including the vulnerable FastAPI server stack |
+| `litellm` | 19 known CVEs at the pinned 1.40.0 | **Removed.** Unused and spec-optional; `google-genai` covers embeddings + generation |
+| `matplotlib` | pinned to 3.10.4, which was never published | Corrected to 3.11.1 (this broke the CI install outright) |
+
+**Minimise transitive surface.** Prefer a dependency we do not need at all over
+one we must monitor. Both removals above deleted attack surface that our design
+never exercised but would still have installed.
 
 ### 2.8 Logging/error redaction
 No key, no userinfo URLs, no report contents in logs; generic user-facing errors.

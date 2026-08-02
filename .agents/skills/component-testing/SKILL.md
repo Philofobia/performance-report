@@ -29,7 +29,7 @@ From the repo root (Windows PowerShell or shell):
 # unit + component tests only (fast, offline)
 pytest tests/unit -v
 
-# integration tests (temp dirs, in-memory SQLite, temp Chroma)
+# integration tests (temp dirs, in-memory SQLite)
 pytest tests/integration -v
 
 # full suite + coverage
@@ -53,7 +53,7 @@ python -m playwright install chromium
    - Google AI API (`litellm` / the `google-genai` client) — return canned embeddings.
    - Playwright context/page — return canned metric dicts; do not launch a browser
      except in `e2e`-marked tests.
-   - Chroma — use `chromadb.Client(ephemeral)` in a temp scope.
+   - Vector store — use `sql.connect(":memory:")` with hand-built vectors; no embedding API.
    - Network — monkeypatch `urllib`/`httpx`/`requests` anywhere; URLs are not fetched.
 2. **Determinism:** any two runs with identical inputs must produce identical
    normalized runs and report structure. Where nondeterminism exists (LLM, median
@@ -102,7 +102,7 @@ Use these as the contract for what "done" looks like per module.
 - `tests/integration/store_test.py`
 - SQLite in-memory: insert runs, query by run_id/page, round-trip integrity.
 - Artifacts: write/read screenshots+HAR to `tmp_path`, stable paths.
-- Chroma ephemeral: embed+add+query, delete, graceful when key missing.
+- Vector store (in-memory SQLite): add/query/delete, exact top-k, deterministic tie-breaks.
 
 ### `rag/*` (`knowledge.py`, `retrieve.py`, `prompt.py`)
 - `tests/unit/rag_test.py` — mock the embedding client:

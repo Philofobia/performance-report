@@ -301,7 +301,7 @@ content scales with the page count.
 | Browser automation | Playwright (Python) + CDP | emulation + throttling + HAR capture |
 | Performance metrics | Lighthouse (via CDP) + web-vitals | industry-standard CWV |
 | Structured storage | SQLite (or DuckDB) | zero-config, queryable |
-| Vector DB | ChromaDB **0.5.x** (or LanceDB) | lightweight local RAG, no server. Pinned off 1.x: PYSEC-2026-311 is an unfixed pre-auth RCE affecting 1.0.0-1.5.9. |
+| Vector DB | **SQLite BLOBs + numpy exact search** (decision #6) | See §8.1 — ChromaDB dropped. Zero new dependencies, exact (not approximate) retrieval, same file as the run store. |
 | Embeddings | **Google AI API** — free tier, e.g. `text-embedding-004` | API embeddings (decision #1); key via `.env` |
 | Secrets / env | `python-dotenv` + `.env` (gitignored) + `.env.example` | keeps the shared Google API key out of git |
 | LLM orchestration | **`google-genai` directly** (decision #5) | LiteLLM dropped: it requires `tokenizers>=0.21` while ChromaDB 0.5.x pins `<=0.20.3`, and 1.40.0 carried 19 CVEs. One client for both embeddings and generation. |
@@ -313,6 +313,52 @@ content scales with the page count.
 > **Why HTML→PDF over ReportLab:** a static HTML/CSS skeleton gives precise, consistent layout,
 > easy chart embedding, and reuses strong frontend/CSS skills we already have. ReportLab remains
 > a fallback for fully scripted output with no browser dependency.
+
+### 8.1 Why we dropped ChromaDB (decision #6)
+
+The spec originally chose ChromaDB as a "lightweight local RAG, no server" vector
+store. We removed it before writing any code against it, for three reasons:
+
+1. **An unpatched critical RCE.** `CVE-2026-45829` / `PYSEC-2026-311` ("ChromaToast")
+   is a pre-authentication remote code execution flaw (CVSS 10.0) in the server's
+   collections endpoint, which processes user-supplied model configs and fetches
+   `trust_remote_code` scripts *before* validating auth. It affects 1.0.0 through
+   1.5.9 with **no fixed release** as of 2026-08, and the maintainers reportedly did
+   not respond to disclosure attempts from late 2025 onward.
+2. **We would install the vulnerable component without ever using it.** ChromaDB
+   pulls in **84 packages** — including the FastAPI/uvicorn server stack that carries
+   the flaw, plus a Kubernetes client, `onnxruntime`, 10 OpenTelemetry packages and
+   `posthog` telemetry. Our design never starts a server, so all of that is
+   dependency surface with no corresponding benefit.
+3. **The workaround costs more than the feature.** Staying on 0.5.x avoids the CVE
+   (it predates the affected range) but pins us to an unmaintained line that will
+   accumulate its own advisories with no fixes coming. Using 1.x embedded is safe in
+   practice — no port is ever bound — but `pip-audit` flags the package regardless,
+   so CI could only pass by suppressing a critical advisory. Migrating to the Rust
+   `chroma run` server means adopting a server process, which contradicts the
+   "no server" requirement that motivated the choice in the first place.
+
+**What we do instead.** Embeddings are stored as `float32` BLOBs in the *same*
+SQLite database as the runs, and retrieval is an exact top-k cosine search — one
+`matrix @ vector` in numpy (`store/vectordb.py`).
+
+| | ChromaDB | SQLite + numpy |
+|---|---|---|
+| New dependencies | 84 packages | 0 (numpy already required by matplotlib) |
+| Known critical CVEs | 1, unpatched | 0 |
+| Retrieval | approximate (HNSW) | **exact** |
+| Stores | separate vector store | same file as runs |
+
+This suits the workload precisely. The corpus is knowledge-base playbook chunks
+plus accumulated run findings; at 768 dimensions even 100k chunks is ~300 MB and
+~50 ms per query, far beyond what this tool will hold. Exact search also directly
+serves the determinism rule in §6.2: identical inputs retrieve identical context,
+where an approximate index can silently return different neighbours after a rebuild
+or parameter change.
+
+`SqliteVectorStore` implements the `VectorStore` protocol, so if the corpus ever
+outgrows brute force, a LanceDB-backed implementation (embedded, ANN, no server)
+drops in without touching the `rag/` layer.
 
 ## 9. Proposed directory structure
 
@@ -337,7 +383,7 @@ performance-projects/
 │  │  └─ schema.py                 # canonical run object → Pydantic model + validators
 │  ├─ store/
 │  │  ├─ sql.py                    # SQLite schema + queries (runs, metrics)
-│  │  ├─ vectordb.py               # ChromaDB embeddings + collection management
+│  │  ├─ vectordb.py               # embeddings in SQLite + exact cosine search (§8.1)
 │  │  └─ artifacts.py              # raw capture files (png/har/trace/json)
 │  ├─ rag/
 │  │  ├─ knowledge.py              # loads/embeds data/knowledge/ playbooks
@@ -360,7 +406,7 @@ performance-projects/
 │  ├─ knowledge/                   # curated markdown playbooks (embedded)
 │  ├─ raw/                         # per-run captures
 │  ├─ processed/                   # normalized run JSON
-│  ├─ vector/                      # chroma db dir (gitignored)
+│  │                               # (embeddings live in the runs SQLite db)
 │  └─ reports/                     # generated PDF + MD outputs
 ├─ tests/
 │  ├─ unit/                        # schema validation, estimator, charts
@@ -391,7 +437,7 @@ performance-projects/
 ## 10. Development phases (steps before we start coding the real system)
 
 ### Phase 0 — Foundations
-- [x] Set up Python 3.11 virtual env + `requirements.txt` (playwright, chromadb, langchain/litellm,
+- [x] Set up Python 3.11 virtual env + `requirements.txt` (playwright, numpy,
       matplotlib, jinja2, pydantic, python-dotenv, typer/click, reportlab fallback, sqlite driver,
       google-genai).
 - [x] `playwright install chromium`; verify mobile emulation + CDP throttling on a sample site.
@@ -419,7 +465,7 @@ performance-projects/
 
 ### Phase 3 — Storage + RAG (Google AI embeddings)
 - [x] Implement `store/sql.py` (SQLite) and `store/artifacts.py` (file persistence).
-- [ ] Implement `store/vectordb.py` (Chroma) + `rag/knowledge.py`; embeddings via **Google AI API**
+- [x] Implement `store/vectordb.py` (SQLite + numpy exact search, §8.1); `rag/knowledge.py` embeds via **Google AI API**
       (`text-embedding-004`) with key loaded from `.env` (never hard-coded).
 - [ ] Author initial `data/knowledge/` playbooks (images, fonts, code-splitting, caching, CWV tactics).
 - [ ] Implement `rag/retrieve.py` + `rag/prompt.py`; write tests for retrieval quality.
@@ -473,7 +519,7 @@ performance-projects/
 |---|---|
 | `webapp-testing` (Anthropic) | Automated browser ingestion — mobile emulation + throttling + metrics. |
 | `pdf` (Anthropic) | PDF generation / ReportLab fallback; PDF editing if needed. |
-| `vector-databases` | RAG sizing reference; we implement Chroma direct. |
+| `vector-databases` | RAG sizing reference; we implement exact search over SQLite (§8.1). |
 | `frontend-design` | Report HTML/CSS skeleton styling (Phase 5). |
 | `vercel-optimize` | Grounding info for performance recommendations in the KB. |
 | `vercel-react-best-practices` / `composition-patterns` | KB content for React/Next performance recommendations. |
