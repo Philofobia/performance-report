@@ -9,24 +9,24 @@ comparable, automatable artifact instead of a bespoke write-up.
 
 ## Where the project is
 
-**In development — data goes in and is retrievable; nothing comes out as a report yet.**
+**In development — analysis produces a complete Report JSON; nothing renders it yet.**
 
-**Working today (phases 0–3b):** config and test-matrix resolution · canonical Pydantic
+**Working today (phases 0–4):** config and test-matrix resolution · canonical Pydantic
 schema · manual ingestion CLI · automated multi-page browser campaigns with device and
 network emulation · SSRF-gated navigation · SQLite run store with scrubbed artifacts ·
 RAG over the knowledge base (embeddings, chunking, symptom detection, grounded prompts) ·
-optional per-target request headers for bot-protected sites.
+optional per-target request headers for bot-protected sites · grounded per-page analysis
+with rule-based improvement projections, emitted as a deterministic Report JSON.
 
-**Missing — the entire output half (phases 4–6):**
+**Missing — rendering and orchestration (phases 5–6):**
 
-| Gap | Consequence today |
-|---|---|
-| `analysis/` — findings, impact statements, improvement estimator | Retrieved context is never turned into conclusions; no LLM call is made |
-| `report/` — HTML skeleton, charts, PDF + Markdown renderers | **No report is produced at all** — the project's headline deliverable |
-| `src/cli.py` — unified `ingest` / `analyze` / `report` entry point | Each stage is invoked separately as a module; the RAG layer has no CLI |
-| `--skeleton-check` drift guard | The "identical skeleton" guarantee is unverified |
+| Gap                                                                | Consequence today                                                                            |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `report/` — HTML skeleton, charts, PDF + Markdown renderers        | **No PDF is produced** — the Report JSON exists, but nothing turns it into the document      |
+| `src/cli.py` — unified `ingest` / `analyze` / `report` entry point | Each stage is a separate module invocation (`python -m ingest.automated`, `python -m analysis`) |
+| `--skeleton-check` drift guard                                     | Report JSON determinism is tested; drift in the eventual HTML template is not                |
 
-Full breakdown in [Roadmap](#roadmap). Phases 4–7 below are **planned, not built** —
+Full breakdown in [Roadmap](#roadmap). Phases 5–7 below are **planned, not built** —
 nothing in this README describes them as working.
 
 ---
@@ -49,17 +49,17 @@ base of performance playbooks.
 ```
   manual input ─┐
                 ├─► normalize (Pydantic) ─► SQLite (runs + vectors) ─► RAG ─► analysis ─► report
-  browser run ──┘                                                                   (Phase 4-5)
+  browser run ──┘                                                                        (Phase 5)
 ```
 
 ---
 
 ## Requirements
 
-| | |
-|---|---|
-| Python | 3.11+ (CI runs 3.13) |
-| Browser | Chromium, installed via Playwright |
+|         |                                                                       |
+| ------- | --------------------------------------------------------------------- |
+| Python  | 3.11+ (CI runs 3.13)                                                  |
+| Browser | Chromium, installed via Playwright                                    |
 | API key | Google AI (free tier) — for embeddings; only needed for the RAG layer |
 
 ## Quickstart
@@ -81,12 +81,12 @@ cp .env.example .env             # then fill in GOOGLE_API_KEY
 
 Four files in `config/`, all validated on load with clean error messages:
 
-| File | Purpose |
-|---|---|
-| `targets.yaml` | Named pages + the per-page test matrix |
-| `devices.yaml` | Device presets (viewport, DPR, UA, CPU throttle) |
+| File            | Purpose                                                                   |
+| --------------- | ------------------------------------------------------------------------- |
+| `targets.yaml`  | Named pages + the per-page test matrix                                    |
+| `devices.yaml`  | Device presets (viewport, DPR, UA, CPU throttle)                          |
 | `networks.yaml` | Throttling presets (`online`, `fast-3g`, `slow-4g`, `slow-3g`, `offline`) |
-| `settings.yaml` | Thresholds, model choices, run defaults, storage paths |
+| `settings.yaml` | Thresholds, model choices, run defaults, storage paths                    |
 
 A target is a named page with a list of conditions. One **run** = one page × one
 condition, repeated N times with the median reported.
@@ -99,7 +99,7 @@ pages:
     url: https://example.com/
     tests:
       - { device: mid-mobile, network: slow-4g, runs: 3 }
-      - { device: desktop,    network: fast-3g, runs: 3 }
+      - { device: desktop, network: fast-3g, runs: 3 }
   - name: plp
     url: https://example.com/category/shoes
     # omit `tests` to get the default: one mobile + one desktop condition
@@ -114,15 +114,15 @@ If you have an allowlist token, declare the header name in config and keep the v
 `.env`:
 
 ```yaml
-project: oakley
+project: oo
 headers:
-  X-Akamai-Bot: ${AKAMAI_BOT_TOKEN}     # value resolved from .env, never committed
+  X-Akamai-Bot: ${AKAMAI_BOT_TOKEN} # value resolved from .env, never committed
 pages:
   - name: homepage
-    url: https://www.oakley.com/en-us
+    url: https://www.oa.com/en-us
 ```
 
-Headers are applied at the browser-context level, so they cover the document *and*
+Headers are applied at the browser-context level, so they cover the document _and_
 every sub-resource. This is **fully opt-in**: declare none and nothing changes. Use
 `--no-headers` to run without them, and see [CUSTOM_HEADERS.md](docs/CUSTOM_HEADERS.md)
 for scoping rules and how to confirm the token was accepted.
@@ -165,12 +165,12 @@ rather than silently stored.
 
 The details that make the numbers trustworthy:
 
-- **Collectors install before navigation.** LCP, CLS, and FCP are *buffered*
+- **Collectors install before navigation.** LCP, CLS, and FCP are _buffered_
   observer entries; an observer attached after `load` misses the very entries being
   measured. Same for CDP counters, which only accumulate while the domain is enabled.
 - **LCP settles before any interaction**, because LCP freezes at the first user input.
 - **INP is measured, not assumed.** A lab page load contains no interaction, so the
-  runner drives a synthetic one — Escape, plus a click on a point *proven*
+  runner drives a synthetic one — Escape, plus a click on a point _proven_
   non-interactive. On a page with no handlers at all, interactions resolve faster than
   the Event Timing API's 16 ms threshold and no entry is emitted; the run then fails
   validation rather than reporting the floor as if it were a measurement. **TBT** is
@@ -200,24 +200,63 @@ Embeddings go through the Google AI API (`text-embedding-004`) with retry/backof
 quota errors and a **content-addressed cache**, so unchanged playbooks cost no API
 calls on re-index. Missing key and quota-exhausted both raise typed, actionable errors.
 
-This layer is currently a library — there is no `rag` CLI entry point yet; it is wired
-up in Phase 4.
+This layer is a library; it is driven by the analysis layer below.
 
 ### Why not ChromaDB
 
-Vectors are `float32` BLOBs in the *same* SQLite database as the runs, searched with
+Vectors are `float32` BLOBs in the _same_ SQLite database as the runs, searched with
 one `matrix @ vector` in numpy. ChromaDB was removed before any code depended on it: it
 carries an unpatched pre-auth RCE (`CVE-2026-45829`, CVSS 10.0) in a server stack this
-design never starts, and pulls in 84 packages to deliver *approximate* search where
+design never starts, and pulls in 84 packages to deliver _approximate_ search where
 exact search is both affordable at this corpus size and required by the determinism
 rule. Full reasoning in [PROJECT_SPEC.md §8.1](docs/PROJECT_SPEC.md).
+
+---
+
+## The analysis layer
+
+`analysis/` turns stored runs into the **Report JSON** — the document Phase 5 will
+render. It is the last stage that computes anything; the template will only format.
+
+```bash
+python -m analysis                                  # every run in data/processed
+python -m analysis --pages homepage,plp
+python -m analysis --from-store data/processed/runs.sqlite
+python -m analysis --no-llm                         # rule-based only, no model calls
+python -m analysis --use-priors                     # ground in earlier campaigns' findings
+```
+
+Output lands in `data/reports/<campaign-id>/report.json`. The campaign id is derived
+from the run ids, not the clock, so re-analysing the same runs writes the same file.
+
+**One call per page, plus one for the summary.** Each page is analysed at its worst
+condition — a recommendation derived from the easy desktop run is the wrong
+recommendation — with the other conditions carried through as comparison data.
+
+**The model never supplies a number.** It writes prose and names *which* playbook
+justifies each recommendation; there is no numeric field in its output contract. The
+magnitude then comes from that playbook's front matter
+(`expected_lcp_reduction_pct: 15, 40`), applied by a pure estimator that cannot see the
+model's text. A recommendation citing a playbook that was not retrieved is **dropped**,
+not repaired, and the drop is counted in `meta.dropped_recommendations`.
+
+Stacked fixes on one metric are discounted (each subsequent fix at 80% of its stated
+effect) and capped at 70% total, because the second image fix cannot re-win bytes the
+first already removed. Reports show the conservative low bound alongside the playbook's
+full band.
+
+**It always produces a report.** No API key, an exhausted free-tier quota, or a model
+that returns unusable JSON twice all degrade to a rule-based path: symptoms become
+findings, and playbooks are matched by their front-matter `symptoms:` instead of by
+embedding. `meta.analysis_mode` and `meta.degradation_reason` state exactly what
+produced the document, so a degraded report is never mistaken for a reasoned one.
 
 ---
 
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 353 offline tests, no browser, no network
+pytest -m "not e2e"      # 448 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 ```
 
@@ -234,7 +273,7 @@ Documented in full in [SECURITY_PLAN.md](docs/SECURITY_PLAN.md). The controls th
 affect day-to-day use:
 
 - **SSRF gate.** Every URL passes `normalize.url_safety.validate_url(resolve=True)`
-  *before* any navigation, rejecting non-HTTPS, raw-IP, userinfo, and private/internal
+  _before_ any navigation, rejecting non-HTTPS, raw-IP, userinfo, and private/internal
   ranges.
 - **Secrets.** API keys live only in gitignored `.env`; `.env.example` holds
   placeholders. Nothing hard-codes or logs a key.
@@ -250,18 +289,18 @@ affect day-to-day use:
 
 ## Roadmap
 
-| Phase | Scope | Status |
-|---|---|---|
-| 0 | Foundations — config, CI, secrets hygiene | Done |
-| 1 | Canonical schema + manual ingestion | Done |
-| 2 | Automated multi-page browser campaigns | Done |
-| 3 | SQLite run store + artifact persistence | Done |
-| 3b | RAG — embeddings, knowledge base, retrieval, prompts | Done |
-| — | Optional per-target request headers (bot-protected targets) | Done |
-| 4 | Analysis — findings, impact, improvement estimator | **Next** |
-| 5 | Report rendering — fixed HTML skeleton → PDF + Markdown mirror | Planned |
-| 6 | Unified CLI (`ingest` / `analyze` / `report`) + skeleton-drift check | Planned |
-| 7 | Prior-run memory, trend comparison, optional web UI | Planned |
+| Phase | Scope                                                                | Status   |
+| ----- | -------------------------------------------------------------------- | -------- |
+| 0     | Foundations — config, CI, secrets hygiene                            | Done     |
+| 1     | Canonical schema + manual ingestion                                  | Done     |
+| 2     | Automated multi-page browser campaigns                               | Done     |
+| 3     | SQLite run store + artifact persistence                              | Done     |
+| 3b    | RAG — embeddings, knowledge base, retrieval, prompts                 | Done     |
+| —     | Optional per-target request headers (bot-protected targets)          | Done     |
+| 4     | Analysis — findings, impact, improvement estimator, Report JSON      | Done     |
+| 5     | Report rendering — fixed HTML skeleton → PDF + Markdown mirror       | **Next** |
+| 6     | Unified CLI (`ingest` / `analyze` / `report`) + skeleton-drift check | Planned  |
+| 7     | Prior-run memory, trend comparison, optional web UI                  | Planned  |
 
 ## Documentation
 

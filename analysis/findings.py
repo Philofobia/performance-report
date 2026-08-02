@@ -390,6 +390,7 @@ def analyze_page(
     prior_findings: Sequence[Any] = (),
     chunks: Optional[Sequence[Chunk]] = None,
     knowledge_dir: str = "data/knowledge",
+    no_client_reason: str = "no_api_key",
 ) -> PageAnalysis:
     """Analyse one page, with a model when there is one and rules when not.
 
@@ -397,6 +398,10 @@ def analyze_page(
     *only* citations a recommendation may claim. ``chunks`` is the on-disk
     playbook corpus used by the fallback — passed in so tests and repeated
     pages do not re-read the directory.
+
+    ``no_client_reason`` distinguishes *why* there is no model. "No key
+    configured" and "the user passed --no-llm" both land on the rule-based
+    path, but the report must not claim the first when the second happened.
     """
     from analysis.estimator import aggregate
     from analysis.llm import AnalysisError, InvalidModelOutputError
@@ -412,7 +417,7 @@ def analyze_page(
 
     if client is None:
         return _rule_based_page(
-            ordered_runs, primary, list(symptoms), corpus, "no_api_key"
+            ordered_runs, primary, list(symptoms), corpus, no_client_reason
         )
 
     prompt = build_analysis_prompt(

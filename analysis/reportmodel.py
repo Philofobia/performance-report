@@ -275,7 +275,17 @@ def _page_block(page: PageAnalysis, settings: Settings) -> PageBlock:
     )
 
 
-def _comparison(pages: Sequence[PageAnalysis]) -> List[ComparisonRow]:
+def _comparison(
+    pages: Sequence[PageAnalysis], settings: Settings
+) -> List[ComparisonRow]:
+    """One row per condition, each judged on *its own* measurements.
+
+    The page verdict comes from its worst condition, but a comparison table
+    exists precisely to show that desktop passed where mobile failed. Stamping
+    the page verdict on every row would erase the thing the table is for.
+    """
+    from rag.retrieve import detect_symptoms
+
     rows: List[ComparisonRow] = []
     for page in pages:
         for run in page.runs:
@@ -284,7 +294,7 @@ def _comparison(pages: Sequence[PageAnalysis]) -> List[ComparisonRow]:
                 page=page.page_name, device=run.condition.device,
                 network=run.condition.network, lcp_ms=cwp.lcp_ms, cls=cwp.cls,
                 inp_ms=cwp.inp_ms, tbt_ms=cwp.tbt_ms,
-                verdict=verdict_for(page.symptoms),
+                verdict=verdict_for(detect_symptoms(run, settings.thresholds)),
             ))
     return sorted(rows, key=lambda r: (r.page, r.device, r.network))
 
@@ -350,7 +360,7 @@ def build_report(
             top_actions=list(summary.top_actions),
         ),
         pages=[_page_block(p, settings) for p in ordered],
-        comparison=_comparison(ordered),
+        comparison=_comparison(ordered, settings),
         methodology=_methodology(ordered, settings),
         meta=ReportMeta(
             analysis_mode="rule_based" if degraded else "llm",

@@ -180,6 +180,30 @@ def test_comparison_row_per_condition_ordered():
     ]
 
 
+def test_comparison_verdict_is_per_condition_not_per_page():
+    page = a_page()
+    # Same page, one failing condition and one healthy one.
+    healthy = make_run("run_d", device="desktop", network="fast-3g", lcp=1900)
+    healthy.metrics.cwp.cls = 0.02
+    healthy.metrics.cwp.inp_ms = 90
+    healthy.metrics.cwp.fcp_ms = 1200
+    healthy.metrics.cwp.ttfb_ms = 400
+    healthy.metrics.cwp.tbt_ms = 50
+    healthy.metrics.network.total_transfer_kb = 800
+    healthy.metrics.network.request_count = 30
+    healthy.metrics.network.render_blocking_css = 0
+    healthy.metrics.main_thread.script_ms = 100
+    healthy.resource_timings = []
+    page.runs = [healthy, make_run("run_m")]
+
+    report = build([page])
+    rows = {r.device: r.verdict for r in report.comparison}
+    assert rows["desktop"] == "pass"        # this condition really is fine
+    assert rows["mid-mobile"] == "fail"
+    # the page as a whole is still judged by its worst condition
+    assert report.pages[0].verdict == "fail"
+
+
 def test_meta_records_the_mode_and_cited_playbooks():
     report = build()
     assert report.meta.analysis_mode == "llm"

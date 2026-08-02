@@ -296,6 +296,14 @@ def test_no_client_falls_back_with_a_reason():
     assert result.recommendations
 
 
+def test_no_client_by_user_choice_is_not_reported_as_a_missing_key():
+    run, symptoms, chunks = _setup()
+    result = analyze_page([run], hits=[], symptoms=symptoms, client=None,
+                          chunks=chunks, no_client_reason="llm_disabled")
+    assert result.mode == "rule_based"
+    assert result.degradation_reason == "llm_disabled"
+
+
 def test_invalid_model_output_falls_back_with_a_reason():
     run, symptoms, chunks = _setup()
     result = analyze_page(
