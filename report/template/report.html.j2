@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ report.cover.project }} — performance report</title>
+{# The stylesheet is this repo's own file, not model output: escaping it would
+   mangle every quoted font name and silently collapse the type system. #}
+<style>{{ stylesheet|safe }}</style>
+</head>
+<body>
+
+<section data-section="cover" class="cover">
+  <div class="spine">{{ report.cover.campaign_id }}</div>
+  <div class="cover-inner">
+    <p class="eyebrow">Web performance measurement</p>
+    <h1 class="cover-title">{{ report.cover.project }}</h1>
+
+    <div class="bands" role="img"
+         aria-label="Overall verdict: {{ report.cover.verdict }}">
+      <div class="band band--pass {% if report.cover.verdict == 'pass' %}is-on{% endif %}">
+        <span class="band-label">within target</span>
+      </div>
+      <div class="band band--warn {% if report.cover.verdict == 'warn' %}is-on{% endif %}">
+        <span class="band-label">needs work</span>
+      </div>
+      <div class="band band--fail {% if report.cover.verdict == 'fail' %}is-on{% endif %}">
+        <span class="band-label">failing</span>
+      </div>
+    </div>
+
+    <dl class="keyvals">
+      <dt>Pages tested</dt><dd>{{ report.cover.pages|join(', ') }}</dd>
+      <dt>Generated</dt><dd>{{ report.cover.generated_at.strftime('%Y-%m-%d %H:%M UTC') }}</dd>
+      <dt>Analysis</dt>
+      <dd>
+        {%- if report.meta.analysis_mode == 'llm' -%}
+          Retrieval-grounded model analysis (<span class="mono">{{ report.meta.model }}</span>)
+        {%- else -%}
+          Rule-based analysis — no model reasoned over these measurements
+        {%- endif -%}
+      </dd>
+    </dl>
+  </div>
+</section>
+
+<section data-section="summary" class="sheet">
+  <p class="eyebrow">Summary</p>
+  <h2>What the measurements show</h2>
+  <p class="lede">{{ report.summary.problem }}</p>
+  <p class="serif"><span class="run-in">Key finding.</span> {{ report.summary.key_finding }}</p>
+
+  <p class="eyebrow eyebrow--sub">Do these first</p>
+  {% if report.summary.top_actions %}
+  <ol class="actions">
+    {% for action in report.summary.top_actions %}<li>{{ action }}</li>{% endfor %}
+  </ol>
+  {% else %}
+  <p class="empty">No actions identified.</p>
+  {% endif %}
+</section>
+
+{% for page in report.pages %}
+<section data-section="page" data-page="{{ page.name }}" class="sheet page">
+
+  <div data-section="page.header" class="page-header">
+    <div>
+      <p class="eyebrow">Page</p>
+      <h2>{{ page.name }}</h2>
+      <p class="url mono">{{ page.url }}</p>
+    </div>
+    <div class="bands-wrap" role="img" aria-label="Verdict: {{ page.verdict }}">
+      <span class="bands-caption">{{ page.verdict }}</span>
+      <div class="bands bands--mini">
+        <div class="band band--pass {% if page.verdict == 'pass' %}is-on{% endif %}"></div>
+        <div class="band band--warn {% if page.verdict == 'warn' %}is-on{% endif %}"></div>
+        <div class="band band--fail {% if page.verdict == 'fail' %}is-on{% endif %}"></div>
+      </div>
+    </div>
+  </div>
+
+  <div data-section="page.cwv-dashboard" class="block">
+    <h3>Core Web Vitals</h3>
+    {% if charts.pages[page.name].gauges %}
+      <div class="chart">{{ charts.pages[page.name].gauges|safe }}</div>
+    {% else %}
+      <p class="empty">No Core Web Vitals were measured for this page.</p>
+    {% endif %}
+    <table class="metrics">
+      <thead><tr><th>Condition</th><th>LCP</th><th>CLS</th><th>INP</th><th>TBT</th></tr></thead>
+      <tbody>
+      {% for row in page.conditions %}
+        <tr>
+          <td>{{ row.device }} / {{ row.network }}</td>
+          <td>{{ row.metrics.lcp_ms|round|int if row.metrics.lcp_ms is not none else '—' }}<span class="unit">ms</span></td>
+          <td>{{ '%.2f'|format(row.metrics.cls) if row.metrics.cls is not none else '—' }}</td>
+          <td>{{ row.metrics.inp_ms|round|int if row.metrics.inp_ms is not none else '—' }}<span class="unit">ms</span></td>
+          <td>{{ row.metrics.tbt_ms|round|int if row.metrics.tbt_ms is not none else '—' }}<span class="unit">ms</span></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div data-section="page.resources" class="block">
+    <h3>Where the weight is</h3>
+    {% if charts.pages[page.name].resources %}
+      <div class="chart">{{ charts.pages[page.name].resources|safe }}</div>
+    {% else %}
+      <p class="empty">No resource timings were captured for this page.</p>
+    {% endif %}
+    {% if charts.pages[page.name].donut %}
+      <div class="chart chart--inset">{{ charts.pages[page.name].donut|safe }}</div>
+    {% else %}
+      <p class="empty">No transfer sizes were captured by resource type.</p>
+    {% endif %}
+  </div>
+
+  <div data-section="page.lcp-breakdown" class="block">
+    <h3>LCP breakdown</h3>
+    {% if charts.pages[page.name].lcp %}
+      <div class="chart">{{ charts.pages[page.name].lcp|safe }}</div>
+    {% else %}
+      <p class="empty">Not available — this run did not measure the paint milestones the breakdown is derived from.</p>
+    {% endif %}
+  </div>
+
+  <div data-section="page.findings" class="block">
+    <h3>What is wrong</h3>
+    <p class="serif">{{ page.summary }}</p>
+    {% if page.findings %}
+    <ul class="findings">
+      {% for finding in page.findings %}
+      <li>
+        <p class="finding-title">{{ finding.title }}</p>
+        {% if finding.detail %}<p class="serif">{{ finding.detail }}</p>{% endif %}
+        {% if finding.evidence %}
+        <p class="evidence mono">{{ finding.evidence|join('   ') }}</p>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">No findings were produced for this page.</p>
+    {% endif %}
+  </div>
+
+  <div data-section="page.impacts" class="block">
+    <h3>What it costs</h3>
+    {% if page.impacts %}
+    <dl class="impacts">
+      {% for impact in page.impacts %}
+      <dt>{{ impact.audience }}</dt><dd class="serif">{{ impact.text }}</dd>
+      {% endfor %}
+    </dl>
+    {% else %}
+    <p class="empty">No impact statements were produced for this page.</p>
+    {% endif %}
+  </div>
+
+  <div data-section="page.recommendations" class="block">
+    <h3>What to do</h3>
+    {% if page.recommendations %}
+    <ol class="recommendations">
+      {% for rec in page.recommendations %}
+      <li>
+        <p class="rec-title">{{ rec.title }}</p>
+        {% if rec.rationale %}<p class="serif">{{ rec.rationale }}</p>{% endif %}
+        <p class="rec-meta">
+          <span class="tag tag--{{ rec.effort }}">{{ rec.effort }} effort</span>
+          <span class="mono">{{ rec.playbook_source }}{% if rec.playbook_section %} › {{ rec.playbook_section }}{% endif %}</span>
+          {% if rec.magnitude == 'estimated' %}
+            {% for projection in rec.projections %}
+            <span class="delta">{{ projection.metric }} {{ projection.before|round|int }} → {{ projection.after_low|round|int }} <em>({{ (projection.reduction_pct * 100)|round|int }}% lower)</em></span>
+            {% endfor %}
+          {% else %}
+            <span class="delta delta--unknown">expected magnitude unknown — this playbook states no range</span>
+          {% endif %}
+        </p>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="empty">No playbook-grounded recommendations for this page.</p>
+    {% endif %}
+  </div>
+
+  <div data-section="page.projections" class="block">
+    <h3>Expected improvement</h3>
+    {% if charts.pages[page.name].projections %}
+      <div class="chart">{{ charts.pages[page.name].projections|safe }}</div>
+      <p class="caption">Projected values use the conservative end of each playbook's stated range.</p>
+    {% else %}
+      <p class="empty">No improvement could be projected — no cited playbook states an expected range for a measured metric.</p>
+    {% endif %}
+  </div>
+
+</section>
+{% endfor %}
+
+<section data-section="comparison" class="sheet">
+  <p class="eyebrow">Comparison</p>
+  <h2>Every page, every condition</h2>
+  {% if charts.comparison %}
+    <div class="chart">{{ charts.comparison|safe }}</div>
+  {% else %}
+    <p class="empty">No conditions to compare.</p>
+  {% endif %}
+  <table class="metrics">
+    <thead><tr><th>Page</th><th>Device</th><th>Network</th><th>LCP</th><th>CLS</th><th>INP</th><th>Verdict</th></tr></thead>
+    <tbody>
+    {% for row in report.comparison %}
+      <tr>
+        <td>{{ row.page }}</td><td>{{ row.device }}</td><td>{{ row.network }}</td>
+        <td>{{ row.lcp_ms|round|int if row.lcp_ms is not none else '—' }}<span class="unit">ms</span></td>
+        <td>{{ '%.2f'|format(row.cls) if row.cls is not none else '—' }}</td>
+        <td>{{ row.inp_ms|round|int if row.inp_ms is not none else '—' }}<span class="unit">ms</span></td>
+        <td><span class="chip chip--{{ row.verdict }}">{{ row.verdict }}</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section data-section="methodology" class="sheet">
+  <p class="eyebrow">Methodology</p>
+  <h2>How these numbers were produced</h2>
+  <p class="serif">
+    These are lab measurements from emulated devices under emulated network
+    conditions. They are comparable run to run, and they are not field data.
+  </p>
+  <dl class="keyvals keyvals--tight">
+    <dt>Devices</dt><dd>{{ report.methodology.devices|join(', ') }}</dd>
+    <dt>Networks</dt><dd>{{ report.methodology.networks|join(', ') }}</dd>
+    <dt>Runs per condition</dt><dd>{{ report.methodology.runs_per_condition|join(', ') }}</dd>
+    <dt>Knowledge base</dt><dd class="mono">{{ report.meta.knowledge_digest[:12] }}</dd>
+  </dl>
+
+  <p class="eyebrow eyebrow--sub">Thresholds applied</p>
+  <table class="metrics metrics--pairs">
+    <thead><tr><th>Threshold</th><th>Value</th></tr></thead>
+    <tbody>
+    {% for key, value in report.methodology.thresholds.items() %}
+      <tr><td class="mono">{{ key }}</td><td>{{ value }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <p class="eyebrow eyebrow--sub">Captures retained</p>
+  {% if report.methodology.captures %}
+  <ul class="captures mono">
+    {% for capture in report.methodology.captures %}
+    <li>{{ capture.page }} · {{ capture.run_id }} · {{ capture.screenshot or '—' }}</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">No capture artifacts were recorded.</p>
+  {% endif %}
+</section>
+
+</body>
+</html>

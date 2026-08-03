@@ -254,7 +254,7 @@ def lcp_phases(cwp: Mapping[str, Optional[float]]) -> str:
     if any(width < 0 for _, width in phases):
         return NO_CHART
 
-    fig, axis = plt.subplots(figsize=(6.2, 1.5))
+    fig, axis = plt.subplots(figsize=(6.2, 2.1))
     left = 0.0
     for index, (label, width) in enumerate(phases):
         axis.barh([0], [width], left=[left], height=0.5,
@@ -267,14 +267,17 @@ def lcp_phases(cwp: Mapping[str, Optional[float]]) -> str:
     axis.set_xlabel("ms", fontsize=8, color=palette.MUTED)
     _bare_axis(axis)
     axis.legend(
-        loc="upper center", bbox_to_anchor=(0.5, -0.35), ncol=3,
+        loc="upper center", bbox_to_anchor=(0.5, -0.42), ncol=3,
         frameon=False, fontsize=8,
     )
-    axis.text(
-        0, -1.15, LCP_PHASES_CAPTION, fontsize=7, color=palette.MUTED,
-        transform=axis.get_yaxis_transform(), va="top",
+    # Figure coordinates, below the legend. Axis coordinates put it on top of
+    # the legend entries, and the caveat is the one label that must stay
+    # legible - it is what keeps the chart honest about what it derived.
+    fig.subplots_adjust(bottom=0.42)
+    fig.text(
+        0.0, 0.01, LCP_PHASES_CAPTION, fontsize=7, color=palette.MUTED,
+        ha="left", va="bottom",
     )
-    fig.tight_layout()
     return to_svg(fig)
 
 

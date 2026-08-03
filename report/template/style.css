@@ -1,0 +1,386 @@
+/* Calibration sheet — print stylesheet for the performance report.
+ *
+ * The document's argument is always "measured value against threshold", so the
+ * visual language is borrowed from instrumentation: hairline rules, tabular
+ * figures, units set quieter than the numbers they qualify, and a band strip
+ * that states which of three thresholds the subject landed in.
+ *
+ * Typography is deliberately inverted from the usual report convention.
+ * Structure and data speak in a humanist sans and a mono; written analysis
+ * speaks in a print serif. That split is not decoration - it mirrors how this
+ * system actually works, where measurements are trusted and prose is authored
+ * by a model. All three faces are locally available: the file must render with
+ * no network, so there are no @import rules and no web fonts.
+ */
+
+:root {
+  /* Cool calibration paper, not the warm cream of every other audit deck. */
+  --paper: #f2f4f3;
+  --paper-raised: #ffffff;
+  --ink: #1a1d21;
+  --muted: #6b7280;
+  --rule: #d8dce1;
+
+  /* Reused from the chart categorical series so chrome and charts are one
+   * system rather than two palettes that happen to sit together. */
+  --accent: #2f5d8f;
+
+  /* Verdict tokens — must match report/palette.py exactly. */
+  --pass: #1a7f4b;
+  --warn: #b26a00;
+  --fail: #b3261e;
+  --unknown: #6b7280;
+
+  --sans: Corbel, "Segoe UI", Candara, "Trebuchet MS", sans-serif;
+  --serif: Constantia, Cambria, "Palatino Linotype", Georgia, serif;
+  --mono: Consolas, "Cascadia Mono", "DejaVu Sans Mono", monospace;
+}
+
+@page {
+  size: A4;
+  margin: 16mm 15mm 14mm;
+}
+
+* { box-sizing: border-box; }
+
+html { font-size: 10pt; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 9.5pt;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums lining-nums;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* Chart labels are emitted by matplotlib as real <text> with an inline
+ * font-family. Pin a local stack so the SVG never waits on, or falls back
+ * unpredictably from, a font this machine may not carry. */
+svg text {
+  font-family: var(--sans) !important;
+}
+
+.chart svg { max-width: 100%; height: auto; display: block; }
+
+/* --------------------------------------------------------------------------
+ * Type scale
+ * ----------------------------------------------------------------------- */
+h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+
+h2 { font-size: 16pt; line-height: 1.2; }
+h3 {
+  font-size: 8pt;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 3mm;
+  padding-bottom: 1.5mm;
+  border-bottom: 0.4pt solid var(--rule);
+}
+
+p { margin: 0 0 2.5mm; }
+
+.eyebrow {
+  font-size: 7pt;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 1mm;
+}
+.eyebrow--sub { margin-top: 7mm; }
+
+.serif {
+  font-family: var(--serif);
+  font-size: 10pt;
+  line-height: 1.55;
+  max-width: 62ch;  /* a measure that stays readable at print size */
+}
+
+.lede {
+  font-family: var(--serif);
+  font-size: 12.5pt;
+  line-height: 1.42;
+  max-width: 56ch;
+  margin-bottom: 4mm;
+}
+
+.run-in {
+  font-family: var(--sans);
+  font-size: 8pt;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.mono { font-family: var(--mono); font-size: 8pt; }
+.unit { font-family: var(--mono); font-size: 6.5pt; color: var(--muted); margin-left: 0.4em; }
+
+.caption { font-size: 7.5pt; color: var(--muted); margin-top: 1mm; }
+
+.empty {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 9.5pt;
+  color: var(--muted);
+  margin: 0;
+  padding: 3mm 0 3mm 4mm;
+  border-left: 1.5pt solid var(--rule);
+}
+
+/* --------------------------------------------------------------------------
+ * Cover
+ * ----------------------------------------------------------------------- */
+.cover {
+  position: relative;
+  min-height: 245mm;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding-left: 12mm;
+  break-after: page;
+}
+
+/* Specimen-label rail, the way an instrument carries its serial number. */
+.spine {
+  position: absolute;
+  top: 0;
+  left: 0;
+  writing-mode: vertical-rl;
+  font-family: var(--mono);
+  font-size: 7.5pt;
+  letter-spacing: 0.22em;
+  color: var(--muted);
+  border-left: 0.4pt solid var(--rule);
+  padding: 2mm 0 2mm 2mm;
+  height: 100%;
+}
+
+.cover-title {
+  font-size: 46pt;
+  line-height: 1.02;
+  letter-spacing: -0.025em;
+  margin: 0 0 9mm;
+}
+
+/* The signature device: three thresholds, the achieved one filled. It says
+ * the document's thesis without a sentence - everything here is a measurement
+ * judged against a band. */
+.bands {
+  display: flex;
+  gap: 1.5mm;
+  margin: 0 0 9mm;
+}
+
+.band {
+  flex: 1;
+  height: 11mm;
+  border: 0.5pt solid var(--rule);
+  background: transparent;
+  display: flex;
+  align-items: flex-end;
+  padding: 1.5mm;
+  position: relative;
+}
+
+.band-label {
+  font-size: 7pt;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.band.is-on .band-label { color: var(--paper-raised); font-weight: 700; }
+.band--pass.is-on { background: var(--pass); border-color: var(--pass); }
+.band--warn.is-on { background: var(--warn); border-color: var(--warn); }
+.band--fail.is-on { background: var(--fail); border-color: var(--fail); }
+
+.keyvals {
+  display: grid;
+  grid-template-columns: 34mm 1fr;
+  gap: 0;
+  margin: 0;
+  border-top: 0.4pt solid var(--rule);
+}
+.keyvals dt,
+.keyvals dd {
+  margin: 0;
+  padding: 2mm 0;
+  border-bottom: 0.4pt solid var(--rule);
+}
+.keyvals dt {
+  font-size: 7pt;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.keyvals--tight dt, .keyvals--tight dd { padding: 1.4mm 0; }
+
+/* --------------------------------------------------------------------------
+ * Sheets and blocks
+ * ----------------------------------------------------------------------- */
+.sheet { padding: 0 0 6mm; }
+.page { break-before: page; }
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 8mm;
+  padding-bottom: 3mm;
+  margin-bottom: 6mm;
+  border-bottom: 1pt solid var(--ink);
+}
+.page-header .url { color: var(--muted); margin: 0.5mm 0 0; }
+
+.bands-wrap { flex-shrink: 0; text-align: right; }
+.bands--mini { width: 34mm; margin: 0; }
+.bands--mini .band { height: 3.5mm; padding: 0; }
+.bands-caption {
+  display: block;
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 1mm;
+}
+
+/* A chart must never be torn across a page break: half a bar chart is not
+ * evidence of anything. */
+.block { margin-bottom: 8mm; break-inside: avoid; }
+
+.chart { margin: 0 0 3mm; }
+.chart--inset { max-width: 74mm; }
+
+/* --------------------------------------------------------------------------
+ * Tables — hairline rules only, no zebra, no vertical borders
+ * ----------------------------------------------------------------------- */
+.metrics {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 8.5pt;
+  margin-top: 2mm;
+}
+.metrics th {
+  text-align: left;
+  font-size: 6.5pt;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 3mm 1.5mm 0;
+  border-bottom: 0.6pt solid var(--ink);
+}
+.metrics td {
+  padding: 1.6mm 3mm 1.6mm 0;
+  border-bottom: 0.4pt solid var(--rule);
+  white-space: nowrap;
+}
+.metrics td:first-child { white-space: normal; }
+.metrics--pairs { max-width: 84mm; }
+
+/* --------------------------------------------------------------------------
+ * Findings, impacts, recommendations
+ * ----------------------------------------------------------------------- */
+.findings { list-style: none; margin: 3mm 0 0; padding: 0; }
+.findings > li {
+  padding: 0 0 3mm 4mm;
+  margin-bottom: 3mm;
+  border-left: 1.5pt solid var(--accent);
+}
+.finding-title { font-weight: 700; font-size: 10pt; margin-bottom: 1mm; }
+.evidence { color: var(--muted); font-size: 7.5pt; margin: 1mm 0 0; }
+
+.impacts {
+  display: grid;
+  grid-template-columns: 20mm 1fr;
+  margin: 3mm 0 0;
+}
+.impacts dt {
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding: 1.8mm 0;
+}
+.impacts dd {
+  margin: 0;
+  padding: 1.8mm 0;
+  border-bottom: 0.4pt solid var(--rule);
+}
+.impacts dt { border-bottom: 0.4pt solid var(--rule); }
+
+/* Numbered because the order is real: recommendations are sorted by projected
+ * impact, so the numeral carries information rather than decoration. */
+.recommendations { margin: 3mm 0 0; padding: 0 0 0 9mm; }
+.recommendations > li {
+  margin-bottom: 4.5mm;
+  padding-left: 2mm;
+  break-inside: avoid;
+}
+.recommendations > li::marker {
+  font-family: var(--mono);
+  font-size: 9pt;
+  color: var(--accent);
+}
+.rec-title { font-weight: 700; font-size: 10pt; margin-bottom: 1mm; }
+.rec-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1mm 3mm;
+  align-items: baseline;
+  font-size: 7.5pt;
+  color: var(--muted);
+  margin: 1.5mm 0 0;
+}
+.delta { font-family: var(--mono); font-size: 7.5pt; color: var(--ink); }
+.delta em { font-style: normal; color: var(--pass); }
+.delta--unknown { color: var(--muted); font-family: var(--sans); }
+
+.tag {
+  font-size: 6.5pt;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.6mm 1.6mm;
+  border: 0.5pt solid var(--rule);
+  color: var(--muted);
+}
+.tag--low { border-color: var(--pass); color: var(--pass); }
+.tag--medium { border-color: var(--warn); color: var(--warn); }
+.tag--high { border-color: var(--fail); color: var(--fail); }
+
+.actions { margin: 3mm 0 0; padding: 0 0 0 9mm; }
+.actions > li { margin-bottom: 2mm; font-size: 10.5pt; }
+.actions > li::marker { font-family: var(--mono); color: var(--accent); }
+
+.chip {
+  font-size: 6.5pt;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.5mm 1.6mm;
+  color: var(--paper-raised);
+  background: var(--unknown);
+}
+.chip--pass { background: var(--pass); }
+.chip--warn { background: var(--warn); }
+.chip--fail { background: var(--fail); }
+
+.captures { list-style: none; margin: 2mm 0 0; padding: 0; color: var(--muted); }
+.captures li { padding: 1mm 0; border-bottom: 0.4pt solid var(--rule); }
+
+/* --------------------------------------------------------------------------
+ * Screen preview — the artefact is a PDF, but the HTML is read directly
+ * during development and should not look broken in a browser window.
+ * ----------------------------------------------------------------------- */
+@media screen {
+  body { max-width: 210mm; margin: 0 auto; padding: 16mm 15mm; }
+  .page { border-top: 0.4pt dashed var(--rule); padding-top: 10mm; }
+}
