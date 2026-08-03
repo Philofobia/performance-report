@@ -71,3 +71,145 @@ def test_the_same_input_renders_byte_identical_svg():
 def test_svg_carries_no_timestamp():
     svg = charts.cwv_gauges(FAILING, THRESHOLDS)
     assert "<dc:date>" not in svg
+
+
+# --------------------------------------------------------------------------- #
+# The remaining five builders
+# --------------------------------------------------------------------------- #
+RESOURCES = [
+    {"name": "/hero.mp4", "type": "media", "transfer_kb": 2140.0, "duration_ms": 390},
+    {"name": "/app.js", "type": "script", "transfer_kb": 480.0, "duration_ms": 120},
+    {"name": "/brand.woff2", "type": "font", "transfer_kb": 92.0, "duration_ms": 60},
+]
+TOTALS = {"media": 2140.0, "script": 480.0, "font": 92.0}
+CWP = {"ttfb_ms": 1800.0, "fcp_ms": 3100.0, "lcp_ms": 6200.0}
+PROJECTIONS = {
+    "lcp_ms": {"metric": "lcp_ms", "before": 6200.0, "after_low": 4637.6,
+               "after_high": 2529.6, "reduction_pct": 0.25, "source": "aggregate"},
+    "ttfb_ms": {"metric": "ttfb_ms", "before": 1800.0, "after_low": 957.6,
+                "after_high": 540.0, "reduction_pct": 0.47, "source": "aggregate"},
+}
+COMPARISON = [
+    {"page": "homepage", "device": "desktop", "network": "fast-3g",
+     "lcp_ms": 2400.0, "cls": 0.05, "inp_ms": 120.0, "tbt_ms": 120.0,
+     "verdict": "warn"},
+    {"page": "homepage", "device": "mid-mobile", "network": "slow-4g",
+     "lcp_ms": 6200.0, "cls": 0.42, "inp_ms": 480.0, "tbt_ms": 620.0,
+     "verdict": "fail"},
+]
+
+
+# -- resource_bars ---------------------------------------------------------- #
+def test_resource_bars_render_one_bar_per_resource_heaviest_first():
+    svg = charts.resource_bars(RESOURCES)
+    text = svg_text(svg)
+    assert "hero.mp4" in text
+    assert "app.js" in text
+    # heaviest label sits above the lighter ones in the axis order
+    assert text.index("hero.mp4") < text.index("brand.woff2")
+
+
+def test_resource_bars_truncate_long_names():
+    long_name = "/" + ("a" * 200) + "/bundle.js"
+    svg = charts.resource_bars([
+        {"name": long_name, "type": "script", "transfer_kb": 10.0, "duration_ms": 5}
+    ])
+    assert "a" * 200 not in svg_text(svg)
+
+
+def test_resource_bars_cap_the_number_of_rows():
+    many = [
+        {"name": f"/asset-{i}.js", "type": "script",
+         "transfer_kb": float(100 - i), "duration_ms": 10}
+        for i in range(30)
+    ]
+    text = svg_text(charts.resource_bars(many, limit=5))
+    assert "asset-0.js" in text
+    assert "asset-20.js" not in text
+
+
+def test_resource_bars_with_no_resources_return_the_empty_marker():
+    assert charts.resource_bars([]) == charts.NO_CHART
+
+
+def test_resource_bars_with_only_zero_byte_resources_return_the_empty_marker():
+    zero = [{"name": "/x.js", "type": "script", "transfer_kb": 0.0,
+             "duration_ms": 1}]
+    assert charts.resource_bars(zero) == charts.NO_CHART
+
+
+# -- request_type_donut ----------------------------------------------------- #
+def test_donut_renders_each_type():
+    text = svg_text(charts.request_type_donut(TOTALS))
+    assert "media" in text
+    assert "script" in text
+
+
+def test_donut_with_a_single_type_still_renders():
+    svg = charts.request_type_donut({"script": 400.0})
+    assert svg != charts.NO_CHART
+    assert "script" in svg_text(svg)
+
+
+def test_donut_with_no_bytes_returns_the_empty_marker():
+    assert charts.request_type_donut({}) == charts.NO_CHART
+    assert charts.request_type_donut({"script": 0.0}) == charts.NO_CHART
+
+
+# -- lcp_phases ------------------------------------------------------------- #
+def test_lcp_phases_render_three_phases_with_the_derivation_caption():
+    svg = charts.lcp_phases(CWP)
+    text = svg_text(svg)
+    assert "Server" in text
+    assert "Render-blocking" in text
+    assert "LCP element" in text
+    assert "paint milestones" in text.lower()
+
+
+def test_lcp_phases_without_fcp_return_the_empty_marker():
+    assert charts.lcp_phases({"ttfb_ms": 1800.0, "lcp_ms": 6200.0}) == charts.NO_CHART
+
+
+def test_lcp_phases_without_ttfb_return_the_empty_marker():
+    assert charts.lcp_phases({"fcp_ms": 3100.0, "lcp_ms": 6200.0}) == charts.NO_CHART
+
+
+def test_lcp_phases_with_a_negative_derived_phase_return_the_empty_marker():
+    # FCP after LCP happens on odd runs; the arithmetic would draw a lie.
+    odd = {"ttfb_ms": 1800.0, "fcp_ms": 7000.0, "lcp_ms": 6200.0}
+    assert charts.lcp_phases(odd) == charts.NO_CHART
+
+
+# -- projection_bars -------------------------------------------------------- #
+def test_projection_bars_show_before_and_after_per_metric():
+    text = svg_text(charts.projection_bars(PROJECTIONS))
+    assert "LCP" in text
+    assert "TTFB" in text
+
+
+def test_projection_bars_with_nothing_projected_return_the_empty_marker():
+    assert charts.projection_bars({}) == charts.NO_CHART
+
+
+# -- comparison_heat -------------------------------------------------------- #
+def test_comparison_heat_renders_a_row_per_condition():
+    text = svg_text(charts.comparison_heat(COMPARISON))
+    assert "desktop" in text
+    assert "mid-mobile" in text
+
+
+def test_comparison_heat_with_no_rows_returns_the_empty_marker():
+    assert charts.comparison_heat([]) == charts.NO_CHART
+
+
+# -- determinism across every builder --------------------------------------- #
+def test_every_builder_is_deterministic():
+    pairs = [
+        (charts.resource_bars, (RESOURCES,)),
+        (charts.request_type_donut, (TOTALS,)),
+        (charts.lcp_phases, (CWP,)),
+        (charts.projection_bars, (PROJECTIONS,)),
+        (charts.comparison_heat, (COMPARISON,)),
+    ]
+    for builder, args in pairs:
+        assert builder(*args) == builder(*args), builder.__name__

@@ -148,3 +148,183 @@ def cwv_gauges(
 
     fig.tight_layout(h_pad=1.2)
     return to_svg(fig)
+
+
+LCP_PHASES_CAPTION = "Derived from paint milestones, not from LCP sub-part timings."
+
+# Human labels for metrics that appear as chart axis rows.
+_METRIC_LABELS = {
+    "lcp_ms": "LCP", "cls": "CLS", "inp_ms": "INP",
+    "fcp_ms": "FCP", "ttfb_ms": "TTFB", "tbt_ms": "TBT",
+    "total_transfer_kb": "Page weight",
+}
+
+
+def _shorten(name: str, limit: int = 34) -> str:
+    """Keep the tail of a URL path — the filename carries the information."""
+    if len(name) <= limit:
+        return name
+    return "…" + name[-(limit - 1):]
+
+
+def _bare_axis(axis) -> None:
+    """Strip chart furniture that adds ink without adding information."""
+    for side in ("top", "right", "bottom", "left"):
+        axis.spines[side].set_visible(False)
+    axis.tick_params(length=0, labelsize=8, colors=palette.MUTED)
+
+
+def resource_bars(resources: Sequence[Mapping], *, limit: int = 8) -> str:
+    """Heaviest resources by transfer size — the evidence for "where"."""
+    ranked = sorted(
+        (r for r in resources if (r.get("transfer_kb") or 0) > 0),
+        key=lambda r: (-(r.get("transfer_kb") or 0.0), r.get("name", "")),
+    )[:limit]
+    if not ranked:
+        return NO_CHART
+
+    labels = [_shorten(str(r.get("name", ""))) for r in ranked]
+    values = [float(r.get("transfer_kb") or 0.0) for r in ranked]
+    types = [str(r.get("type", "other")) for r in ranked]
+    ordered_types = sorted(set(types))
+    colours = [palette.categorical_for(ordered_types.index(t)) for t in types]
+
+    fig, axis = plt.subplots(figsize=(6.2, 0.36 * len(ranked) + 0.6))
+    positions = list(range(len(ranked)))
+    axis.barh(positions, values, color=colours, height=0.62)
+    axis.set_yticks(positions)
+    axis.set_yticklabels(labels)
+    axis.invert_yaxis()  # heaviest at the top, where the eye starts
+    axis.set_xlabel("KB transferred", fontsize=8, color=palette.MUTED)
+    axis.xaxis.grid(True, color=palette.GRID, linewidth=0.6)
+    axis.set_axisbelow(True)
+    _bare_axis(axis)
+    fig.tight_layout()
+    return to_svg(fig)
+
+
+def request_type_donut(totals: Mapping[str, float]) -> str:
+    """Share of transferred bytes by resource type."""
+    present = {k: float(v) for k, v in totals.items() if (v or 0) > 0}
+    if not present:
+        return NO_CHART
+
+    keys = sorted(present, key=lambda k: (-present[k], k))
+    values = [present[k] for k in keys]
+    colours = [palette.categorical_for(i) for i in range(len(keys))]
+
+    fig, axis = plt.subplots(figsize=(4.0, 3.0))
+    axis.pie(
+        values,
+        labels=keys,
+        colors=colours,
+        startangle=90,           # fixed, or slices rotate between renders
+        counterclock=False,
+        wedgeprops={"width": 0.42, "edgecolor": "white", "linewidth": 1},
+        textprops={"fontsize": 8, "color": palette.INK},
+        autopct=lambda pct: f"{pct:.0f}%" if pct >= 6 else "",
+    )
+    axis.set_aspect("equal")
+    fig.tight_layout()
+    return to_svg(fig)
+
+
+def lcp_phases(cwp: Mapping[str, Optional[float]]) -> str:
+    """LCP split into three phases derived from the paint milestones.
+
+    The ingestion layer never captured the LCP entry's own sub-part timings,
+    so these phases are derived: server (TTFB), render-blocking (FCP − TTFB)
+    and LCP element (LCP − FCP). The chart says so in a visible caption — a
+    coarser breakdown honestly labelled beats a precise-looking fiction.
+
+    Any missing input, or a negative phase (FCP can post-date LCP on an odd
+    run), yields no chart rather than a misleading one.
+    """
+    ttfb = cwp.get("ttfb_ms")
+    fcp = cwp.get("fcp_ms")
+    lcp = cwp.get("lcp_ms")
+    if ttfb is None or fcp is None or lcp is None:
+        return NO_CHART
+
+    phases = [
+        ("Server", float(ttfb)),
+        ("Render-blocking", float(fcp) - float(ttfb)),
+        ("LCP element", float(lcp) - float(fcp)),
+    ]
+    if any(width < 0 for _, width in phases):
+        return NO_CHART
+
+    fig, axis = plt.subplots(figsize=(6.2, 1.5))
+    left = 0.0
+    for index, (label, width) in enumerate(phases):
+        axis.barh([0], [width], left=[left], height=0.5,
+                  color=palette.categorical_for(index), label=label)
+        left += width
+
+    axis.set_xlim(0, max(left, 1.0))
+    axis.set_ylim(-0.6, 0.6)
+    axis.set_yticks([])
+    axis.set_xlabel("ms", fontsize=8, color=palette.MUTED)
+    _bare_axis(axis)
+    axis.legend(
+        loc="upper center", bbox_to_anchor=(0.5, -0.35), ncol=3,
+        frameon=False, fontsize=8,
+    )
+    axis.text(
+        0, -1.15, LCP_PHASES_CAPTION, fontsize=7, color=palette.MUTED,
+        transform=axis.get_yaxis_transform(), va="top",
+    )
+    fig.tight_layout()
+    return to_svg(fig)
+
+
+def projection_bars(projections: Mapping[str, Mapping]) -> str:
+    """Measured value against the conservatively projected value."""
+    if not projections:
+        return NO_CHART
+
+    keys = sorted(projections)
+    labels = [_METRIC_LABELS.get(k, k) for k in keys]
+    before = [float(projections[k]["before"]) for k in keys]
+    after = [float(projections[k]["after_low"]) for k in keys]
+
+    fig, axis = plt.subplots(figsize=(6.2, 0.62 * len(keys) + 0.9))
+    positions = list(range(len(keys)))
+    height = 0.34
+    axis.barh([p + height / 2 for p in positions], before, height=height,
+              color=palette.MUTED, label="measured")
+    axis.barh([p - height / 2 for p in positions], after, height=height,
+              color=palette.PASS, label="projected")
+    axis.set_yticks(positions)
+    axis.set_yticklabels(labels)
+    axis.invert_yaxis()
+    axis.xaxis.grid(True, color=palette.GRID, linewidth=0.6)
+    axis.set_axisbelow(True)
+    _bare_axis(axis)
+    axis.legend(loc="lower right", frameon=False, fontsize=8)
+    fig.tight_layout()
+    return to_svg(fig)
+
+
+def comparison_heat(rows: Sequence[Mapping]) -> str:
+    """Verdict per page × condition, as a compact coloured grid."""
+    if not rows:
+        return NO_CHART
+
+    labels = [f"{r.get('page')} — {r.get('device')}/{r.get('network')}"
+              for r in rows]
+    colours = [palette.colour_for(str(r.get("verdict", "unknown"))) for r in rows]
+    values = [float(r.get("lcp_ms") or 0.0) for r in rows]
+
+    fig, axis = plt.subplots(figsize=(6.2, 0.38 * len(rows) + 0.7))
+    positions = list(range(len(rows)))
+    axis.barh(positions, values, color=colours, height=0.6)
+    axis.set_yticks(positions)
+    axis.set_yticklabels(labels)
+    axis.invert_yaxis()
+    axis.set_xlabel("LCP (ms)", fontsize=8, color=palette.MUTED)
+    axis.xaxis.grid(True, color=palette.GRID, linewidth=0.6)
+    axis.set_axisbelow(True)
+    _bare_axis(axis)
+    fig.tight_layout()
+    return to_svg(fig)
