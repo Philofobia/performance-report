@@ -1,0 +1,86 @@
+# {{ report.cover.project }} — performance report
+
+`{{ report.cover.campaign_id }}` · **{{ report.cover.verdict|upper }}** · {{ report.cover.generated_at.strftime('%Y-%m-%d %H:%M UTC') }}
+
+Pages tested: {{ report.cover.pages|join(', ') }}
+
+Analysis: {% if report.meta.analysis_mode == 'llm' %}retrieval-grounded model analysis ({{ report.meta.model }}){% else %}rule-based analysis — no model reasoned over these measurements{% endif %}
+
+## Executive summary
+
+{{ report.summary.problem }}
+
+**Key finding.** {{ report.summary.key_finding }}
+
+{% if report.summary.top_actions %}
+{% for action in report.summary.top_actions %}
+{{ loop.index }}. {{ action }}
+{% endfor %}
+{% else %}
+_No actions identified._
+{% endif %}
+
+## Pages
+
+{% for page in report.pages %}
+### {{ page.name }}
+
+{{ page.url }} · **{{ page.verdict|upper }}**
+
+| Condition | LCP | CLS | INP | TBT |
+| --- | --- | --- | --- | --- |
+{% for row in page.conditions %}
+| {{ row.device }} / {{ row.network }} | {{ row.metrics.lcp_ms|round|int if row.metrics.lcp_ms is not none else '—' }} | {{ '%.2f'|format(row.metrics.cls) if row.metrics.cls is not none else '—' }} | {{ row.metrics.inp_ms|round|int if row.metrics.inp_ms is not none else '—' }} | {{ row.metrics.tbt_ms|round|int if row.metrics.tbt_ms is not none else '—' }} |
+{% endfor %}
+
+{{ page.summary }}
+
+**What is wrong**
+
+{% if page.findings %}
+{% for finding in page.findings %}
+- **{{ finding.title }}** {{ finding.detail }}{% if finding.evidence %} ({{ finding.evidence|join(' · ') }}){% endif %}
+{% endfor %}
+{% else %}
+_No findings were produced for this page._
+{% endif %}
+
+**What it costs**
+
+{% if page.impacts %}
+{% for impact in page.impacts %}
+- _{{ impact.audience|upper }}_ — {{ impact.text }}
+{% endfor %}
+{% else %}
+_No impact statements were produced for this page._
+{% endif %}
+
+**What to do**
+
+{% if page.recommendations %}
+{% for rec in page.recommendations %}
+{{ loop.index }}. **{{ rec.title }}** — {{ rec.rationale }} (effort: {{ rec.effort }}; source: {{ rec.playbook_source }}{% if rec.magnitude == 'estimated' %}{% for projection in rec.projections %}; {{ projection.metric }} {{ projection.before|round|int }} → {{ projection.after_low|round|int }}{% endfor %}{% else %}; expected magnitude unknown{% endif %})
+{% endfor %}
+{% else %}
+_No playbook-grounded recommendations for this page._
+{% endif %}
+
+{% endfor %}
+
+## Cross-page comparison
+
+| Page | Device | Network | LCP | CLS | INP | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+{% for row in report.comparison %}
+| {{ row.page }} | {{ row.device }} | {{ row.network }} | {{ row.lcp_ms|round|int if row.lcp_ms is not none else '—' }} | {{ '%.2f'|format(row.cls) if row.cls is not none else '—' }} | {{ row.inp_ms|round|int if row.inp_ms is not none else '—' }} | {{ row.verdict|upper }} |
+{% endfor %}
+
+## Methodology
+
+Measurements are lab measurements from emulated devices under emulated network
+conditions. They are comparable run to run, and are not field data.
+
+- Devices: {{ report.methodology.devices|join(', ') }}
+- Networks: {{ report.methodology.networks|join(', ') }}
+- Runs per condition: {{ report.methodology.runs_per_condition|join(', ') }}
+- Knowledge base: `{{ report.meta.knowledge_digest[:12] }}`
