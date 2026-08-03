@@ -263,6 +263,21 @@ def test_cli_filters_by_page(input_dir, tmp_path):
     assert payload["cover"]["pages"] == ["plp"]
 
 
+def test_cli_loads_dotenv_so_a_configured_key_is_actually_seen(
+    input_dir, tmp_path, monkeypatch
+):
+    # Without this the analysis CLI can never use the LLM: the key lives in
+    # .env, nothing exports it, and every campaign silently degrades to
+    # rule-based while reporting a missing key.
+    calls = []
+    monkeypatch.setattr("dotenv.load_dotenv",
+                        lambda *a, **k: calls.append(k) or False)
+    main(["--input-dir", str(input_dir), "--output-dir", str(tmp_path / "r"),
+          "--no-llm"])
+    assert calls, "analysis CLI did not load .env"
+    assert calls[0].get("override") is False
+
+
 def test_cli_rejects_conflicting_sources(input_dir, tmp_path):
     assert main(["--input-dir", str(input_dir), "--from-store",
                  str(tmp_path / "x.sqlite")]) != 0

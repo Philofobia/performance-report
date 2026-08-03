@@ -298,6 +298,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # Load .env (gitignored) before anything resolves the API key. Without
+    # this the key is only visible when the caller has exported it, so a
+    # correctly-configured project would silently analyse every campaign
+    # rule-based and report a missing key. `ingest/automated.py` does the same.
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(override=False)
+    except ImportError:  # pragma: no cover - python-dotenv is a pinned dependency
+        pass
+
     args = _build_parser().parse_args(argv)
 
     if args.input_dir and args.from_store:
