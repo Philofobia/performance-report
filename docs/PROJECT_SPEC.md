@@ -481,13 +481,16 @@ performance-projects/
 - [x] `python -m analysis` interim entry point; findings persisted as `kind="finding"`.
 
 ### Phase 5 — Report rendering (fixed skeleton, frontend-design styling)
-- [ ] Use the **`frontend-design`** skill to establish the report's visual identity (palette,
+- [x] Use the **`frontend-design`** skill to establish the report's visual identity (palette,
       typography, layout) while keeping a strict, reusable template.
-- [ ] Build `report/template/report.html.j2` + `style.css` matching Section 6 layout exactly,
+- [x] Build `report/template/report.html.j2` + `style.css` matching Section 6 layout exactly,
       with a fixed per-page repeating block for multi-page reports.
-- [ ] Implement `report/charts.py` (fixed palette + locations) and `render_pdf.py` (Chromium print-to-PDF).
-- [ ] Implement `render_md.py` (Jinja2 → Markdown mirror).
-- [ ] Determinism test: two campaigns with same data → identical structure, layout, charts.
+- [x] Implement `report/charts.py` (fixed palette + locations) and `render_pdf.py` (Chromium print-to-PDF).
+- [x] Implement `render_md.py` (Jinja2 → Markdown mirror).
+- [x] Determinism test: two campaigns with same data → identical structure, layout, charts.
+- [x] `report/skeleton.py` — structural fingerprint proving the skeleton holds across
+      campaigns of different sizes (the `--skeleton-check` flag itself is Phase 6).
+- [x] `python -m report` interim entry point with `--no-pdf` for browser-free runs.
 
 ### Phase 6 — CLI orchestration + polish
 - [ ] Wire `src/cli.py`: `ingest` (manual/auto), `analyze`, `report`, `list-runs`.

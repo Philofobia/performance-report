@@ -9,24 +9,25 @@ comparable, automatable artifact instead of a bespoke write-up.
 
 ## Where the project is
 
-**In development — analysis produces a complete Report JSON; nothing renders it yet.**
+**The pipeline is end to end: measurements go in, a fixed-skeleton PDF comes out.**
 
-**Working today (phases 0–4):** config and test-matrix resolution · canonical Pydantic
+**Working today (phases 0–5):** config and test-matrix resolution · canonical Pydantic
 schema · manual ingestion CLI · automated multi-page browser campaigns with device and
 network emulation · SSRF-gated navigation · SQLite run store with scrubbed artifacts ·
 RAG over the knowledge base (embeddings, chunking, symptom detection, grounded prompts) ·
 optional per-target request headers for bot-protected sites · grounded per-page analysis
-with rule-based improvement projections, emitted as a deterministic Report JSON.
+with rule-based improvement projections · **a fixed-skeleton PDF, HTML and Markdown
+mirror rendered from the Report JSON**.
 
-**Missing — rendering and orchestration (phases 5–6):**
+**Missing — orchestration and polish (phases 6–7):**
 
-| Gap                                                                | Consequence today                                                                            |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `report/` — HTML skeleton, charts, PDF + Markdown renderers        | **No PDF is produced** — the Report JSON exists, but nothing turns it into the document      |
-| `src/cli.py` — unified `ingest` / `analyze` / `report` entry point | Each stage is a separate module invocation (`python -m ingest.automated`, `python -m analysis`) |
-| `--skeleton-check` drift guard                                     | Report JSON determinism is tested; drift in the eventual HTML template is not                |
+| Gap                                                                | Consequence today                                                                                          |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `src/cli.py` — unified `ingest` / `analyze` / `report` entry point | Each stage is a separate module invocation (`python -m ingest.automated`, `python -m analysis`, `python -m report`) |
+| `--skeleton-check` drift guard                                     | The fingerprint exists and is tested; there is no CLI flag diffing it against a committed baseline          |
+| Prior-run trends, screenshot appendix                              | Each report stands alone; nothing compares a campaign to the last one                                       |
 
-Full breakdown in [Roadmap](#roadmap). Phases 5–7 below are **planned, not built** —
+Full breakdown in [Roadmap](#roadmap). Phases 6–7 below are **planned, not built** —
 nothing in this README describes them as working.
 
 ---
@@ -49,7 +50,7 @@ base of performance playbooks.
 ```
   manual input ─┐
                 ├─► normalize (Pydantic) ─► SQLite (runs + vectors) ─► RAG ─► analysis ─► report
-  browser run ──┘                                                                        (Phase 5)
+  browser run ──┘
 ```
 
 ---
@@ -253,10 +254,48 @@ produced the document, so a degraded report is never mistaken for a reasoned one
 
 ---
 
+## The report
+
+`report/` renders the Report JSON into the deliverable. It is the last stage that
+formats anything and the first that computes nothing — every number, ordering and
+verdict was decided by the analysis layer.
+
+```bash
+python -m report                                    # newest campaign in data/reports
+python -m report --campaign storefront-9f3ab120
+python -m report --input data/reports/<id>/report.json
+python -m report --no-pdf                           # HTML + Markdown only, no browser
+```
+
+Writes `report.html`, `report.md` and `report.pdf` beside the source `report.json`.
+
+**The skeleton is enforced, not hoped for.** Every structural block carries a
+`data-section` attribute; `report/skeleton.py` reads them in document order and
+collapses the repeating per-page block to a single `page[]` group. The test that
+matters compares a **one-page campaign against a three-page campaign** and requires an
+identical fingerprint. Diffing one campaign against itself would only prove the
+renderer is a pure function — it would pass while a section silently vanished for
+every report, which is how a skeleton actually rots. No section is ever conditionally
+omitted: a page with no recommendations renders the block with an explicit empty state.
+
+**Charts are inline SVG** built by pure functions from numbers. matplotlib randomises
+SVG element ids per process and stamps a creation date into every file, so both are
+pinned; without that, "same data, same report" is false. Because SVG is text, the tests
+assert what a chart *shows* — bar count, labels, the fail-red on the failing metric.
+
+The LCP breakdown is **derived from paint milestones**, not from the LCP entry's own
+sub-part timings, which ingestion never captured. The chart says so in a visible
+caption, and refuses to draw at all rather than render a negative phase.
+
+PDFs come from Chromium print-to-PDF through an injected Playwright seam, so the whole
+offline suite stays browser-free; only the real PDF run is `e2e`-marked.
+
+---
+
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 448 offline tests, no browser, no network
+pytest -m "not e2e"      # 537 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 ```
 
@@ -298,8 +337,8 @@ affect day-to-day use:
 | 3b    | RAG — embeddings, knowledge base, retrieval, prompts                 | Done     |
 | —     | Optional per-target request headers (bot-protected targets)          | Done     |
 | 4     | Analysis — findings, impact, improvement estimator, Report JSON      | Done     |
-| 5     | Report rendering — fixed HTML skeleton → PDF + Markdown mirror       | **Next** |
-| 6     | Unified CLI (`ingest` / `analyze` / `report`) + skeleton-drift check | Planned  |
+| 5     | Report rendering — fixed HTML skeleton → PDF + Markdown mirror       | Done     |
+| 6     | Unified CLI (`ingest` / `analyze` / `report`) + skeleton-drift check | **Next** |
 | 7     | Prior-run memory, trend comparison, optional web UI                  | Planned  |
 
 ## Documentation

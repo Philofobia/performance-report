@@ -10,8 +10,15 @@ google-genai==2.16.0      # sole LLM + embeddings client (litellm dropped: 19 CV
                           # at the pinned version, unused, and spec-optional)
 jinja2==3.1.6             # verified in venv
 matplotlib==3.11.1        # 3.10.4 was never published; broke CI install
-reportlab==5.0.0          # verified on PyPI 2026-08-02
-typer==0.27.0             # verified on PyPI 2026-08-02
+                          # reportlab: removed in Phase 5. It was pinned as a PDF
+                          # fallback and imported by nothing; PDFs come from Chromium
+                          # print-to-PDF (report/render_pdf.py). Do not re-add without
+                          # a caller - see docs/superpowers/specs/2026-08-02-phase-5-*
+                          # typer: removed in Phase 5. Pinned in Phase 0 as the
+                          # CLI library, but every entry point uses argparse
+                          # (ingest.manual, ingest.automated, analysis, report)
+                          # and nothing ever imported it. Do not re-add without
+                          # a caller.
 playwright==1.48.0        # verified in venv (chromium installed)
 
 # Test extras
