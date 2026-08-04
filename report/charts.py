@@ -152,8 +152,10 @@ def cwv_gauges(
 
 LCP_PHASES_CAPTION = "Derived from paint milestones, not from LCP sub-part timings."
 
-# Human labels for metrics that appear as chart axis rows.
-_METRIC_LABELS = {
+# Human labels for metrics that appear as chart axis rows — and, via the
+# `metric_label` template filter, anywhere the templates name a metric, so a
+# trend caption and its chart's axis never disagree.
+METRIC_LABELS = {
     "lcp_ms": "LCP", "cls": "CLS", "inp_ms": "INP",
     "fcp_ms": "FCP", "ttfb_ms": "TTFB", "tbt_ms": "TBT",
     "total_transfer_kb": "Page weight",
@@ -287,7 +289,7 @@ def projection_bars(projections: Mapping[str, Mapping]) -> str:
         return NO_CHART
 
     keys = sorted(projections)
-    labels = [_METRIC_LABELS.get(k, k) for k in keys]
+    labels = [METRIC_LABELS.get(k, k) for k in keys]
     before = [float(projections[k]["before"]) for k in keys]
     after = [float(projections[k]["after_low"]) for k in keys]
 
@@ -305,6 +307,70 @@ def projection_bars(projections: Mapping[str, Mapping]) -> str:
     axis.set_axisbelow(True)
     _bare_axis(axis)
     axis.legend(loc="lower right", frameon=False, fontsize=8)
+    fig.tight_layout()
+    return to_svg(fig)
+
+
+#: Direction → the colour that states it. "flat" is deliberately the muted
+#: grey rather than a verdict colour: it is the absence of a signal, and
+#: painting it green would read as an improvement that did not happen.
+_DIRECTION_COLOURS = {
+    "improved": palette.PASS,
+    "regressed": palette.FAIL,
+    "flat": palette.MUTED,
+    "new": palette.UNKNOWN,
+}
+
+
+def trend_chart(series: Mapping) -> str:
+    """One metric's history under one condition, oldest point first.
+
+    Refuses to draw a single-point series: a line through one point states a
+    trend that has not been measured yet. The template renders the empty state
+    in the same slot, so the section is still present.
+    """
+    points = list(series.get("points") or [])
+    if len(points) < 2:
+        return NO_CHART
+
+    metric = str(series.get("metric", ""))
+    unit = "ms" if metric.endswith("_ms") else ""
+    values = [float(p["value"]) for p in points]
+    positions = list(range(len(values)))
+    direction = str(series.get("direction", "new"))
+    accent = _DIRECTION_COLOURS.get(direction, palette.UNKNOWN)
+
+    fig, axis = plt.subplots(figsize=(4.6, 1.9))
+    axis.plot(positions, values, color=palette.MUTED, linewidth=1.4,
+              marker="o", markersize=3.5, zorder=2)
+    # The newest point is the one the direction is about, so it carries the
+    # colour; the rest of the line is history and stays neutral.
+    axis.plot(positions[-1:], values[-1:], color=accent, marker="o",
+              markersize=6, zorder=3)
+
+    target = series.get("target")
+    if target is not None:
+        axis.axhline(float(target), color=palette.GRID, linewidth=1,
+                     linestyle="--", zorder=1)
+        axis.annotate(f"target {_fmt(float(target), unit)}",
+                      xy=(0, float(target)), xytext=(0, 3),
+                      textcoords="offset points", fontsize=7,
+                      color=palette.MUTED)
+
+    axis.annotate(_fmt(values[-1], unit),
+                  xy=(positions[-1], values[-1]), xytext=(4, 0),
+                  textcoords="offset points", fontsize=8, color=accent,
+                  va="center")
+    axis.set_ylabel(METRIC_LABELS.get(metric, metric), fontsize=8,
+                    color=palette.MUTED)
+    axis.set_xticks(positions)
+    axis.set_xticklabels([""] * len(positions))
+    axis.set_xlabel("older → newer", fontsize=7, color=palette.MUTED)
+    axis.yaxis.grid(True, color=palette.GRID, linewidth=0.6)
+    axis.set_axisbelow(True)
+    # Room on the right for the value annotation, which sits outside the data.
+    axis.set_xlim(-0.3, len(values) - 0.4)
+    _bare_axis(axis)
     fig.tight_layout()
     return to_svg(fig)
 

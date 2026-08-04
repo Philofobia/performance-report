@@ -37,6 +37,26 @@ def test_comparison_renders_as_a_table():
     assert "| Page | Device |" in render_md(a_report())
 
 
+def test_the_trend_mirrors_the_html_section():
+    from tests.unit.render_html_test import a_trend
+
+    markdown = render_md(a_report(trends=[a_trend()]))
+    assert "**Trend**" in markdown
+    assert "| Condition | Metric | History | Direction | Change |" in markdown
+    assert "6200.0 → 4820.0" in markdown
+    assert "-22.3%" in markdown
+    # The mirror names metrics the way the HTML does, not by raw field name.
+    # Scoped to the trend row: `lcp_ms=6200` legitimately appears elsewhere as
+    # a finding's evidence.
+    row = next(line for line in markdown.splitlines() if "6200.0 → 4820.0" in line)
+    assert "| LCP |" in row
+    assert "lcp_ms" not in row
+
+
+def test_a_page_with_no_history_says_so_in_the_mirror():
+    assert "No prior campaigns" in render_md(a_report())
+
+
 def test_empty_recommendations_render_an_empty_state():
     markdown = render_md(a_report(recommendations=False))
     assert "No playbook-grounded recommendations" in markdown

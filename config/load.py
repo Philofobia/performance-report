@@ -226,6 +226,22 @@ class ReportConfig(BaseModel):
     output_dir: str = "data/reports"
 
 
+class TrendsConfig(BaseModel):
+    """Campaign-over-campaign comparison (PROJECT_SPEC §10 Phase 7).
+
+    ``dead_band_pct`` exists because emulated throttling has real run-to-run
+    variance: without it a 3% wobble reads as a regression every campaign and
+    the trend section becomes noise the reader learns to skip.
+
+    ``window`` is at least 2 — a window of 1 could never produce a direction,
+    and every series silently rendering as "new" would look like missing data
+    rather than a misconfiguration.
+    """
+
+    dead_band_pct: float = Field(default=5.0, ge=0)
+    window: int = Field(default=5, ge=2)
+
+
 class Settings(BaseModel):
     run_defaults: RunDefaults = Field(default_factory=RunDefaults)
     thresholds: Thresholds = Field(default_factory=Thresholds)
@@ -233,6 +249,7 @@ class Settings(BaseModel):
     rag: RagConfig = Field(default_factory=RagConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
+    trends: TrendsConfig = Field(default_factory=TrendsConfig)
 
 
 # --------------------------------------------------------------------------- #

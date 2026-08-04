@@ -1,8 +1,8 @@
 """``python -m analysis`` — runs in, Report JSON out.
 
-An interim entry point. Phase 6 folds it into a unified ``src/cli.py`` with
-``ingest`` / ``analyze`` / ``report`` subcommands; until then this is how the
-analysis layer is exercised by hand and by the integration tests.
+Reachable both directly and as ``python -m cli analyze``: the Phase 6 façade
+forwards argv here verbatim rather than redeclaring these flags, so this
+parser stays the single definition of the analysis stage's interface.
 
 It never fails because a model was unavailable. Missing key, exhausted quota
 or unusable model output all degrade to the rule-based path and the report
@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from analysis import trends
 from analysis.findings import PageAnalysis, analyze_page, select_primary
 from analysis.reportmodel import Report, build_report, to_json
 from config.load import load_settings
@@ -163,12 +164,19 @@ def run_analysis(
     generated_at: Optional[datetime] = None,
     page_analyses_out: Optional[List[PageAnalysis]] = None,
     llm_disabled: bool = False,
+    history: Optional[Sequence[Any]] = None,
 ) -> Report:
     """Run the full analysis pipeline over a campaign's runs.
 
     ``llm_disabled`` records that the *user* turned the model off, so the
     report says "llm_disabled" rather than accusing the environment of a
     missing key.
+
+    ``history`` is the trend input. Left None it is read from the configured
+    run store — which happens whatever ``--input-dir``/``--from-store`` the
+    current campaign came from, because the default path never touches the
+    store and would otherwise have no history at all. Tests inject it, the way
+    the LLM and embedding clients are already injected.
     """
     settings = settings or load_settings()
     k = top_k or settings.rag.top_k
@@ -215,10 +223,19 @@ def run_analysis(
 
     project = runs[0].project.name if runs else "report"
     model = getattr(llm_client, "model", "none") if llm_client else "none"
+
+    if history is None:
+        history = trends.load_history(settings.storage.sqlite_path, project=project)
+    series = trends.build_series(
+        runs, history=history, thresholds=settings.thresholds,
+        dead_band_pct=settings.trends.dead_band_pct,
+        window=settings.trends.window,
+    )
+
     return build_report(
         analyses, project=project, settings=settings, summary=summary,
         generated_at=generated_at or datetime.now(timezone.utc),
-        model=model, knowledge_digest=digest,
+        model=model, knowledge_digest=digest, trends=series,
     )
 
 

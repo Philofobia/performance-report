@@ -6,6 +6,7 @@
         "page[]",
         "page.header",
         "page.cwv-dashboard",
+        "page.trend",
         "page.resources",
         "page.lcp-breakdown",
         "page.findings",

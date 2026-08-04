@@ -33,6 +33,18 @@ _No actions identified._
 | {{ row.device }} / {{ row.network }} | {{ row.metrics.lcp_ms|round|int if row.metrics.lcp_ms is not none else '—' }} | {{ '%.2f'|format(row.metrics.cls) if row.metrics.cls is not none else '—' }} | {{ row.metrics.inp_ms|round|int if row.metrics.inp_ms is not none else '—' }} | {{ row.metrics.tbt_ms|round|int if row.metrics.tbt_ms is not none else '—' }} |
 {% endfor %}
 
+**Trend**
+
+{% if page.trends %}
+| Condition | Metric | History | Direction | Change |
+| --- | --- | --- | --- | --- |
+{% for series in page.trends %}
+| {{ series.device }} / {{ series.network }} | {{ series.metric|metric_label }} | {{ series.points|map(attribute='value')|join(' → ') }} | {{ series.direction }}{% if series.crossed %} ({{ series.crossed }}){% endif %} | {{ '%+.1f'|format(series.delta_pct) ~ '%' if series.delta_pct is not none else '—' }} |
+{% endfor %}
+{% else %}
+_No prior campaigns for this condition._
+{% endif %}
+
 {{ page.summary }}
 
 **What is wrong**

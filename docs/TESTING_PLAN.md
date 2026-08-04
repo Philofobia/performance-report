@@ -35,9 +35,10 @@ Setup: `pip install -e ".[test]"` and `python -m playwright install chromium`.
 | `rag/*` | `tests/unit/rag_test.py` | KB load+chunk+embed; symptom detection vs thresholds; query build; prompt build; **injection defence** (delimiter forgery, control chars); quota/429 backoff; key-missing; embedding cache |
 | `analysis/estimator.py` | `tests/unit/estimator_test.py` | before/after delta math; range clamping |
 | `analysis/findings.py` | `tests/unit/findings_test.py` | localize problem; derive impact |
+| `analysis/trends.py` | `tests/unit/trends_test.py` | dead band at both edges; delta sign; zero previous value; series keys from the current campaign only; window truncation; dedupe by run id; target crossing; missing/unreadable store yields no history |
 | `analysis/reportmodel.py` | `tests/unit/reportmodel_test.py` | fixed-skeleton Report JSON |
 | `report/palette.py` | `tests/unit/palette_test.py` | threshold → verdict → colour |
-| `report/charts.py` | `tests/unit/charts_test.py` | fixed palette/labels; empty states; determinism |
+| `report/charts.py` | `tests/unit/charts_test.py` | fixed palette/labels; empty states; determinism; trend direction colour, and a single-point series refusing to draw |
 | `report/render_*` | `tests/unit/render_{html,md,pdf}_test.py` | template escapes LLM content (no injection); section sequence; PDF wiring against a fake page |
 | `report/skeleton.py` | `tests/unit/skeleton_test.py` | fingerprint; cross-campaign invariance; baseline round-trip and drift diff; **committed baseline matches the real template** |
 | `report` (determinism) | `tests/integration/report_pipeline_test.py` | two renders of one campaign ⇒ identical HTML |
