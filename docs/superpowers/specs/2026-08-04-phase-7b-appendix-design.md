@@ -27,7 +27,8 @@ the HAR reduced to the table that answers "what was heavy".
 
 **In:**
 
-- `analysis/appendix.py` — HAR reduction to request rows, pure
+- `analysis/appendix.py` — HAR reduction to request rows (pure), plus two thin
+  file-reading helpers
 - `analysis/reportmodel.py` — `RequestRow`, `AppendixEntry`, `Report.appendix`,
   `ReportMeta.degraded_appendix_entries`
 - `report/images.py` — PNG load, downscale, base64 data URI
@@ -143,9 +144,12 @@ a section that works. Two duplicated strings are cheaper than that.
 
 ## 5. HAR reduction
 
-Input is the **scrubbed** HAR from the store. `analysis/appendix.py` is pure
-functions over the parsed dict — it never reads a file itself, so its tests need
-no fixtures on disk.
+Input is the **scrubbed** HAR from the store. The reduction itself — `reduce_har`
+and everything it calls — is pure functions over an already-parsed dict, so the
+tests that matter need no fixtures on disk. File access is confined to two thin
+helpers (`read_har`, `summarize_capture`), and neither raises: something has to
+open the file, and keeping that here means HAR handling lives in one module
+rather than being split across two.
 
 - **Transfer size** from `entry.response._transferSize` when present, falling
   back to `response.bodySize + response.headersSize`, clamped at zero. A HAR
