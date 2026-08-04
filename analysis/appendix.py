@@ -107,7 +107,9 @@ def classify(entry: Mapping[str, Any]) -> str:
     if label == "img":
         return "image"
 
-    mime = str(_response(entry).get("content", {}).get("mimeType") or "").lower()
+    content = _response(entry).get("content")
+    mime_value = content.get("mimeType") if isinstance(content, Mapping) else None
+    mime = str(mime_value or "").lower()
     for prefix, kind in _MIME_PREFIXES:
         if mime.startswith(prefix):
             return kind
@@ -167,8 +169,14 @@ def reduce_har(har: Mapping[str, Any], *, top_n: int = 15) -> HarSummary:
     rows = [_row(e) for e in entries if isinstance(e, Mapping)]
     # The URL tie-break is what makes the order reproducible: identically-sized
     # responses (empty 204s, sprites from one build) are common, and without it
-    # their order comes from input order and two renders can disagree.
-    rows.sort(key=lambda r: (-r["transfer_bytes"], r["url"]))
+    # their order comes from input order and two renders can disagree. The
+    # original index is a third, self-contained component: two entries that
+    # tie on both size and URL (a tracking pixel fired twice) still need a
+    # total order, and the index is the one thing about them that is never
+    # itself equal.
+    indexed = list(enumerate(rows))
+    indexed.sort(key=lambda pair: (-pair[1]["transfer_bytes"], pair[1]["url"], pair[0]))
+    rows = [row for _, row in indexed]
     return HarSummary(
         rows=rows[: max(0, int(top_n))],
         total_requests=len(rows),

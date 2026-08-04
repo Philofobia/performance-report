@@ -65,6 +65,20 @@ def test_equal_sizes_are_tie_broken_by_url_so_order_is_reproducible():
     ]
 
 
+def test_duplicate_size_and_url_entries_keep_a_stable_input_order_tiebreak():
+    # A tracking pixel fired twice, or a duplicated script request: same URL,
+    # same transfer size. Neither the size nor the URL tie-break separates
+    # them, so the sort needs the entry's original position as a third,
+    # self-contained component — otherwise "order" depends on how the HAR
+    # happened to be serialized rather than on anything in the row itself.
+    har = a_har([
+        an_entry("https://example.com/dup.js", size=500, status=200),
+        an_entry("https://example.com/dup.js", size=500, status=304),
+    ])
+    rows = reduce_har(har, top_n=10).rows
+    assert [r["status"] for r in rows] == [200, 304]
+
+
 def test_top_n_truncates_but_totals_describe_the_whole_capture():
     har = a_har([an_entry(f"https://example.com/{i}.js", size=100) for i in range(20)])
     summary = reduce_har(har, top_n=5)
@@ -95,6 +109,17 @@ def test_resource_type_falls_back_to_mime_then_extension_then_other():
                      "response": {}}) == "font"
     assert classify({"request": {"url": "https://example.com/x"},
                      "response": {}}) == "other"
+
+
+def test_classify_tolerates_a_content_field_that_is_not_a_mapping():
+    # A HAR that parses fine as JSON can still have "content" as null, a list,
+    # or a bare scalar. Reaching for .get("mimeType") on any of those raises,
+    # and classify() must never be the reason a well-formed HAR blows up the
+    # report.
+    for bad_content in (None, ["text/plain"], "text/plain"):
+        entry = {"request": {"url": "https://example.com/x"},
+                 "response": {"content": bad_content, "status": 200}}
+        assert classify(entry) == "other"
 
 
 def test_urls_are_re_redacted_even_though_the_stored_har_was_scrubbed():
