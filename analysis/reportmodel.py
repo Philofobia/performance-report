@@ -436,7 +436,12 @@ def _appendix(pages: Sequence[PageAnalysis], settings: Settings) -> List[Appendi
                 total_transfer_bytes=summary.total_transfer_bytes,
                 degraded=list(summary.degraded),
             ))
-    return sorted(entries, key=lambda e: (e.page, e.run_id))
+    # (page, run_id) alone ties completely when two runs of the same page
+    # share a run_id — possible on the load_runs path, which reads
+    # data/processed/*.json directly with no uniqueness constraint on run_id
+    # (normalize/schema.py only requires min_length=1). device/network break
+    # the tie so the order never falls back to input position.
+    return sorted(entries, key=lambda e: (e.page, e.run_id, e.device, e.network))
 
 
 def build_report(

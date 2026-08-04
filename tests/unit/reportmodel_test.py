@@ -347,3 +347,20 @@ def test_methodology_captures_are_unchanged_by_the_appendix():
 
 def test_schema_version_records_the_appendix_addition():
     assert a_report_with_captures().schema_version == 2
+
+
+def test_appendix_breaks_ties_on_device_and_network_when_run_ids_collide():
+    # load_runs reads data/processed/*.json directly with no run_id
+    # uniqueness constraint (normalize/schema.py only requires min_length=1),
+    # so two runs of the same page can legitimately share a run_id. Without
+    # device/network in the sort key, a tie falls back to input position,
+    # which this project's determinism rules forbid.
+    page = a_page()
+    page.runs = [
+        make_run("run_x", device="mid-mobile", network="slow-4g"),
+        make_run("run_x", device="desktop", network="fast-3g"),
+    ]
+    report = build([page])
+    assert [(e.device, e.network) for e in report.appendix] == [
+        ("desktop", "fast-3g"), ("mid-mobile", "slow-4g"),
+    ]
