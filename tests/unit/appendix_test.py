@@ -11,6 +11,7 @@ import json
 
 from analysis.appendix import (
     HarSummary,
+    _sort_key,
     classify,
     entry_transfer_bytes,
     read_har,
@@ -65,18 +66,16 @@ def test_equal_sizes_are_tie_broken_by_url_so_order_is_reproducible():
     ]
 
 
-def test_duplicate_size_and_url_entries_keep_a_stable_input_order_tiebreak():
-    # A tracking pixel fired twice, or a duplicated script request: same URL,
-    # same transfer size. Neither the size nor the URL tie-break separates
-    # them, so the sort needs the entry's original position as a third,
-    # self-contained component — otherwise "order" depends on how the HAR
-    # happened to be serialized rather than on anything in the row itself.
-    har = a_har([
-        an_entry("https://example.com/dup.js", size=500, status=200),
-        an_entry("https://example.com/dup.js", size=500, status=304),
-    ])
-    rows = reduce_har(har, top_n=10).rows
-    assert [r["status"] for r in rows] == [200, 304]
+def test_the_sort_key_is_total_so_ordering_never_depends_on_input_position():
+    # Two entries identical in both size and URL still get distinct sort keys.
+    # Asserting on reduce_har's *output* could not catch a regression here:
+    # list.sort is stable, so dropping the index would produce the same order
+    # anyway. The key itself is the only observable surface.
+    row = {"url": "https://example.com/dup.js", "transfer_bytes": 500}
+    key_first = _sort_key((0, row))
+    key_second = _sort_key((1, row))
+    assert key_first != key_second
+    assert sorted([key_second, key_first]) == [key_first, key_second]
 
 
 def test_top_n_truncates_but_totals_describe_the_whole_capture():

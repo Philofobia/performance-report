@@ -154,6 +154,20 @@ def _row(entry: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _sort_key(indexed_row: Tuple[int, Dict[str, Any]]) -> Tuple[int, str, int]:
+    """The total order used to rank HAR rows: heaviest first, ties broken deterministically.
+
+    Size and URL alone are not a total order — two entries can share both (a
+    tracking pixel fired twice, a duplicated script request), and a key that
+    is not total lets the sort silently fall back to whatever position the
+    entries happened to arrive in. The original index is appended precisely
+    because it can never itself be equal between two distinct rows, which is
+    what makes this a total order rather than a merely-usually-sufficient one.
+    """
+    index, row = indexed_row
+    return (-row["transfer_bytes"], row["url"], index)
+
+
 def reduce_har(har: Mapping[str, Any], *, top_n: int = 15) -> HarSummary:
     """Reduce a parsed HAR to its heaviest ``top_n`` requests plus true totals.
 
@@ -169,13 +183,9 @@ def reduce_har(har: Mapping[str, Any], *, top_n: int = 15) -> HarSummary:
     rows = [_row(e) for e in entries if isinstance(e, Mapping)]
     # The URL tie-break is what makes the order reproducible: identically-sized
     # responses (empty 204s, sprites from one build) are common, and without it
-    # their order comes from input order and two renders can disagree. The
-    # original index is a third, self-contained component: two entries that
-    # tie on both size and URL (a tracking pixel fired twice) still need a
-    # total order, and the index is the one thing about them that is never
-    # itself equal.
-    indexed = list(enumerate(rows))
-    indexed.sort(key=lambda pair: (-pair[1]["transfer_bytes"], pair[1]["url"], pair[0]))
+    # their order comes from input order and two renders can disagree. See
+    # `_sort_key` for why the index is also part of the key.
+    indexed = sorted(enumerate(rows), key=_sort_key)
     rows = [row for _, row in indexed]
     return HarSummary(
         rows=rows[: max(0, int(top_n))],
