@@ -514,7 +514,8 @@ git commit -m "Reduce a captured HAR to the requests that made the page heavy"
 
 **Files:**
 - Modify: `analysis/reportmodel.py` (`SCHEMA_VERSION` at line 26, `CaptureRow` at 212, `Methodology` at 220, `ReportMeta` at 228, `Report` at 237, `_methodology` at 349, `build_report` at 372)
-- Test: `tests/unit/reportmodel_test.py`
+- Modify: `config/load.py:225-227`, `config/settings.yaml`
+- Test: `tests/unit/reportmodel_test.py`, `tests/unit/config_test.py`
 
 **Interfaces:**
 - Consumes: `analysis.appendix.summarize_capture`, `analysis.appendix.CaptureSummary` (Task 1)
@@ -524,8 +525,14 @@ git commit -m "Reduce a captured HAR to the requests that made the page heavy"
   - `Report.appendix: List[AppendixEntry]`
   - `ReportMeta.degraded_appendix_entries: int`
   - `_appendix(pages: Sequence[PageAnalysis], settings: Settings) -> List[AppendixEntry]`
+  - `AppendixConfig(top_requests=15, screenshot_width_px=720, screenshot_max_height_px=1600)`
+  - `ReportConfig.appendix: AppendixConfig`
 
 `methodology.captures` is deliberately left unchanged — see design §4.2.
+
+**The config lands here, not in Task 7**, because `_appendix` reads
+`settings.report.appendix.top_requests` — without it this task cannot run.
+Task 7 wires only the CLI and the dependency pin.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -682,6 +689,66 @@ Add the field to `Report` (line 237), after `methodology`:
 
 ```python
     appendix: List[AppendixEntry] = Field(default_factory=list)
+```
+
+In `config/load.py`, replace `ReportConfig` (lines 225-227):
+
+```python
+class AppendixConfig(BaseModel):
+    """The capture appendix (PROJECT_SPEC §10 Phase 7B).
+
+    ``screenshot_max_height_px`` exists because a full-page mobile capture runs
+    to tens of thousands of pixels. Scaling one to fit a page renders an
+    unreadable smear, so beyond this height the image is cropped from the top
+    and the crop is stated in the caption.
+    """
+
+    top_requests: int = Field(default=15, ge=1)
+    screenshot_width_px: int = Field(default=720, ge=64)
+    screenshot_max_height_px: int = Field(default=1600, ge=64)
+
+
+class ReportConfig(BaseModel):
+    output_dir: str = "data/reports"
+    appendix: AppendixConfig = Field(default_factory=AppendixConfig)
+```
+
+In `config/settings.yaml`, extend the `report` block:
+
+```yaml
+report:
+  output_dir: data/reports
+  appendix:
+    # How many requests the per-capture table shows, largest transfer first.
+    # The true total is always stated beside the table, so this truncates the
+    # listing without ever misrepresenting the capture.
+    top_requests: 15
+    # Screenshots are downscaled before embedding; a full-page mobile capture
+    # is otherwise several MB of base64 per entry.
+    screenshot_width_px: 720
+    # Beyond this height the image is cropped from the top, and the caption
+    # says so.
+    screenshot_max_height_px: 1600
+```
+
+Add these tests to `tests/unit/config_test.py`:
+
+```python
+def test_appendix_settings_have_working_defaults():
+    settings = Settings()
+    assert settings.report.appendix.top_requests == 15
+    assert settings.report.appendix.screenshot_width_px == 720
+    assert settings.report.appendix.screenshot_max_height_px == 1600
+
+
+def test_a_zero_top_requests_is_rejected_at_load_time():
+    with pytest.raises(ValidationError):
+        AppendixConfig(top_requests=0)
+
+
+def test_the_shipped_settings_file_parses_its_appendix_block():
+    settings = load_settings()
+    assert settings.report.appendix.top_requests >= 1
 ```
 
 Add the assembly function after `_methodology` (line 369):
@@ -1194,7 +1261,7 @@ def test_the_request_table_shows_the_url_and_its_transfer_size():
     report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
     html = render_html(report)
     assert "https://example.com/hero.mp4" in html
-    assert "4.2" in html  # MB, formatted
+    assert "4.0 MB" in html  # 4_200_000 bytes / 1024 / 1024 = 4.005…
 
 
 def test_the_true_request_count_is_stated_beside_the_truncated_table():
@@ -1411,18 +1478,32 @@ Check the variable names against the existing stylesheet and use whatever it alr
 Run: `pytest tests/unit/render_html_test.py -v`
 Expected: PASS.
 
-The baseline is now stale by exactly three entries. Regenerate it:
+The baseline is now stale by exactly three entries. Do **not** hunt for a fixture
+report — edit `report/skeleton.baseline.json` by hand, appending the three
+entries after `"methodology"`:
 
-```bash
-python -m report --input tests/fixtures/report.json --output-dir "$TMPDIR/skel" --no-pdf --update-baseline
+```json
+        "comparison",
+        "methodology",
+        "appendix[]",
+        "appendix.screenshot",
+        "appendix.requests"
 ```
 
-If no fixture report exists, regenerate from the synthetic report the skeleton test already builds. Then confirm:
+Hand-editing is correct here precisely because the diff must be reviewable: the
+baseline exists so a structural change lands as a small, deliberate diff. Then
+let the test prove the hand edit matches what the template actually renders:
 
 ```bash
+pytest tests/unit/skeleton_test.py::test_the_committed_baseline_matches_the_real_template -v
 git diff report/skeleton.baseline.json
 ```
-Expected: exactly three added lines — `"appendix[]"`, `"appendix.screenshot"`, `"appendix.requests"`. Anything else means a section moved and must be understood before committing.
+
+Expected: the test passes, and the diff is exactly three added lines (plus the
+comma on the `"methodology"` line). If the test fails, the template's section
+names or their order differ from what you wrote — fix the baseline to match the
+render, never the reverse. If the diff shows anything else moving, a section
+was displaced and must be understood before committing.
 
 Run: `pytest tests/unit/skeleton_test.py -v`
 Expected: PASS, including `test_the_committed_baseline_matches_the_real_template`.
@@ -1613,38 +1694,19 @@ git commit -m "Mirror the appendix in Markdown by linking, not embedding"
 ### Task 7: Wire it to the CLI and settings
 
 **Files:**
-- Modify: `config/load.py:225-227`, `config/settings.yaml`, `report/__main__.py:92-115,117-141,174-200`, `requirements.txt`
-- Test: `tests/unit/config_test.py`, `tests/unit/cli_test.py`, `tests/integration/`
+- Modify: `report/__main__.py:92-115,117-141,174-200`, `requirements.txt`
+- Test: `tests/unit/cli_test.py`, `tests/integration/`
 
 **Interfaces:**
-- Consumes: `report.images.build_appendix_images` (Task 3), `render_html(report, images=...)` (Task 5), `render_md(report, base_dir=...)` (Task 6)
+- Consumes: `report.images.build_appendix_images` (Task 3), `render_html(report, images=...)` (Task 5), `render_md(report, base_dir=...)` (Task 6), `settings.report.appendix` (Task 2)
 - Produces:
-  - `AppendixConfig(top_requests: int = 15, screenshot_width_px: int = 720, screenshot_max_height_px: int = 1600)`
-  - `ReportConfig.appendix: AppendixConfig`
   - `write_outputs(report, *, output_dir, with_pdf, images=None) -> List[Path]`
   - `python -m report --no-appendix-images`
 
+The settings model already exists — Task 2 added it, because `_appendix` could
+not run without it. This task only consumes it.
+
 - [ ] **Step 1: Write the failing tests**
-
-Append to `tests/unit/config_test.py`:
-
-```python
-def test_appendix_settings_have_working_defaults():
-    settings = Settings()
-    assert settings.report.appendix.top_requests == 15
-    assert settings.report.appendix.screenshot_width_px == 720
-    assert settings.report.appendix.screenshot_max_height_px == 1600
-
-
-def test_a_zero_top_requests_is_rejected_at_load_time():
-    with pytest.raises(ValidationError):
-        AppendixConfig(top_requests=0)
-
-
-def test_the_shipped_settings_file_parses_its_appendix_block():
-    settings = load_settings()
-    assert settings.report.appendix.top_requests >= 1
-```
 
 Append to `tests/unit/cli_test.py`:
 
@@ -1677,50 +1739,10 @@ Follow the existing fixture and helper conventions in `tests/unit/cli_test.py` f
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `pytest tests/unit/config_test.py tests/unit/cli_test.py -k appendix -v`
-Expected: FAIL — `ImportError: cannot import name 'AppendixConfig'` and `unrecognized arguments: --no-appendix-images`
+Run: `pytest tests/unit/cli_test.py -k appendix -v`
+Expected: FAIL — `unrecognized arguments: --no-appendix-images`
 
 - [ ] **Step 3: Write the implementation**
-
-In `config/load.py`, replace `ReportConfig` (lines 225-227):
-
-```python
-class AppendixConfig(BaseModel):
-    """The capture appendix (PROJECT_SPEC §10 Phase 7B).
-
-    ``screenshot_max_height_px`` exists because a full-page mobile capture runs
-    to tens of thousands of pixels. Scaling one to fit a page renders an
-    unreadable smear, so beyond this height the image is cropped from the top
-    and the crop is stated in the caption.
-    """
-
-    top_requests: int = Field(default=15, ge=1)
-    screenshot_width_px: int = Field(default=720, ge=64)
-    screenshot_max_height_px: int = Field(default=1600, ge=64)
-
-
-class ReportConfig(BaseModel):
-    output_dir: str = "data/reports"
-    appendix: AppendixConfig = Field(default_factory=AppendixConfig)
-```
-
-In `config/settings.yaml`, extend the `report` block:
-
-```yaml
-report:
-  output_dir: data/reports
-  appendix:
-    # How many requests the per-capture table shows, largest transfer first.
-    # The true total is always stated beside the table, so this truncates the
-    # listing without ever misrepresenting the capture.
-    top_requests: 15
-    # Screenshots are downscaled before embedding; a full-page mobile capture
-    # is otherwise several MB of base64 per entry.
-    screenshot_width_px: 720
-    # Beyond this height the image is cropped from the top, and the caption
-    # says so.
-    screenshot_max_height_px: 1600
-```
 
 In `report/__main__.py`, change `write_outputs`:
 
@@ -1769,20 +1791,27 @@ In `main`, build the images before `write_outputs`:
 ```python
     images = None
     if not args.no_appendix_images:
-        from config.load import load_settings
+        from config.load import ConfigError, load_settings
         from report.images import build_appendix_images
 
-        settings = load_settings()
-        appendix_cfg = settings.report.appendix
-        images = build_appendix_images(
-            report,
-            root=Path(settings.storage.raw_dir).resolve(),
-            width=appendix_cfg.screenshot_width_px,
-            max_height=appendix_cfg.screenshot_max_height_px,
-        )
+        # Rendering an existing report.json must not depend on the config
+        # being loadable — the report is already assembled, and the appendix
+        # degrades to path-only rows exactly as it does for a missing capture.
+        try:
+            settings = load_settings()
+        except ConfigError as exc:
+            print(f"Appendix images skipped: {exc}", file=sys.stderr)
+        else:
+            appendix_cfg = settings.report.appendix
+            images = build_appendix_images(
+                report,
+                root=Path(settings.storage.raw_dir).resolve(),
+                width=appendix_cfg.screenshot_width_px,
+                max_height=appendix_cfg.screenshot_max_height_px,
+            )
 ```
 
-and pass `images=images` into the `write_outputs(...)` call. Add `Any` and `Mapping` to the `typing` import.
+and pass `images=images` into the `write_outputs(...)` call. Add `Any` and `Mapping` to the `typing` import. Confirm `ConfigError` is the exception `config/load.py` actually raises before importing it by that name.
 
 In `requirements.txt`, add beside matplotlib:
 
