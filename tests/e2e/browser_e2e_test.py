@@ -108,8 +108,13 @@ REALISTIC_PAGE = """
       el.textContent = 'Injected banner';
       document.getElementById('late').appendChild(el);
     }, 120);
-    // Interaction handlers that block ~120ms -> a real, non-floor INP.
-    const block = () => { const s = performance.now(); while (performance.now() - s < 120) {} };
+    // Interaction handlers heavy enough for a real, non-floor INP. Fixed
+    // *work*, not a wall-clock wait, for the same reason as the load task
+    // above: CPU throttling slows work down, but it cannot slow down a spin
+    // on performance.now(). A wall-clock block would add the same constant to
+    // TaskDuration on every device, diluting the 4x throttle signal that
+    // test_cpu_throttling_is_actually_applied measures.
+    const block = () => { let x = 0; for (let i = 0; i < 4e7; i++) { x += Math.sqrt(i); } window.__B = x; };
     document.addEventListener('keydown', block);
     document.addEventListener('click', block);
   </script>
@@ -276,17 +281,27 @@ def test_live_public_site_is_measurable(browser):
 def test_cpu_throttling_is_actually_applied(campaign_runs):
     """Proof the CDP emulation lands, rather than being silently dropped.
 
-    The fixture burns a fixed amount of CPU work during load, so mid-mobile
-    (4x throttle) must spend materially more main-thread time on it than
-    desktop (1x). Asserted on CPU, not network: intercepted requests are
-    fulfilled in-process and never traverse the throttled network stack.
+    Every scripted task in the fixture burns fixed *work*, so mid-mobile (4x
+    throttle) must spend close to 4x the main-thread time desktop (1x) does.
+    Asserted on CPU, not network: intercepted requests are fulfilled in-process
+    and never traverse the throttled network stack.
+
+    ``task_ms`` is CDP's cumulative ``TaskDuration`` — every main-thread task,
+    not only the load work — which is why the fixture must contain no
+    wall-clock waiting anywhere. A ``while (performance.now() - s < 120) {}``
+    handler adds the *same* constant to both devices, because throttling slows
+    work down but cannot slow down a clock. Two such handler firings once
+    diluted a true 4.0x ratio to 1.4x and made this assertion fail on fast
+    runners; the margin below is wide because the measurement is now clean, not
+    because the threshold was relaxed to accommodate noise.
     """
     runs, _ = campaign_runs
     by_device = {r.condition.device: r for r in runs}
     mobile_task_ms = by_device["mid-mobile"].metrics.main_thread.task_ms
     desktop_task_ms = by_device["desktop"].metrics.main_thread.task_ms
-    assert mobile_task_ms > desktop_task_ms * 1.5, (
+    assert mobile_task_ms > desktop_task_ms * 2.5, (
         f"mid-mobile is configured for 4x CPU throttle but spent "
-        f"{mobile_task_ms}ms vs desktop's {desktop_task_ms}ms — "
+        f"{mobile_task_ms}ms vs desktop's {desktop_task_ms}ms "
+        f"(ratio {mobile_task_ms / desktop_task_ms:.2f}, expected ~4) — "
         "CPU emulation looks inactive"
     )
