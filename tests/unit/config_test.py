@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from config import load as cl
 
@@ -209,6 +210,23 @@ def test_unknown_network_raises(files):
     )
     with pytest.raises(cl.ConfigError, match="Unknown network"):
         cl.load_config(**files)
+
+
+def test_appendix_settings_have_working_defaults():
+    settings = cl.Settings()
+    assert settings.report.appendix.top_requests == 15
+    assert settings.report.appendix.screenshot_width_px == 720
+    assert settings.report.appendix.screenshot_max_height_px == 1600
+
+
+def test_a_zero_top_requests_is_rejected_at_load_time():
+    with pytest.raises(ValidationError):
+        cl.AppendixConfig(top_requests=0)
+
+
+def test_the_shipped_settings_file_parses_its_appendix_block():
+    settings = cl.load_settings()
+    assert settings.report.appendix.top_requests >= 1
 
 
 def test_duplicate_page_names_raise(files):

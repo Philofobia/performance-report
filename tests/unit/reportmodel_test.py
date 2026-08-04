@@ -22,8 +22,32 @@ from normalize.schema import Run
 from rag import retrieve
 
 
+def a_png_file(tmp_path, name="screenshot.png"):
+    """A real 2x2 PNG on disk — Pillow writes it so the bytes are valid."""
+    from PIL import Image
+
+    path = tmp_path / name
+    Image.new("RGB", (2, 2), (255, 0, 0)).save(path, format="PNG")
+    return str(path)
+
+
+def a_har_file(tmp_path, *, sizes=(1000,), name="capture.har"):
+    import json as _json
+
+    entries = [
+        {"time": 10.0,
+         "request": {"url": f"https://example.com/{i}.js"},
+         "response": {"status": 200, "_transferSize": size,
+                      "content": {"mimeType": "text/javascript"}}}
+        for i, size in enumerate(sizes)
+    ]
+    path = tmp_path / name
+    path.write_text(_json.dumps({"log": {"entries": entries}}), encoding="utf-8")
+    return str(path)
+
+
 def make_run(run_id="run_a", page="homepage", lcp=6200, device="mid-mobile",
-             network="slow-4g"):
+             network="slow-4g", screenshot="shot.png", har="capture.har"):
     return Run.model_validate({
         "run_id": run_id,
         "project": {"name": "storefront", "url": "https://example.com"},
@@ -44,12 +68,13 @@ def make_run(run_id="run_a", page="homepage", lcp=6200, device="mid-mobile",
             {"name": "/app.js", "type": "script", "transfer_kb": 480,
              "duration_ms": 120},
         ],
-        "captures": {"screenshot": "shot.png", "har": "capture.har"},
+        "captures": {"screenshot": screenshot, "har": har},
     })
 
 
-def a_page(name="homepage", recommendations=None, mode="llm"):
-    run = make_run(page=name)
+def a_page(name="homepage", recommendations=None, mode="llm", run_id="run_a",
+           screenshot="shot.png", har="capture.har"):
+    run = make_run(page=name, run_id=run_id, screenshot=screenshot, har=har)
     symptoms = retrieve.detect_symptoms(run, Thresholds())
     recs = recommendations if recommendations is not None else [
         Recommendation(
@@ -89,6 +114,21 @@ def build(pages=None, **kwargs):
     return build_report(pages or [a_page()], **kwargs)
 
 
+def a_report_with_captures(pages=("homepage",), screenshot="shot.png",
+                            har="capture.har", **kwargs):
+    """A Report whose captures point at the given paths.
+
+    Builds through the same ``PageAnalysis`` construction ``a_page`` already
+    uses, rather than a parallel path, so the appendix assembly sees exactly
+    what production code sees.
+    """
+    page_analyses = [
+        a_page(name=name, run_id=f"run_{name}", screenshot=screenshot, har=har)
+        for name in pages
+    ]
+    return build(page_analyses, **kwargs)
+
+
 # --------------------------------------------------------------------------- #
 # campaign id
 # --------------------------------------------------------------------------- #
@@ -121,7 +161,7 @@ def test_verdict_is_the_worst_severity_present():
 def test_report_has_every_section_of_the_fixed_skeleton():
     report = build()
     assert isinstance(report, Report)
-    assert report.schema_version == 1
+    assert report.schema_version == 2
     for section in ("cover", "summary", "pages", "comparison", "methodology", "meta"):
         assert getattr(report, section) is not None
 
@@ -238,7 +278,7 @@ def test_thresholds_come_from_settings_not_hard_coded():
 # --------------------------------------------------------------------------- #
 def test_to_json_round_trips():
     payload = json.loads(to_json(build()))
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["cover"]["campaign_id"]
 
 
@@ -247,3 +287,63 @@ def test_stable_payload_drops_generated_at():
     late = build(generated_at=datetime(2026, 12, 31, tzinfo=timezone.utc))
     assert stable_payload(early) == stable_payload(late)
     assert to_json(early) != to_json(late)
+
+
+# --------------------------------------------------------------------------- #
+# appendix (Phase 7B)
+# --------------------------------------------------------------------------- #
+def test_appendix_carries_one_entry_per_capture_ordered_by_page_and_run():
+    report = a_report_with_captures(pages=("plp", "homepage"))
+    assert [(e.page, e.run_id) for e in report.appendix] == [
+        ("homepage", "run_homepage"), ("plp", "run_plp"),
+    ]
+
+
+def test_appendix_entries_carry_the_condition_they_were_captured_under():
+    entry = a_report_with_captures().appendix[0]
+    assert (entry.device, entry.network) == ("mid-mobile", "slow-4g")
+
+
+def test_appendix_holds_paths_never_image_bytes():
+    # report.json must stay a text document a human can read and git can diff.
+    payload = to_json(a_report_with_captures())
+    assert "base64" not in payload
+    assert "data:image" not in payload
+
+
+def test_appendix_rows_come_from_the_har(tmp_path):
+    report = a_report_with_captures(har=a_har_file(tmp_path, sizes=(9000, 10)))
+    entry = report.appendix[0]
+    assert [r.transfer_bytes for r in entry.requests] == [9000, 10]
+    assert entry.total_requests == 2
+    assert entry.total_transfer_bytes == 9010
+
+
+def test_a_capture_with_no_artifacts_degrades_without_dropping_the_entry():
+    report = a_report_with_captures(screenshot=None, har=None)
+    assert len(report.appendix) == 1
+    assert report.appendix[0].degraded == [
+        "screenshot not retained", "HAR not retained",
+    ]
+
+
+def test_degraded_entries_are_counted_in_meta():
+    report = a_report_with_captures(screenshot=None, har=None)
+    assert report.meta.degraded_appendix_entries == 1
+
+
+def test_a_clean_capture_counts_as_zero_degraded(tmp_path):
+    report = a_report_with_captures(
+        screenshot=a_png_file(tmp_path), har=a_har_file(tmp_path)
+    )
+    assert report.appendix[0].degraded == []
+    assert report.meta.degraded_appendix_entries == 0
+
+
+def test_methodology_captures_are_unchanged_by_the_appendix():
+    report = a_report_with_captures()
+    assert [c.run_id for c in report.methodology.captures] == ["run_homepage"]
+
+
+def test_schema_version_records_the_appendix_addition():
+    assert a_report_with_captures().schema_version == 2
