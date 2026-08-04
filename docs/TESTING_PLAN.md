@@ -36,10 +36,14 @@ Setup: `pip install -e ".[test]"` and `python -m playwright install chromium`.
 | `analysis/estimator.py` | `tests/unit/estimator_test.py` | before/after delta math; range clamping |
 | `analysis/findings.py` | `tests/unit/findings_test.py` | localize problem; derive impact |
 | `analysis/reportmodel.py` | `tests/unit/reportmodel_test.py` | fixed-skeleton Report JSON |
-| `report/charts.py` | `tests/unit/report_test.py` | fixed palette/labels; no drift |
-| `report/render_*` | `tests/unit/report_test.py` | template escapes LLM content (no injection) |
-| `report` (determinism) | `tests/integration/determinism_test.py` | two identical campaigns ⇒ identical JSON/HTML |
-| `src/cli.py` | `tests/unit/cli_test.py` | subcommand wiring; `--skeleton-check` |
+| `report/palette.py` | `tests/unit/palette_test.py` | threshold → verdict → colour |
+| `report/charts.py` | `tests/unit/charts_test.py` | fixed palette/labels; empty states; determinism |
+| `report/render_*` | `tests/unit/render_{html,md,pdf}_test.py` | template escapes LLM content (no injection); section sequence; PDF wiring against a fake page |
+| `report/skeleton.py` | `tests/unit/skeleton_test.py` | fingerprint; cross-campaign invariance; baseline round-trip and drift diff; **committed baseline matches the real template** |
+| `report` (determinism) | `tests/integration/report_pipeline_test.py` | two renders of one campaign ⇒ identical HTML |
+| `cli.py` | `tests/unit/cli_test.py` | routing; **argv forwarded verbatim**; exit-code propagation; unknown command |
+| `store/listing.py` | `tests/unit/listing_test.py` | table alignment; missing metric as `—` not `0`; filters; empty store; missing db |
+| CLI end to end | `tests/integration/cli_test.py` | analyze → report → `--skeleton-check` through the façade |
 | Full flow | `tests/integration/e2e_flow_test.py` | manual→storage→RAG(mock)→analysis(mock)→report |
 
 ## 4. Fixtures (shared `conftest.py`)
@@ -58,9 +62,13 @@ malicious LLM strings in report template · missing config files.
 3. `pytest -m "not e2e" --cov=config --cov=normalize --cov-fail-under=80`
    (target the real top-level packages for the current layout; extend the
    `--cov=` list as more packages are added, e.g. `ingest`, `store`, `rag`,
-   `analysis`, `report`, `src`)
+   `analysis`, `report`, `cli`)
 4. `pytest -m e2e` (Chromium)
-5. Determinism check + `cli.py --skeleton-check`
+5. Determinism check + `python -m cli report --skeleton-check`.
+   The data-free half of the drift guard runs in step 3: a unit test asserts the
+   committed `report/skeleton.baseline.json` still matches a rendered synthetic
+   report, so a template change with a forgotten `--update-baseline` fails CI
+   without any campaign being present.
 
 ## 7. Definition of done (tests)
 - [ ] Full unit+integration suite green offline with ≥80% coverage.
