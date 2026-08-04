@@ -101,6 +101,36 @@
     </table>
   </div>
 
+  <div data-section="page.trend" class="block">
+    <h3>Trend</h3>
+    {% if page.trends %}
+      <div class="trend-grid">
+      {% for series in page.trends %}
+        <figure class="trend trend--{{ series.direction }}">
+          <figcaption>
+            <span class="trend-metric">{{ series.metric|metric_label }}</span>
+            <span class="trend-condition">{{ series.device }} / {{ series.network }}</span>
+            <span class="trend-direction">{{ series.direction }}</span>
+            {% if series.delta_pct is not none %}
+              <span class="trend-delta">{{ '%+.1f'|format(series.delta_pct) }}%</span>
+            {% endif %}
+            {% if series.crossed %}
+              <span class="trend-crossed">{{ series.crossed }}</span>
+            {% endif %}
+          </figcaption>
+          {% if charts.pages[page.name].trends[loop.index0] %}
+            <div class="chart">{{ charts.pages[page.name].trends[loop.index0]|safe }}</div>
+          {% else %}
+            <p class="empty">First campaign for this condition — no prior campaigns to compare against.</p>
+          {% endif %}
+        </figure>
+      {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty">No prior campaigns for this condition.</p>
+    {% endif %}
+  </div>
+
   <div data-section="page.resources" class="block">
     <h3>Where the weight is</h3>
     {% if charts.pages[page.name].resources %}

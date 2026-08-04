@@ -38,3 +38,11 @@ storage:
 
 report:
   output_dir: data/reports
+
+trends:
+  # Campaign-over-campaign comparison. A change smaller than this reads as
+  # "flat" — emulated throttling varies run to run, and without a dead band a
+  # 3% wobble would be reported as a regression every campaign.
+  dead_band_pct: 5.0
+  # How many campaigns a trend series shows, newest last. Minimum 2.
+  window: 5

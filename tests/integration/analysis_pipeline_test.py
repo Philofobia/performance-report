@@ -17,6 +17,7 @@ from analysis.__main__ import (
     rule_based_summary,
     run_analysis,
 )
+from analysis import trends as analysis_trends
 from analysis.llm import LlmPageAnalysis, LlmSummary
 from analysis.reportmodel import Report, stable_payload
 from normalize.schema import Run
@@ -288,3 +289,99 @@ def test_cli_reports_missing_runs_without_a_traceback(tmp_path, capsys):
     empty.mkdir()
     assert main(["--input-dir", str(empty), "--no-llm"]) != 0
     assert "No runs" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# trends (Phase 7A)
+# --------------------------------------------------------------------------- #
+def a_campaign(run_ids_and_lcp, *, page="homepage", created_at):
+    """Runs for one campaign, all on the same condition."""
+    runs = []
+    for run_id, lcp in run_ids_and_lcp:
+        payload = run_payload(run_id, page, lcp=lcp)
+        payload["meta"]["created_at"] = created_at
+        runs.append(Run.model_validate(payload))
+    return runs
+
+
+def test_a_first_campaign_reports_every_series_as_new(tmp_path):
+    runs = a_campaign([("run_1", 6200)], created_at="2026-07-01T00:00:00Z")
+    report = run_analysis(runs, history=[], llm_disabled=True)
+    trends = report.pages[0].trends
+    assert trends, "the trend section had no series at all"
+    assert {s.direction for s in trends} == {"new"}
+
+
+def test_a_second_campaign_compares_itself_against_the_first(tmp_path):
+    db = tmp_path / "runs.sqlite"
+    conn = sql.connect(db)
+    sql.insert_runs(conn, a_campaign([("run_1", 6200)],
+                                     created_at="2026-07-01T00:00:00Z"))
+    conn.close()
+
+    later = a_campaign([("run_2", 4820)], created_at="2026-08-01T00:00:00Z")
+    history = analysis_trends.load_history(db, project="storefront")
+    report = run_analysis(later, history=history, llm_disabled=True)
+
+    lcp = next(s for s in report.pages[0].trends if s.metric == "lcp_ms")
+    assert [p.run_id for p in lcp.points] == ["run_1", "run_2"]
+    assert lcp.direction == "improved"
+    assert lcp.delta_pct < 0
+
+
+def test_a_regression_is_reported_as_one(tmp_path):
+    db = tmp_path / "runs.sqlite"
+    conn = sql.connect(db)
+    sql.insert_runs(conn, a_campaign([("run_1", 4820)],
+                                     created_at="2026-07-01T00:00:00Z"))
+    conn.close()
+
+    later = a_campaign([("run_2", 6200)], created_at="2026-08-01T00:00:00Z")
+    report = run_analysis(
+        later, history=analysis_trends.load_history(db, project="storefront"),
+        llm_disabled=True,
+    )
+    lcp = next(s for s in report.pages[0].trends if s.metric == "lcp_ms")
+    assert lcp.direction == "regressed"
+
+
+def test_a_missing_store_still_produces_a_complete_report(tmp_path, capsys):
+    # Analysis never fails because history is unavailable.
+    out = tmp_path / "reports"
+    directory = tmp_path / "processed"
+    directory.mkdir()
+    (directory / "run_1.json").write_text(
+        json.dumps(run_payload("run_1", "homepage")), encoding="utf-8"
+    )
+    assert main(["--input-dir", str(directory), "--output-dir", str(out),
+                 "--no-llm"]) == 0
+    payload = json.loads(next(out.glob("*/report.json")).read_text(encoding="utf-8"))
+    assert payload["pages"][0]["trends"]
+    assert {s["direction"] for s in payload["pages"][0]["trends"]} == {"new"}
+
+
+def test_the_trend_never_changes_the_verdict(tmp_path):
+    # A page that got slower but still passes every threshold still passes.
+    db = tmp_path / "runs.sqlite"
+    conn = sql.connect(db)
+    sql.insert_runs(conn, a_campaign([("run_1", 1000)],
+                                     created_at="2026-07-01T00:00:00Z"))
+    conn.close()
+
+    healthy = run_payload("run_2", "homepage", lcp=1400)
+    healthy["metrics"]["cwp"].update({"cls": 0.01, "inp_ms": 90, "tbt_ms": 40})
+    healthy["meta"]["created_at"] = "2026-08-01T00:00:00Z"
+    runs = [Run.model_validate(healthy)]
+
+    with_history = run_analysis(
+        runs, history=analysis_trends.load_history(db, project="storefront"),
+        llm_disabled=True,
+    )
+    without = run_analysis(runs, history=[], llm_disabled=True)
+
+    lcp = next(s for s in with_history.pages[0].trends if s.metric == "lcp_ms")
+    assert lcp.direction == "regressed"
+    assert lcp.crossed is None  # 1400ms is still inside the 2500ms target
+    # The same runs, judged identically, whatever history says about them.
+    assert with_history.pages[0].verdict == without.pages[0].verdict
+    assert with_history.cover.verdict == without.cover.verdict

@@ -22,6 +22,7 @@ from typing import Tuple
 from jinja2 import Environment, FileSystemLoader
 
 from analysis.reportmodel import Report
+from report.render_html import metric_label
 
 TEMPLATE_DIR = Path(__file__).parent / "template"
 MD_TEMPLATE = "report.md.j2"
@@ -38,13 +39,17 @@ MD_SECTIONS: Tuple[str, ...] = (
 
 
 def _env() -> Environment:
-    return Environment(
+    env = Environment(
         loader=FileSystemLoader(str(TEMPLATE_DIR)),
         autoescape=False,  # Markdown, not HTML — see module docstring
         trim_blocks=True,
         lstrip_blocks=True,
         keep_trailing_newline=True,
     )
+    # The same filter the HTML path uses, so the mirror names metrics
+    # identically rather than falling back to raw field names.
+    env.filters["metric_label"] = metric_label
+    return env
 
 
 def render_md(report: Report) -> str:

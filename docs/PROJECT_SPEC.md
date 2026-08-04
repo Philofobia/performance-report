@@ -397,6 +397,7 @@ performance-projects/
 │  ├─ llm.py                       # model client
 │  ├─ findings.py                  # problem localization + impact statements
 │  ├─ estimator.py                 # expected-improvement magnitude (metric deltas)
+│  ├─ trends.py                    # campaign-over-campaign series + direction
 │  ├─ reportmodel.py               # emits Report JSON consumed by report layer
 │  └─ __main__.py                  # `python -m analysis`
 ├─ report/
@@ -522,9 +523,22 @@ performance-projects/
 - [x] Write README with usage examples.
 
 ### Phase 7 — Hardening / stretch (post-MVP)
-- [ ] Prior-run memory in RAG; trend-over-time comparison; PDF appendix with screenshots + HAR.
-- [ ] Optional lightweight web UI (reuse frontend/CSS skills) for manual entry.
-- [ ] CI to auto-regenerate reports and catch skeleton drift.
+
+Split into sub-projects: the original single bullet covered four independent
+subsystems, and one of them (prior-run memory) had already shipped in Phase 4.
+
+- [x] **7a — Prior-run memory and trend-over-time comparison.** Prior-run memory
+      landed in Phase 4 (`rag/retrieve.retrieve_prior_findings`, the `finding`-kind
+      vectors, `analyze --use-priors`). The trend half is `analysis/trends.py`:
+      one series per (page, device, network, metric), a configurable dead band so
+      throttling noise does not read as a regression, and target crossing reported
+      separately from direction. The trend never feeds a verdict. Design:
+      `docs/superpowers/specs/2026-08-04-phase-7-trend-comparison-design.md`.
+- [ ] 7b — PDF appendix with screenshots + HAR.
+- [ ] 7c — Optional lightweight web UI (reuse frontend/CSS skills) for manual entry.
+- [ ] 7d — CI to auto-regenerate a real campaign report and catch skeleton drift.
+      The data-free half already runs: a unit test asserts the committed
+      `report/skeleton.baseline.json` matches a rendered synthetic report.
 
 ## 11. Risks & open questions
 

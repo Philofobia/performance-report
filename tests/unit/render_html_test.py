@@ -12,10 +12,22 @@ from report.render_html import build_charts, render_html
 from report.skeleton import fingerprint
 
 
+def a_trend(metric="lcp_ms", *, values=(6200.0, 4820.0), direction="improved",
+            delta_pct=-22.3, target=2500.0, crossed=None):
+    return {
+        "page": "homepage", "device": "mid-mobile", "network": "slow-4g",
+        "metric": metric, "direction": direction, "delta_pct": delta_pct,
+        "target": target, "crossed": crossed,
+        "points": [{"run_id": f"run_{i}", "value": v, "at": "2026-08-04"}
+                   for i, v in enumerate(values)],
+    }
+
+
 def a_report(pages=("homepage",), *, recommendations=True, mode="llm",
-             finding_title="Hero video is the LCP element"):
+             finding_title="Hero video is the LCP element", trends=()):
     def page_block(name):
         return {
+            "trends": list(trends),
             "name": name,
             "url": f"https://example.com/{name}",
             "primary_run_id": f"run_{name}",
@@ -149,6 +161,50 @@ def test_a_rule_based_report_says_so_on_the_cover():
 def test_an_llm_report_does_not_claim_degradation():
     html = render_html(a_report(mode="llm"))
     assert "no_api_key" not in html
+
+
+def test_a_page_with_no_history_renders_the_trend_empty_state():
+    html = render_html(a_report())
+    assert 'data-section="page.trend"' in html
+    assert "No prior campaigns" in html
+
+
+def test_a_trend_states_its_direction_and_change():
+    html = render_html(a_report(trends=[a_trend()]))
+    assert "improved" in html
+    assert "-22.3%" in html
+
+
+def test_a_trend_caption_names_the_metric_the_way_its_chart_does():
+    # Raw field names in the caption beside an axis reading "LCP" would read
+    # as two different things being shown.
+    html = render_html(a_report(trends=[a_trend()]))
+    assert ">LCP<" in html
+    assert ">lcp_ms<" not in html
+
+
+def test_a_target_crossing_is_shown():
+    html = render_html(a_report(trends=[a_trend(crossed="into_fail")]))
+    assert "into_fail" in html
+
+
+def test_a_first_campaign_series_says_so_rather_than_drawing_a_line():
+    html = render_html(a_report(trends=[a_trend(values=(4820.0,),
+                                                direction="new",
+                                                delta_pct=None)]))
+    assert "First campaign for this condition" in html
+
+
+def test_the_direction_classes_let_the_stylesheet_colour_the_caption():
+    html = render_html(a_report(trends=[a_trend(direction="regressed")]))
+    assert "trend--regressed" in html
+
+
+def test_the_skeleton_survives_a_page_with_no_history():
+    # The trend section is unconditional, exactly like every other block.
+    with_history = fingerprint(render_html(a_report(trends=[a_trend()])))
+    without = fingerprint(render_html(a_report()))
+    assert with_history == without
 
 
 def test_the_skeleton_is_identical_across_campaign_sizes():

@@ -32,9 +32,18 @@ HTML_TEMPLATE = "report.html.j2"
 STYLESHEET = "style.css"
 
 
+def metric_label(metric: str) -> str:
+    """`lcp_ms` → `LCP`. Naming, not computing — the template's own job.
+
+    Shared with the chart builders so a trend caption and the axis of the
+    chart beneath it can never disagree about what the metric is called.
+    """
+    return charts.METRIC_LABELS.get(str(metric), str(metric))
+
+
 def _env() -> Environment:
     """Jinja environment with escaping on and whitespace kept predictable."""
-    return Environment(
+    env = Environment(
         loader=FileSystemLoader(str(TEMPLATE_DIR)),
         autoescape=select_autoescape(
             enabled_extensions=("html", "j2"), default_for_string=True, default=True
@@ -43,6 +52,8 @@ def _env() -> Environment:
         lstrip_blocks=True,
         keep_trailing_newline=True,
     )
+    env.filters["metric_label"] = metric_label
+    return env
 
 
 def build_charts(report: Report) -> Dict[str, Any]:
@@ -64,6 +75,12 @@ def build_charts(report: Report) -> Dict[str, Any]:
             "projections": charts.projection_bars(
                 {k: v.model_dump() for k, v in page.projections.items()}
             ),
+            # A list, index-aligned with page.trends: both are built from the
+            # same ordered sequence, so the template can pair them with
+            # loop.index0 without constructing a lookup key itself.
+            "trends": [
+                charts.trend_chart(series.model_dump()) for series in page.trends
+            ],
         }
     return {
         "pages": pages,

@@ -13,12 +13,13 @@ import hashlib
 import json
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, Field
 
 from analysis.estimator import Projection
 from analysis.findings import PageAnalysis
+from analysis.trends import TrendSeries
 from config.load import Settings
 from normalize.schema import Run
 
@@ -74,6 +75,45 @@ class ProjectionModel(BaseModel):
             metric=projection.metric, before=projection.before,
             after_low=projection.after_low, after_high=projection.after_high,
             reduction_pct=projection.reduction_pct, source=projection.source,
+        )
+
+
+class TrendPointModel(BaseModel):
+    run_id: str
+    value: float
+    at: str
+
+
+class TrendSeriesModel(BaseModel):
+    """One metric's history under one condition (PROJECT_SPEC §10 Phase 7).
+
+    ``direction`` is ``improved`` / ``regressed`` / ``flat`` / ``new``, and
+    ``crossed`` is ``into_fail`` / ``into_pass`` / null. They are separate
+    because they answer different questions: a metric can improve
+    substantially and still be over its target.
+    """
+
+    page: str
+    device: str
+    network: str
+    metric: str
+    points: List[TrendPointModel] = Field(default_factory=list)
+    direction: str = "new"
+    delta_pct: Optional[float] = None
+    target: Optional[float] = None
+    crossed: Optional[str] = None
+
+    @classmethod
+    def of(cls, series: TrendSeries) -> "TrendSeriesModel":
+        return cls(
+            page=series.page, device=series.device, network=series.network,
+            metric=series.metric,
+            points=[
+                TrendPointModel(run_id=p.run_id, value=p.value, at=p.at)
+                for p in series.points
+            ],
+            direction=series.direction, delta_pct=series.delta_pct,
+            target=series.target, crossed=series.crossed,
         )
 
 
@@ -146,6 +186,8 @@ class PageBlock(BaseModel):
     conditions: List[ConditionRow]
     metrics: Dict[str, Any]
     targets: Dict[str, float]
+    #: Defaulted so a `report.json` written before Phase 7 still validates.
+    trends: List[TrendSeriesModel] = Field(default_factory=list)
     symptoms: List[SymptomModel]
     resources: List[ResourceModel]
     resource_type_totals: Dict[str, float]
@@ -220,7 +262,11 @@ def _condition_row(run: Run) -> ConditionRow:
     )
 
 
-def _page_block(page: PageAnalysis, settings: Settings) -> PageBlock:
+def _page_block(
+    page: PageAnalysis,
+    settings: Settings,
+    trends: Sequence[TrendSeries] = (),
+) -> PageBlock:
     run = page.primary_run
     resources = sorted(
         run.resource_timings, key=lambda t: (-(t.transfer_kb or 0.0), t.name)
@@ -240,6 +286,7 @@ def _page_block(page: PageAnalysis, settings: Settings) -> PageBlock:
         targets={"lcp_ms": float(th.lcp_good_ms), "cls": float(th.cls_good),
                  "inp_ms": float(th.inp_good_ms), "fcp_ms": float(th.fcp_good_ms),
                  "ttfb_ms": float(th.ttfb_good_ms)},
+        trends=[TrendSeriesModel.of(series) for series in trends],
         symptoms=[
             SymptomModel(code=s.code, text=s.text, severity=s.severity,
                          metric=s.metric, value=s.value, target=s.target)
@@ -331,12 +378,17 @@ def build_report(
     generated_at: datetime,
     model: str,
     knowledge_digest: str = "",
+    trends: Optional[Mapping[str, Sequence[TrendSeries]]] = None,
 ) -> Report:
     """Assemble the Report JSON from per-page analyses.
 
     ``summary`` is anything with ``problem``, ``key_finding`` and
     ``top_actions`` — an ``LlmSummary`` or the rule-based stand-in.
+
+    ``trends`` is keyed by page name. A page absent from it renders the trend
+    section's empty state; no section is ever conditionally omitted.
     """
+    trends = trends or {}
     ordered = sorted(pages, key=lambda p: p.page_name)
     run_ids = [run.run_id for page in ordered for run in page.runs]
 
@@ -359,7 +411,10 @@ def build_report(
             key_finding=summary.key_finding,
             top_actions=list(summary.top_actions),
         ),
-        pages=[_page_block(p, settings) for p in ordered],
+        pages=[
+            _page_block(p, settings, trends.get(p.page_name, ()))
+            for p in ordered
+        ],
         comparison=_comparison(ordered, settings),
         methodology=_methodology(ordered, settings),
         meta=ReportMeta(

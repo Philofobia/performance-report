@@ -202,6 +202,55 @@ def test_comparison_heat_with_no_rows_returns_the_empty_marker():
     assert charts.comparison_heat([]) == charts.NO_CHART
 
 
+# -- trend_chart ------------------------------------------------------------ #
+def a_series(values=(6200.0, 5940.0, 4820.0), *, metric="lcp_ms",
+             direction="improved", target=2500.0):
+    return {
+        "page": "homepage", "device": "mid-mobile", "network": "slow-4g",
+        "metric": metric, "direction": direction, "delta_pct": -18.9,
+        "target": target,
+        "points": [{"run_id": f"run_{i}", "value": v, "at": "2026-08-04"}
+                   for i, v in enumerate(values)],
+    }
+
+
+def test_trend_chart_labels_the_metric_and_the_latest_value():
+    text = svg_text(charts.trend_chart(a_series()))
+    assert "LCP" in text
+    assert "4820 ms" in text
+
+
+def test_trend_chart_marks_the_configured_target():
+    assert "target 2500 ms" in svg_text(charts.trend_chart(a_series()))
+
+
+def test_trend_chart_omits_the_target_line_when_none_is_configured():
+    text = svg_text(charts.trend_chart(a_series(metric="tbt_ms", target=None)))
+    assert "target" not in text
+
+
+def test_the_newest_point_carries_the_direction_colour():
+    regressed = charts.trend_chart(a_series(direction="regressed"))
+    improved = charts.trend_chart(a_series(direction="improved"))
+    assert palette.FAIL in regressed
+    assert palette.PASS in improved
+
+
+def test_a_flat_trend_is_not_painted_as_an_improvement():
+    # "flat" is the absence of a signal, not good news.
+    flat = charts.trend_chart(a_series(direction="flat"))
+    assert palette.PASS not in flat
+
+
+def test_a_single_point_series_refuses_to_draw():
+    # A line through one point states a trend that has not been measured yet.
+    assert charts.trend_chart(a_series((4820.0,))) == charts.NO_CHART
+
+
+def test_a_series_with_no_points_refuses_to_draw():
+    assert charts.trend_chart(a_series(())) == charts.NO_CHART
+
+
 # -- determinism across every builder --------------------------------------- #
 def test_every_builder_is_deterministic():
     pairs = [
@@ -210,6 +259,7 @@ def test_every_builder_is_deterministic():
         (charts.lcp_phases, (CWP,)),
         (charts.projection_bars, (PROJECTIONS,)),
         (charts.comparison_heat, (COMPARISON,)),
+        (charts.trend_chart, (a_series(),)),
     ]
     for builder, args in pairs:
         assert builder(*args) == builder(*args), builder.__name__

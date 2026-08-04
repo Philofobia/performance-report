@@ -259,6 +259,54 @@ p { margin: 0 0 2.5mm; }
 .chart--inset { max-width: 74mm; }
 
 /* --------------------------------------------------------------------------
+ * Trend — one small multiple per condition × metric.
+ *
+ * A grid rather than a stack: the point of a trend section is comparing four
+ * metrics at a glance, and a column of full-width charts makes the reader
+ * scroll to do it. Each figure avoids a break so a sparkline is never torn
+ * from the caption stating what it means.
+ * ----------------------------------------------------------------------- */
+.trend-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 3mm 5mm;
+}
+
+.trend { margin: 0; break-inside: avoid; }
+.trend .chart { margin: 0; }
+
+.trend figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 2mm;
+  font-size: 8pt;
+  color: var(--muted);
+}
+
+.trend-metric { font-family: var(--mono); color: var(--ink); }
+.trend-direction { text-transform: uppercase; letter-spacing: 0.04em; }
+.trend-delta { font-family: var(--mono); }
+
+/* Direction colours the caption, never the page verdict: a page that got 6%
+ * slower but still passes every threshold is still passing. */
+.trend--improved .trend-direction,
+.trend--improved .trend-delta { color: var(--pass); }
+.trend--regressed .trend-direction,
+.trend--regressed .trend-delta { color: var(--fail); }
+.trend--flat .trend-direction { color: var(--muted); }
+.trend--new .trend-direction { color: var(--unknown); }
+
+.trend-crossed {
+  font-family: var(--mono);
+  font-size: 7pt;
+  border: 0.3mm solid var(--fail);
+  border-radius: 1mm;
+  padding: 0 1mm;
+  color: var(--fail);
+}
+
+/* --------------------------------------------------------------------------
  * Tables — hairline rules only, no zebra, no vertical borders
  * ----------------------------------------------------------------------- */
 .metrics {

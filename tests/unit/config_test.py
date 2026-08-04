@@ -97,6 +97,33 @@ def test_load_real_settings_file():
     assert s.thresholds.lcp_good_ms == 2500
 
 
+def test_trends_settings_come_from_the_shipped_file():
+    trends = cl.load_settings().trends
+    assert trends.dead_band_pct == 5.0
+    assert trends.window == 5
+
+
+def test_trends_defaults_apply_when_the_block_is_absent(tmp_path):
+    path = write(tmp_path / "settings.yaml", {"run_defaults": {"runs": 3}})
+    trends = cl.load_settings(path).trends
+    assert trends.dead_band_pct == 5.0
+    assert trends.window == 5
+
+
+def test_a_negative_dead_band_is_rejected(tmp_path):
+    path = write(tmp_path / "settings.yaml", {"trends": {"dead_band_pct": -1}})
+    with pytest.raises(cl.ConfigError):
+        cl.load_settings(path)
+
+
+def test_a_window_of_one_is_rejected(tmp_path):
+    # A window of 1 could never produce a direction; every series would render
+    # as "new", which reads as missing data rather than as a misconfiguration.
+    path = write(tmp_path / "settings.yaml", {"trends": {"window": 1}})
+    with pytest.raises(cl.ConfigError):
+        cl.load_settings(path)
+
+
 def test_load_real_devices_file_has_mid_mobile_and_desktop():
     d = cl.load_devices()
     names = {dev.name for dev in d.devices}

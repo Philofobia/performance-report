@@ -12,24 +12,26 @@ comparable, automatable artifact instead of a bespoke write-up.
 **The pipeline is end to end and driven from one command: measurements go in, a
 fixed-skeleton PDF comes out.**
 
-**Working today (phases 0–6):** config and test-matrix resolution · canonical Pydantic
-schema · manual ingestion CLI · automated multi-page browser campaigns with device and
-network emulation · SSRF-gated navigation · SQLite run store with scrubbed artifacts ·
-RAG over the knowledge base (embeddings, chunking, symptom detection, grounded prompts) ·
-optional per-target request headers for bot-protected sites · grounded per-page analysis
-with rule-based improvement projections · a fixed-skeleton PDF, HTML and Markdown
-mirror rendered from the Report JSON · **a unified `python -m cli` entry point and a
-`--skeleton-check` drift guard enforced against a committed baseline**.
+**Working today (phases 0–6, plus 7a):** config and test-matrix resolution · canonical
+Pydantic schema · manual ingestion CLI · automated multi-page browser campaigns with
+device and network emulation · SSRF-gated navigation · SQLite run store with scrubbed
+artifacts · RAG over the knowledge base (embeddings, chunking, symptom detection,
+grounded prompts) · optional per-target request headers for bot-protected sites ·
+grounded per-page analysis with rule-based improvement projections · a fixed-skeleton
+PDF, HTML and Markdown mirror rendered from the Report JSON · a unified `python -m cli`
+entry point and a `--skeleton-check` drift guard enforced against a committed baseline ·
+**campaign-over-campaign trends per page and condition**.
 
-**Missing — phase 7:**
+**Missing — the rest of phase 7:**
 
-| Gap                                   | Consequence today                                                     |
-| ------------------------------------- | --------------------------------------------------------------------- |
-| Prior-run trends, screenshot appendix | Each report stands alone; nothing compares a campaign to the last one |
-| Optional web UI for manual entry      | Manual runs are entered on the command line                           |
+| Gap                              | Consequence today                                            |
+| -------------------------------- | ------------------------------------------------------------ |
+| Screenshot / HAR appendix        | The report lists capture paths; it does not embed the images |
+| Optional web UI for manual entry | Manual runs are entered on the command line                  |
+| CI report regeneration           | CI guards the skeleton with a synthetic render, not a real campaign |
 
-Full breakdown in [Roadmap](#roadmap). Phase 7 below is **planned, not built** —
-nothing in this README describes it as working.
+Full breakdown in [Roadmap](#roadmap). Everything listed as missing is **planned, not
+built** — nothing in this README describes it as working.
 
 ---
 
@@ -316,6 +318,29 @@ renderer is a pure function — it would pass while a section silently vanished 
 every report, which is how a skeleton actually rots. No section is ever conditionally
 omitted: a page with no recommendations renders the block with an explicit empty state.
 
+**Every page carries its own history.** Each `(page, device, network)` gets one series
+per metric — LCP, CLS, INP, TBT — so a mid-mobile/slow-4g LCP is only ever compared
+against other mid-mobile/slow-4g LCPs. Merging conditions would manufacture regressions
+out of nothing: a campaign that merely added a desktop condition would show every page
+improving.
+
+Series keys come from the *current* campaign, not from the store, so a condition dropped
+from `targets.yaml` three campaigns ago does not reappear as a trend. The current
+campaign's own point is always the newest, deduped by run id so `--from-store` does not
+count it twice.
+
+A change smaller than `settings.trends.dead_band_pct` (default 5%) reads as **flat**.
+Emulated throttling varies run to run; without a dead band a 3% wobble is reported as a
+regression every campaign and the section becomes noise the reader learns to skip.
+Target crossing is reported separately from direction — a metric can improve
+substantially and still be over budget, and the report should say both.
+
+**A trend never changes a verdict.** A page that passes every threshold but got 6%
+slower reports `regressed` and still passes. Folding trend into verdict would turn a
+green page red without any threshold being crossed. The first campaign you ever run
+reports every series as `new` and produces a complete report; a missing or unreadable
+store degrades the same way, because analysis never fails over unavailable history.
+
 `--skeleton-check` diffs that fingerprint against the committed
 `report/skeleton.baseline.json` and exits non-zero on drift, naming what moved:
 
@@ -351,7 +376,7 @@ offline suite stays browser-free; only the real PDF run is `e2e`-marked.
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 588 offline tests, no browser, no network
+pytest -m "not e2e"      # 648 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 ```
 
@@ -395,7 +420,10 @@ affect day-to-day use:
 | 4     | Analysis — findings, impact, improvement estimator, Report JSON      | Done     |
 | 5     | Report rendering — fixed HTML skeleton → PDF + Markdown mirror       | Done     |
 | 6     | Unified CLI (`ingest` / `analyze` / `report`) + skeleton-drift check | Done     |
-| 7     | Prior-run memory, trend comparison, optional web UI                  | **Next** |
+| 7a    | Campaign-over-campaign trends per page and condition                 | Done     |
+| 7b    | Screenshot / HAR appendix embedded in the PDF                        | **Next** |
+| 7c    | Optional lightweight web UI for manual entry                         | Planned  |
+| 7d    | CI regeneration of a real campaign report                            | Planned  |
 
 ## Documentation
 
