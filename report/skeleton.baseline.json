@@ -1,0 +1,18 @@
+{
+    "version": 1,
+    "sections": [
+        "cover",
+        "summary",
+        "page[]",
+        "page.header",
+        "page.cwv-dashboard",
+        "page.resources",
+        "page.lcp-breakdown",
+        "page.findings",
+        "page.impacts",
+        "page.recommendations",
+        "page.projections",
+        "comparison",
+        "methodology"
+    ]
+}

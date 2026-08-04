@@ -360,7 +360,10 @@ or parameter change.
 outgrows brute force, a LanceDB-backed implementation (embedded, ANN, no server)
 drops in without touching the `rag/` layer.
 
-## 9. Proposed directory structure
+## 9. Directory structure
+
+*As built.* The `src/` wrapper this section originally proposed was never
+created — the packages sit at the repository root, and `cli.py` sits with them.
 
 ```
 performance-projects/
@@ -371,37 +374,45 @@ performance-projects/
 │  ├─ targets.yaml                 # named pages + per-page test matrix (see §4.4)
 │  ├─ devices.yaml                 # device presets (mid-mobile, high-mobile, desktop, ...)
 │  └─ networks.yaml                # throttle presets (online, fast-3g, slow-4g, ...)
-├─ src/
-│  ├─ ingest/
-│  │  ├─ manual.py                 # CLI/JSON ingestion + validation
-│  │  ├─ automated.py              # orchestrates browser run
-│  │  └─ browser/
-│  │     ├─ runner.py              # Playwright lifecycle + emulation/throttling
-│  │     ├─ lighthouse.py          # Lighthouse over CDP
-│  │     └─ webser.py              # web-vitals + network capture helpers
-│  ├─ normalize/
-│  │  └─ schema.py                 # canonical run object → Pydantic model + validators
-│  ├─ store/
-│  │  ├─ sql.py                    # SQLite schema + queries (runs, metrics)
-│  │  ├─ vectordb.py               # embeddings in SQLite + exact cosine search (§8.1)
-│  │  └─ artifacts.py              # raw capture files (png/har/trace/json)
-│  ├─ rag/
-│  │  ├─ knowledge.py              # loads/embeds data/knowledge/ playbooks
-│  │  ├─ retrieve.py               # build query, top-k retrieval
-│  │  └─ prompt.py                 # grounded prompt templates
-│  ├─ analysis/
-│  │  ├─ llm.py                    # model client (LiteLLM/LangChain)
-│  │  ├─ findings.py               # problem localization + impact statements
-│  │  ├─ estimator.py              # expected-improvement magnitude (metric deltas)
-│  │  └─ reportmodel.py            # emits Report JSON consumed by report layer
-│  ├─ report/
-│  │  ├─ charts.py                 # Matplotlib chart builders (fixed palette)
-│  │  ├─ template/                 # HTML skeleton + CSS (fixed layout)
-│  │  │  ├─ report.html.j2
-│  │  │  └─ style.css
-│  │  ├─ render_pdf.py             # headless Chromium print-to-PDF
-│  │  └─ render_md.py              # Jinja2 → Markdown mirror
-│  └─ cli.py                       # entrypoint: ingest → analyze → report
+├─ ingest/
+│  ├─ manual.py                    # CLI/JSON ingestion + validation
+│  ├─ automated.py                 # orchestrates browser run
+│  └─ browser/
+│     ├─ runner.py                 # Playwright lifecycle + emulation/throttling
+│     ├─ lighthouse.py             # Lighthouse over CDP
+│     └─ webser.py                 # web-vitals + network capture helpers
+├─ normalize/
+│  ├─ schema.py                    # canonical run object → Pydantic model + validators
+│  └─ url_safety.py                # SSRF gate applied before any navigation
+├─ store/
+│  ├─ sql.py                       # SQLite schema + queries (runs, metrics)
+│  ├─ vectordb.py                  # embeddings in SQLite + exact cosine search (§8.1)
+│  ├─ artifacts.py                 # raw capture files (png/har/trace/json)
+│  └─ listing.py                   # `list-runs` — table over the run store
+├─ rag/
+│  ├─ knowledge.py                 # loads/embeds data/knowledge/ playbooks
+│  ├─ retrieve.py                  # build query, top-k retrieval
+│  └─ prompt.py                    # grounded prompt templates
+├─ analysis/
+│  ├─ llm.py                       # model client
+│  ├─ findings.py                  # problem localization + impact statements
+│  ├─ estimator.py                 # expected-improvement magnitude (metric deltas)
+│  ├─ reportmodel.py               # emits Report JSON consumed by report layer
+│  └─ __main__.py                  # `python -m analysis`
+├─ report/
+│  ├─ palette.py                   # threshold → verdict → colour, in one place
+│  ├─ charts.py                    # Matplotlib chart builders (fixed palette)
+│  ├─ template/                    # HTML skeleton + CSS (fixed layout)
+│  │  ├─ report.html.j2
+│  │  ├─ report.md.j2
+│  │  └─ style.css
+│  ├─ render_html.py               # Jinja2 → HTML
+│  ├─ render_pdf.py                # headless Chromium print-to-PDF
+│  ├─ render_md.py                 # Jinja2 → Markdown mirror
+│  ├─ skeleton.py                  # structural fingerprint + baseline diff (§6.2)
+│  ├─ skeleton.baseline.json       # committed canonical section list
+│  └─ __main__.py                  # `python -m report`
+├─ cli.py                          # entrypoint: ingest / analyze / report / list-runs
 ├─ data/
 │  ├─ knowledge/                   # curated markdown playbooks (embedded)
 │  ├─ raw/                         # per-run captures
@@ -409,8 +420,9 @@ performance-projects/
 │  │                               # (embeddings live in the runs SQLite db)
 │  └─ reports/                     # generated PDF + MD outputs
 ├─ tests/
-│  ├─ unit/                        # schema validation, estimator, charts
-│  └─ e2e/                         # ingest→report happy path + determinism check
+│  ├─ unit/                        # schema validation, estimator, charts, CLI routing
+│  ├─ integration/                 # analyze→report pipelines through their CLIs
+│  └─ e2e/                         # real browser + real PDF (marked `e2e`)
 ├─ pyproject.toml / requirements.txt
 ├─ .env.example                    # template with placeholders — commit this
 ├─ .env                            # real secrets (Google API key) — NEVER commit (gitignored)
@@ -490,13 +502,24 @@ performance-projects/
 - [x] Determinism test: two campaigns with same data → identical structure, layout, charts.
 - [x] `report/skeleton.py` — structural fingerprint proving the skeleton holds across
       campaigns of different sizes (the `--skeleton-check` flag itself is Phase 6).
-- [x] `python -m report` interim entry point with `--no-pdf` for browser-free runs.
+- [x] `report/skeleton.baseline.json` and the `--skeleton-check` / `--update-baseline`
+      flags landed in Phase 6.
+- [x] `python -m report` entry point with `--no-pdf` for browser-free runs.
 
 ### Phase 6 — CLI orchestration + polish
-- [ ] Wire `src/cli.py`: `ingest` (manual/auto), `analyze`, `report`, `list-runs`.
-- [ ] Add `--skeleton-check` mode that verifies report structure did not drift.
-- [ ] End-to-end run producing a real `data/reports/<run-id>/report.pdf` + `.md`.
-- [ ] Write README with usage examples.
+- [x] Wire `cli.py`: `ingest` (auto/manual), `analyze`, `report`, `list-runs`.
+      **Corrected from `src/cli.py`:** there is no `src/` package — the repo is
+      organised as top-level packages, and the entry point lives with them. The
+      façade forwards argv verbatim to each stage's existing `main(argv)` rather
+      than redeclaring its flags, so a stage can grow an option without the
+      façade changing. Design:
+      `docs/superpowers/specs/2026-08-04-phase-6-cli-orchestration-design.md`.
+- [x] Add `--skeleton-check` mode that verifies report structure did not drift,
+      diffing against the committed `report/skeleton.baseline.json`;
+      `--update-baseline` regenerates it as a reviewable commit.
+- [x] `store/listing.py` — `list-runs` over the SQLite run store.
+- [x] End-to-end run producing a real `data/reports/<run-id>/report.pdf` + `.md`.
+- [x] Write README with usage examples.
 
 ### Phase 7 — Hardening / stretch (post-MVP)
 - [ ] Prior-run memory in RAG; trend-over-time comparison; PDF appendix with screenshots + HAR.
@@ -553,7 +576,8 @@ Assign owners; each task is mostly independent after Phase 0.
 6. **Owner F — analysis:** `analysis/llm.py`, `findings.py`, `estimator.py`, `reportmodel.py`.
 7. **Owner G — report rendering:** `report/charts.py`, HTML template + CSS (via `frontend-design`),
    `render_pdf.py`, `render_md.py`.
-8. **Owner H — CLI + integration:** `src/cli.py`, determinism test, end-to-end multi-page run, README.
+8. **Owner H — CLI + integration:** `cli.py`, `store/listing.py`, determinism test,
+   end-to-end multi-page run, README.
 
 > **Hard dependencies:** B & C depend on A. D depends on A. E depends on D. F depends on E (+C data).
 > G depends on A + F's Report JSON. H depends on everyone → integrate last, in two integration waves

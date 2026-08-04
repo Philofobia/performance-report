@@ -1,11 +1,16 @@
 """``python -m report`` — Report JSON in, deliverable out.
 
-An interim entry point, exactly as ``python -m analysis`` is: Phase 6 folds
-both into a unified ``src/cli.py``. Until then this is how rendering is driven
-by hand and by the integration tests.
+Reachable both directly and as ``python -m cli report``: the Phase 6 façade
+forwards argv here verbatim rather than redeclaring these flags, so this
+parser stays the single definition of the report stage's interface.
 
 ``--no-pdf`` exists so the whole pipeline can be exercised without Chromium,
 the same courtesy ``--no-llm`` provides in the analysis layer.
+
+``--skeleton-check`` lives here rather than in the façade for the same reason:
+it belongs to the stage that renders. It is the user-facing half of
+``report/skeleton.py`` — the half that turns "the skeleton never changes" from
+a claim into a non-zero exit code.
 """
 from __future__ import annotations
 
@@ -20,6 +25,14 @@ from pydantic import ValidationError
 from analysis.reportmodel import Report
 from report.render_html import render_html
 from report.render_md import render_md
+from report.skeleton import (
+    BASELINE_PATH,
+    diff_sections,
+    fingerprint,
+    format_drift,
+    load_baseline,
+    save_baseline,
+)
 
 DEFAULT_REPORTS_DIR = "data/reports"
 REPORT_FILENAME = "report.json"
@@ -116,7 +129,48 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Where to write outputs (default: the input's directory).")
     p.add_argument("--no-pdf", action="store_true",
                    help="Skip PDF generation; no browser is launched.")
+    p.add_argument("--baseline", default=str(BASELINE_PATH),
+                   help="Skeleton baseline file (default report/skeleton.baseline.json).")
+    skeleton = p.add_mutually_exclusive_group()
+    skeleton.add_argument("--skeleton-check", action="store_true",
+                          help="Fail if the rendered structure drifted from the baseline.")
+    skeleton.add_argument("--update-baseline", action="store_true",
+                          help="Rewrite the baseline from this render. Commit the diff.")
     return p
+
+
+def check_skeleton(html: str, *, baseline: Union[str, Path]) -> int:
+    """Compare a rendered report against the committed baseline.
+
+    Returns the process exit code. The caller has already written the report
+    by this point, deliberately: the rendered output is the evidence for
+    diagnosing drift, and the command that detected the problem should not be
+    the one that withholds the artifact needed to understand it.
+    """
+    try:
+        expected = load_baseline(baseline)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    changes = diff_sections(expected, fingerprint(html))
+    if changes:
+        print(format_drift(changes, path=baseline), file=sys.stderr)
+        return 1
+    print(f"skeleton ok: {len(expected)} sections match {baseline}")
+    return 0
+
+
+def update_baseline(html: str, *, baseline: Union[str, Path]) -> int:
+    """Rewrite the baseline from this render."""
+    sections = fingerprint(html)
+    try:
+        save_baseline(sections, baseline)
+    except OSError as exc:
+        print(f"Could not write {baseline}: {exc}", file=sys.stderr)
+        return 1
+    print(f"baseline updated: {len(sections)} sections written to {baseline}")
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -156,6 +210,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"{len(report.pages)} page(s), verdict={report.cover.verdict}, "
         f"mode={report.meta.analysis_mode}"
     )
+
+    if args.skeleton_check or args.update_baseline:
+        # Fingerprint what was actually written, not a second render of the
+        # same model — the guarantee is about the shipped artifact.
+        html = (output_dir / "report.html").read_text(encoding="utf-8")
+        if args.update_baseline:
+            return update_baseline(html, baseline=args.baseline)
+        return check_skeleton(html, baseline=args.baseline)
+
     return 0
 
 

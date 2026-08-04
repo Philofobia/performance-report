@@ -9,26 +9,27 @@ comparable, automatable artifact instead of a bespoke write-up.
 
 ## Where the project is
 
-**The pipeline is end to end: measurements go in, a fixed-skeleton PDF comes out.**
+**The pipeline is end to end and driven from one command: measurements go in, a
+fixed-skeleton PDF comes out.**
 
-**Working today (phases 0–5):** config and test-matrix resolution · canonical Pydantic
+**Working today (phases 0–6):** config and test-matrix resolution · canonical Pydantic
 schema · manual ingestion CLI · automated multi-page browser campaigns with device and
 network emulation · SSRF-gated navigation · SQLite run store with scrubbed artifacts ·
 RAG over the knowledge base (embeddings, chunking, symptom detection, grounded prompts) ·
 optional per-target request headers for bot-protected sites · grounded per-page analysis
-with rule-based improvement projections · **a fixed-skeleton PDF, HTML and Markdown
-mirror rendered from the Report JSON**.
+with rule-based improvement projections · a fixed-skeleton PDF, HTML and Markdown
+mirror rendered from the Report JSON · **a unified `python -m cli` entry point and a
+`--skeleton-check` drift guard enforced against a committed baseline**.
 
-**Missing — orchestration and polish (phases 6–7):**
+**Missing — phase 7:**
 
-| Gap                                                                | Consequence today                                                                                          |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| `src/cli.py` — unified `ingest` / `analyze` / `report` entry point | Each stage is a separate module invocation (`python -m ingest.automated`, `python -m analysis`, `python -m report`) |
-| `--skeleton-check` drift guard                                     | The fingerprint exists and is tested; there is no CLI flag diffing it against a committed baseline          |
-| Prior-run trends, screenshot appendix                              | Each report stands alone; nothing compares a campaign to the last one                                       |
+| Gap                                   | Consequence today                                                     |
+| ------------------------------------- | --------------------------------------------------------------------- |
+| Prior-run trends, screenshot appendix | Each report stands alone; nothing compares a campaign to the last one |
+| Optional web UI for manual entry      | Manual runs are entered on the command line                           |
 
-Full breakdown in [Roadmap](#roadmap). Phases 6–7 below are **planned, not built** —
-nothing in this README describes them as working.
+Full breakdown in [Roadmap](#roadmap). Phase 7 below is **planned, not built** —
+nothing in this README describes it as working.
 
 ---
 
@@ -132,14 +133,30 @@ for scoping rules and how to confirm the token was accepted.
 
 ## Running it
 
+One entry point covers the whole pipeline:
+
+```bash
+python -m cli                       # the command table
+python -m cli ingest auto           # run a browser campaign
+python -m cli list-runs             # what is in the store
+python -m cli analyze               # runs  → report.json
+python -m cli report                # report.json → HTML + Markdown + PDF
+```
+
+`cli.py` is a façade: it consumes the command and passes every remaining flag
+straight to the stage that owns it. So `python -m cli report --help` shows the report
+stage's own help, per-command help can never drift from the parser it documents, and
+each stage keeps its direct entry point — `python -m analysis --no-llm` is still valid.
+The longhand invocations below and their `python -m cli` equivalents are the same code.
+
 ### Automated campaign
 
 ```bash
-python -m ingest.automated                          # the full configured matrix
-python -m ingest.automated --pages homepage,plp     # only named pages
-python -m ingest.automated --device desktop --runs 5
-python -m ingest.automated --dry-run                # print the resolved matrix, no browser
-python -m ingest.automated --no-headers             # ignore configured request headers
+python -m cli ingest auto                           # the full configured matrix
+python -m cli ingest auto --pages homepage,plp      # only named pages
+python -m cli ingest auto --device desktop --runs 5
+python -m cli ingest auto --dry-run                 # print the resolved matrix, no browser
+python -m cli ingest auto --no-headers              # ignore configured request headers
 ```
 
 `--device`, `--network`, and `--runs` override every condition for that invocation,
@@ -150,7 +167,7 @@ screenshot artifacts under `--artifacts-root` (default `data/raw`).
 ### Manual ingestion
 
 ```bash
-python -m ingest.manual \
+python -m cli ingest manual \
   --page-url https://example.com/ \
   --problem "Homepage LCP spikes to 6s on 3G after the new hero video" \
   --lcp-ms 6200 --cls 0.42 --inp-ms 480 \
@@ -159,6 +176,25 @@ python -m ingest.manual \
 
 Units and ranges are enforced — out-of-range values are rejected with a clear error
 rather than silently stored.
+
+### Seeing what you have
+
+```bash
+python -m cli list-runs                             # 20 newest stored runs
+python -m cli list-runs --pages homepage,plp --limit 50
+python -m cli list-runs --device desktop --network fast-3g
+```
+
+```
+RUN ID                    PAGE      DEVICE      NETWORK  LCP   CLS   INP
+homepage-mid-mobile-3f2a  homepage  mid-mobile  slow-4g  4820  0.12  210
+plp-mid-mobile-71bd       plp       mid-mobile  slow-4g  6210  0.34  —
+```
+
+A metric the run does not carry prints `—`, never `0` — a page with no interaction
+handlers emits no INP entry at all, and a missing measurement must not read as a perfect
+one. The store path defaults to `settings.storage.sqlite_path`; a `--db` pointing at
+nothing is an error rather than an empty listing.
 
 ---
 
@@ -216,15 +252,15 @@ rule. Full reasoning in [PROJECT_SPEC.md §8.1](docs/PROJECT_SPEC.md).
 
 ## The analysis layer
 
-`analysis/` turns stored runs into the **Report JSON** — the document Phase 5 will
-render. It is the last stage that computes anything; the template will only format.
+`analysis/` turns stored runs into the **Report JSON** — the document the report layer
+renders. It is the last stage that computes anything; the template only formats.
 
 ```bash
-python -m analysis                                  # every run in data/processed
-python -m analysis --pages homepage,plp
-python -m analysis --from-store data/processed/runs.sqlite
-python -m analysis --no-llm                         # rule-based only, no model calls
-python -m analysis --use-priors                     # ground in earlier campaigns' findings
+python -m cli analyze                                # every run in data/processed
+python -m cli analyze --pages homepage,plp
+python -m cli analyze --from-store data/processed/runs.sqlite
+python -m cli analyze --no-llm                       # rule-based only, no model calls
+python -m cli analyze --use-priors                   # ground in earlier campaigns' findings
 ```
 
 Output lands in `data/reports/<campaign-id>/report.json`. The campaign id is derived
@@ -261,10 +297,12 @@ formats anything and the first that computes nothing — every number, ordering 
 verdict was decided by the analysis layer.
 
 ```bash
-python -m report                                    # newest campaign in data/reports
-python -m report --campaign storefront-9f3ab120
-python -m report --input data/reports/<id>/report.json
-python -m report --no-pdf                           # HTML + Markdown only, no browser
+python -m cli report                                # newest campaign in data/reports
+python -m cli report --campaign storefront-9f3ab120
+python -m cli report --input data/reports/<id>/report.json
+python -m cli report --no-pdf                       # HTML + Markdown only, no browser
+python -m cli report --skeleton-check               # fail if the structure drifted
+python -m cli report --update-baseline              # accept a structural change
 ```
 
 Writes `report.html`, `report.md` and `report.pdf` beside the source `report.json`.
@@ -277,6 +315,24 @@ identical fingerprint. Diffing one campaign against itself would only prove the
 renderer is a pure function — it would pass while a section silently vanished for
 every report, which is how a skeleton actually rots. No section is ever conditionally
 omitted: a page with no recommendations renders the block with an explicit empty state.
+
+`--skeleton-check` diffs that fingerprint against the committed
+`report/skeleton.baseline.json` and exits non-zero on drift, naming what moved:
+
+```
+skeleton drift vs report/skeleton.baseline.json:
+  - page.lcp-breakdown  (expected at index 6)
+  + page.waterfall      (found at index 6)
+```
+
+It still writes the report — the rendered output is the evidence for diagnosing the
+drift, and the command that spotted the problem should not withhold what you need to
+understand it. Changing the template on purpose means running `--update-baseline` and
+committing the one-line diff, which is the whole mechanism by which drift becomes
+*visible* rather than merely detectable. A unit test renders a synthetic report and
+asserts the committed baseline still matches it, so a template change with a forgotten
+`--update-baseline` fails in CI rather than waiting for someone to render a real
+campaign.
 
 **Charts are inline SVG** built by pure functions from numbers. matplotlib randomises
 SVG element ids per process and stamps a creation date into every file, so both are
@@ -295,7 +351,7 @@ offline suite stays browser-free; only the real PDF run is `e2e`-marked.
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 537 offline tests, no browser, no network
+pytest -m "not e2e"      # 588 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 ```
 
@@ -338,8 +394,8 @@ affect day-to-day use:
 | —     | Optional per-target request headers (bot-protected targets)          | Done     |
 | 4     | Analysis — findings, impact, improvement estimator, Report JSON      | Done     |
 | 5     | Report rendering — fixed HTML skeleton → PDF + Markdown mirror       | Done     |
-| 6     | Unified CLI (`ingest` / `analyze` / `report`) + skeleton-drift check | **Next** |
-| 7     | Prior-run memory, trend comparison, optional web UI                  | Planned  |
+| 6     | Unified CLI (`ingest` / `analyze` / `report`) + skeleton-drift check | Done     |
+| 7     | Prior-run memory, trend comparison, optional web UI                  | **Next** |
 
 ## Documentation
 

@@ -55,7 +55,7 @@ jobs:
         run: |
           pip install pytest-cov
           pytest -m "not e2e" --cov=config --cov=normalize --cov=ingest --cov=store --cov=rag \
-            --cov-fail-under=80 -v
+            --cov=analysis --cov=report --cov=cli --cov-fail-under=80 -v
 
       - name: E2E browser tests (Chromium)
         run: |
