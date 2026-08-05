@@ -35,7 +35,7 @@ the HAR reduced to the table that answers "what was heavy".
 - `report/render_html.py` — appendix data URIs alongside chart SVG
 - `report/render_md.py` + `report/template/*` — the `appendix` section
 - `report/skeleton.py` — `collapse()` generalized to N group roots
-- `report/skeleton.baseline.json` — regenerated, three added entries
+- `report/skeleton.baseline.json` — regenerated, four added entries
 - `report/__main__.py` + `cli.py` — `--no-appendix-images`
 - `config/load.py` + `config/settings.yaml` — `report.appendix.*`
 - `requirements.txt` — explicit `pillow` pin (already present transitively)
@@ -174,9 +174,9 @@ A new section after `methodology`:
 
 ```
 <section data-section="appendix">          ← wrapper, singular
-  <article data-section="appendix">        ← repeats per entry
-    <figure data-section="appendix.screenshot">
-    <table  data-section="appendix.requests">
+  <article data-section="capture">         ← repeats per entry
+    <figure data-section="capture.screenshot">
+    <table  data-section="capture.requests">
 ```
 
 `report/render_html.py:build_charts` gains an `appendix` key alongside `pages`
@@ -218,13 +218,20 @@ mirror is.
 ## 7. Skeleton
 
 `collapse()` is hard-wired to one repeating root. It gains a `roots` parameter
-defaulting to `("page", "appendix")`, and its single `emitted_page_block` bool
+defaulting to `("page", "capture")`, and its single `emitted_page_block` bool
 becomes a per-root set.
+
+The repeating entry is named `capture`, not `appendix`, because the wrapper
+section is itself tagged `appendix` and the fingerprint is a *flat* token
+stream — a wrapper sharing its child-block's name opens an empty group, and the
+real entries are then discarded as already-emitted. The children would vanish
+from the fingerprint entirely, which is the exact blindness this section rejects
+two paragraphs down.
 
 The fingerprint becomes:
 
 ```
-… comparison, methodology, appendix[], appendix.screenshot, appendix.requests
+… comparison, methodology, appendix, capture[], capture.screenshot, capture.requests
 ```
 
 `BASELINE_VERSION` stays `1`. A report containing no appendix section produces a

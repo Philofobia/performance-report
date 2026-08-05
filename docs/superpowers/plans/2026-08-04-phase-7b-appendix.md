@@ -35,7 +35,7 @@
 **Modify:**
 - `analysis/reportmodel.py` — `RequestRow`, `AppendixEntry`, `Report.appendix`, `ReportMeta.degraded_appendix_entries`, `_appendix()`, `SCHEMA_VERSION` 1 → 2
 - `report/skeleton.py` — `collapse()` generalized to N group roots
-- `report/skeleton.baseline.json` — three added entries
+- `report/skeleton.baseline.json` — four added entries
 - `report/render_html.py` — `images` parameter
 - `report/render_md.py` — `base_dir` parameter, `MD_SECTIONS` gains `Appendix`
 - `report/template/report.html.j2` — the appendix section
@@ -1086,7 +1086,7 @@ git commit -m "Embed screenshots as confined, deterministic data URIs"
 
 **Interfaces:**
 - Produces:
-  - `GROUP_ROOTS: Tuple[str, ...] = ("page", "appendix")`
+  - `GROUP_ROOTS: Tuple[str, ...] = ("page", "capture")`
   - `collapse(sections: Sequence[str], *, roots: Sequence[str] = GROUP_ROOTS) -> List[str]`
   - `PAGE_GROUP` stays exported (existing tests import it)
 
@@ -1099,17 +1099,17 @@ Append to `tests/unit/skeleton_test.py`:
 ```python
 def appendix_entry():
     return (
-        '<article data-section="appendix">'
-        '<figure data-section="appendix.screenshot"></figure>'
-        '<table data-section="appendix.requests"></table>'
+        '<article data-section="capture">'
+        '<figure data-section="capture.screenshot"></figure>'
+        '<table data-section="capture.requests"></table>'
         "</article>"
     )
 
 
 def test_repeated_appendix_entries_collapse_to_one_group():
-    sections = ["appendix", "appendix.screenshot", "appendix.requests"] * 4
+    sections = ["capture", "capture.screenshot", "capture.requests"] * 4
     assert collapse(sections) == [
-        "appendix[]", "appendix.screenshot", "appendix.requests",
+        "capture[]", "capture.screenshot", "capture.requests",
     ]
 
 
@@ -1134,11 +1134,11 @@ def test_page_and_appendix_groups_both_collapse_in_one_document():
         "cover",
         "page", "page.header", "page", "page.header",
         "methodology",
-        "appendix", "appendix.screenshot", "appendix", "appendix.screenshot",
+        "capture", "capture.screenshot", "capture", "capture.screenshot",
     ]
     assert collapse(sections) == [
         "cover", "page[]", "page.header", "methodology",
-        "appendix[]", "appendix.screenshot",
+        "capture[]", "capture.screenshot",
     ]
 
 
@@ -1149,7 +1149,7 @@ def test_a_document_without_an_appendix_fingerprints_exactly_as_before():
 
 
 def test_a_group_root_with_no_children_is_still_emitted():
-    assert collapse(["cover", "appendix", "appendix"]) == ["cover", "appendix[]"]
+    assert collapse(["cover", "capture", "capture"]) == ["cover", "capture[]"]
 ```
 
 Add `GROUP_ROOTS` to the import block at the top of the file.
@@ -1167,7 +1167,7 @@ Replace lines 31-34 of `report/skeleton.py`:
 #: Section roots whose blocks repeat once per data item. Each collapses to
 #: ``<root>[]`` plus the children of its *first* occurrence, so the fingerprint
 #: is independent of how many pages or captures the campaign produced.
-GROUP_ROOTS: Tuple[str, ...] = ("page", "appendix")
+GROUP_ROOTS: Tuple[str, ...] = ("page", "capture")
 
 PAGE_GROUP = "page[]"  # kept: the page group is named in tests and docs
 ```
@@ -1265,8 +1265,8 @@ def an_appendix_entry(run_id="run_homepage", *, screenshot="data/raw/s.png",
 def test_the_appendix_renders_an_entry_per_capture():
     report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
     html = render_html(report)
-    assert html.count('data-section="appendix.screenshot"') == 1
-    assert html.count('data-section="appendix.requests"') == 1
+    assert html.count('data-section="capture.screenshot"') == 1
+    assert html.count('data-section="capture.requests"') == 1
 
 
 def test_the_request_table_shows_the_url_and_its_transfer_size():
@@ -1308,7 +1308,7 @@ def test_a_cropped_screenshot_says_so_in_the_caption():
 def test_without_images_the_figure_renders_its_empty_state_not_a_broken_img():
     report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
     html = render_html(report)
-    assert 'data-section="appendix.screenshot"' in html
+    assert 'data-section="capture.screenshot"' in html
     assert "data:image" not in html
 
 
@@ -1318,7 +1318,7 @@ def test_a_capture_with_no_requests_still_renders_the_table_block():
                                              degraded=["HAR not retained"])])
     )
     html = render_html(report)
-    assert 'data-section="appendix.requests"' in html
+    assert 'data-section="capture.requests"' in html
     assert "HAR not retained" in html
 
 
@@ -1406,11 +1406,11 @@ Append to `report/template/report.html.j2`, after the methodology section closes
   </p>
 
   {% for entry in report.appendix %}
-  <article data-section="appendix" class="capture">
+  <article data-section="capture" class="capture">
     <h3>{{ entry.page }} <span class="cond">{{ entry.device }} · {{ entry.network }}</span></h3>
     <p class="mono meta-line">{{ entry.run_id }}</p>
 
-    <figure data-section="appendix.screenshot" class="shot">
+    <figure data-section="capture.screenshot" class="shot">
       {% set shot = images.get(entry|entry_key) %}
       {% if shot %}
       <img src="{{ shot.data_uri }}" width="{{ shot.width }}" height="{{ shot.height }}"
@@ -1428,7 +1428,7 @@ Append to `report/template/report.html.j2`, after the methodology section closes
       {% endif %}
     </figure>
 
-    <table data-section="appendix.requests" class="metrics requests">
+    <table data-section="capture.requests" class="metrics requests">
       <caption>
         {% if entry.total_requests %}
         Heaviest {{ entry.requests|length }} of {{ entry.total_requests }} requests ·
@@ -1492,16 +1492,17 @@ Check the variable names against the existing stylesheet and use whatever it alr
 Run: `pytest tests/unit/render_html_test.py -v`
 Expected: PASS.
 
-The baseline is now stale by exactly three entries. Do **not** hunt for a fixture
-report — edit `report/skeleton.baseline.json` by hand, appending the three
+The baseline is now stale by exactly four entries. Do **not** hunt for a fixture
+report — edit `report/skeleton.baseline.json` by hand, appending the four
 entries after `"methodology"`:
 
 ```json
         "comparison",
         "methodology",
-        "appendix[]",
-        "appendix.screenshot",
-        "appendix.requests"
+        "appendix",
+        "capture[]",
+        "capture.screenshot",
+        "capture.requests"
 ```
 
 Hand-editing is correct here precisely because the diff must be reviewable: the
@@ -1513,7 +1514,7 @@ pytest tests/unit/skeleton_test.py::test_the_committed_baseline_matches_the_real
 git diff report/skeleton.baseline.json
 ```
 
-Expected: the test passes, and the diff is exactly three added lines (plus the
+Expected: the test passes, and the diff is exactly four added lines (plus the
 comma on the `"methodology"` line). If the test fails, the template's section
 names or their order differ from what you wrote — fix the baseline to match the
 render, never the reverse. If the diff shows anything else moving, a section
