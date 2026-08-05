@@ -13,13 +13,36 @@ import re
 
 from PIL import Image
 
-from report.images import DATA_URI_PREFIX, embed_png
+from report.images import (
+    DATA_URI_PREFIX,
+    build_appendix_images,
+    embed_png,
+    entry_key,
+)
 
 
 def a_png(tmp_path, *, size=(1440, 900), name="screenshot.png"):
     path = tmp_path / name
     Image.new("RGB", size, (10, 120, 200)).save(path, format="PNG")
     return path
+
+
+class _Entry:
+    """Duck-typed stand-in for `AppendixEntry` — only the fields images.py reads."""
+
+    def __init__(self, *, page, run_id, device, network, screenshot):
+        self.page = page
+        self.run_id = run_id
+        self.device = device
+        self.network = network
+        self.screenshot = screenshot
+
+
+class _Report:
+    """Duck-typed stand-in for `Report` — only the field images.py reads."""
+
+    def __init__(self, appendix):
+        self.appendix = appendix
 
 
 def test_a_screenshot_is_downscaled_to_the_configured_width(tmp_path):
@@ -91,3 +114,39 @@ def test_a_traversal_path_is_refused(tmp_path):
     a_png(tmp_path, name="secret.png")
     assert embed_png(root / ".." / "secret.png", width=720, max_height=1600,
                      root=root) is None
+
+
+def test_a_decompression_bomb_header_returns_none_instead_of_raising(
+    tmp_path, monkeypatch
+):
+    # Image.open() raises DecompressionBombError from the header alone, before
+    # .load() runs, whenever declared width x height clears MAX_IMAGE_PIXELS.
+    # It subclasses Exception directly, not OSError — a naive except clause
+    # lets it escape and take the whole report render down. Lower the limit
+    # rather than generate a genuinely huge file: an ordinary capture crosses
+    # a lowered limit exactly as a huge one crosses the real one.
+    path = a_png(tmp_path, size=(1440, 900))
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1000)
+    assert embed_png(path, width=720, max_height=1600, root=tmp_path) is None
+
+
+def test_build_appendix_images_does_not_let_a_repeated_run_id_collide(tmp_path):
+    # run_id is not unique across appendix entries on the load_runs path
+    # (analysis/reportmodel.py:439-441) — two conditions of the same run can
+    # share one. Keying on run_id alone would let the second screenshot
+    # silently overwrite the first.
+    mobile_shot = a_png(tmp_path, size=(1440, 900), name="mobile.png")
+    desktop_shot = a_png(tmp_path, size=(200, 100), name="desktop.png")
+    mobile = _Entry(page="home", run_id="run-1", device="mobile",
+                     network="slow-4g", screenshot=str(mobile_shot))
+    desktop = _Entry(page="home", run_id="run-1", device="desktop",
+                      network="fast-3g", screenshot=str(desktop_shot))
+    report = _Report([mobile, desktop])
+
+    images = build_appendix_images(report, root=tmp_path, width=720, max_height=1600)
+
+    assert len(images) == 2
+    mobile_key, desktop_key = entry_key(mobile), entry_key(desktop)
+    assert mobile_key != desktop_key
+    assert images[mobile_key].width == 720
+    assert images[desktop_key].width == 200

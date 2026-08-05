@@ -23,7 +23,7 @@ import base64
 import io
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Mapping, Optional
+from typing import Dict, Optional
 
 from PIL import Image, UnidentifiedImageError
 
@@ -70,7 +70,14 @@ def embed_png(
         with Image.open(source) as image:
             image.load()
             picture = image.convert("RGB")
-    except (OSError, UnidentifiedImageError, ValueError):
+    except (OSError, UnidentifiedImageError, ValueError,
+            Image.DecompressionBombError):
+        # DecompressionBombError subclasses Exception directly, not OSError,
+        # and Image.open() raises it from the header alone — before .load()
+        # runs — whenever declared width x height exceeds MAX_IMAGE_PIXELS.
+        # A full-page desktop capture of a long page (e.g. 1920x47000) clears
+        # that bound routinely; it is a bad capture, not an attack, and must
+        # not take the whole render down.
         return None
 
     original_width, original_height = picture.size
@@ -101,10 +108,34 @@ def embed_png(
     )
 
 
+#: ASCII Unit Separator. A non-printable control character, so it cannot
+#: appear in a page name, run id, device, or network label written through
+#: this pipeline's own config/YAML/JSON — those are all human- or
+#: slug-authored text. Joining on it therefore can't fold two distinct
+#: four-part identities into the same string.
+_KEY_SEP = "\x1f"
+
+
+def entry_key(entry) -> str:
+    """The identity of one appendix entry.
+
+    `run_id` alone is not unique — runs loaded straight from `data/processed`
+    carry no uniqueness constraint, which is why the appendix sorts on this
+    same four-part tuple. Keying the image map by `run_id` would let one
+    capture's screenshot overwrite another's, and a report showing the wrong
+    screenshot is worse than one showing no screenshot at all.
+    """
+    return _KEY_SEP.join((entry.page, entry.run_id, entry.device, entry.network))
+
+
 def build_appendix_images(
     report, *, root: str | Path, width: int, max_height: int
 ) -> Dict[str, EmbeddedImage]:
-    """Embed every appendix screenshot, keyed by run id.
+    """Embed every appendix screenshot, keyed by :func:`entry_key`.
+
+    `run_id` alone would collide (see `entry_key`), so the map key is the same
+    four-part identity the appendix itself sorts on — the template must use
+    `entry_key` to look entries up, or the two will disagree about identity.
 
     Entries that cannot be embedded are simply absent from the mapping, which
     is what the template reads as "render the empty state".
@@ -117,5 +148,5 @@ def build_appendix_images(
             entry.screenshot, width=width, max_height=max_height, root=root
         )
         if embedded is not None:
-            images[entry.run_id] = embedded
+            images[entry_key(entry)] = embedded
     return images
