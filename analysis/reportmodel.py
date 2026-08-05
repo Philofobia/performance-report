@@ -212,6 +212,8 @@ class ComparisonRow(BaseModel):
 class CaptureRow(BaseModel):
     page: str
     run_id: str
+    device: str
+    network: str
     screenshot: Optional[str] = None
     har: Optional[str] = None
     trace: Optional[str] = None
@@ -396,6 +398,7 @@ def _methodology(pages: Sequence[PageAnalysis], settings: Settings) -> Methodolo
             run_counts.add(run.condition.runs)
             captures.append(CaptureRow(
                 page=page.page_name, run_id=run.run_id,
+                device=run.condition.device, network=run.condition.network,
                 screenshot=run.captures.screenshot, har=run.captures.har,
                 trace=run.captures.trace,
             ))
@@ -404,7 +407,12 @@ def _methodology(pages: Sequence[PageAnalysis], settings: Settings) -> Methodolo
         devices=sorted(devices),
         networks=sorted(networks),
         runs_per_condition=sorted(run_counts),
-        captures=sorted(captures, key=lambda c: (c.page, c.run_id)),
+        # (page, run_id) alone ties completely when two runs of the same page
+        # share a run_id — real on the load_runs path (see _appendix below,
+        # which required the same fix). device/network break the tie so
+        # this list's order is never left to SQLite's unconstrained row
+        # order on a full tie of created_at/run_id (store/sql.py).
+        captures=sorted(captures, key=lambda c: (c.page, c.run_id, c.device, c.network)),
         thresholds={k: float(v) for k, v in sorted(th.model_dump().items())},
     )
 

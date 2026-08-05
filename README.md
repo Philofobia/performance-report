@@ -12,7 +12,7 @@ comparable, automatable artifact instead of a bespoke write-up.
 **The pipeline is end to end and driven from one command: measurements go in, a
 fixed-skeleton PDF comes out.**
 
-**Working today (phases 0–6, plus 7a):** config and test-matrix resolution · canonical
+**Working today (phases 0–6, plus 7a–7b):** config and test-matrix resolution · canonical
 Pydantic schema · manual ingestion CLI · automated multi-page browser campaigns with
 device and network emulation · SSRF-gated navigation · SQLite run store with scrubbed
 artifacts · RAG over the knowledge base (embeddings, chunking, symptom detection,

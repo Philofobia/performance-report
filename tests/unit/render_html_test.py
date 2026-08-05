@@ -77,7 +77,7 @@ def a_report(pages=("homepage",), *, recommendations=True, mode="llm",
         }
 
     return Report.model_validate({
-        "schema_version": 1,
+        "schema_version": 2,
         "cover": {"project": "storefront", "campaign_id": "storefront-abc12345",
                   "generated_at": datetime(2026, 8, 2, 14, 30, tzinfo=timezone.utc),
                   "pages": list(pages), "verdict": "fail"},
@@ -103,6 +103,7 @@ def a_report(pages=("homepage",), *, recommendations=True, mode="llm",
         "methodology": {"devices": ["mid-mobile"], "networks": ["slow-4g"],
                         "runs_per_condition": [3],
                         "captures": ([{"page": pages[0], "run_id": f"run_{pages[0]}",
+                                       "device": "mid-mobile", "network": "slow-4g",
                                        "screenshot": "shot.png"}] if pages else []),
                         "thresholds": {"lcp_good_ms": 2500, "lcp_fail_ms": 4000,
                                        "cls_good": 0.1, "cls_fail": 0.25,
@@ -327,9 +328,35 @@ def test_an_empty_appendix_still_renders_the_section():
     assert 'data-section="appendix"' in html
 
 
+def test_an_empty_appendix_shares_a_fingerprint_with_a_populated_one():
+    # `Report.appendix` defaults to `[]`, and every report.json written
+    # before this branch loads fine and renders an empty appendix — so this
+    # is the state `--skeleton-check` sees on every archived campaign. The
+    # empty state must carry the same capture[] / capture.screenshot /
+    # capture.requests fingerprint as a populated one, or the drift guard
+    # fires a false positive on every pre-existing report.
+    empty = Report.model_validate(a_report(appendix=[]))
+    populated = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
+    empty_fp = fingerprint(render_html(empty))
+    populated_fp = fingerprint(render_html(populated))
+    assert empty_fp == populated_fp
+    assert empty_fp[-4:] == [
+        "appendix", "capture[]", "capture.screenshot", "capture.requests",
+    ]
+
+
 def test_a_one_capture_and_a_six_capture_report_share_a_fingerprint():
     one = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
     six = Report.model_validate(a_report(appendix=[
         an_appendix_entry(run_id=f"run_{i}") for i in range(6)
     ]))
-    assert fingerprint(render_html(one)) == fingerprint(render_html(six))
+    one_fp = fingerprint(render_html(one))
+    six_fp = fingerprint(render_html(six))
+    assert one_fp == six_fp
+    # Equality alone isn't enough: both sides degrading to the same *empty*
+    # group would satisfy this too (see skeleton_test.py's sibling assertion
+    # at the same fixture shape). Assert the capture children actually
+    # survived the collapse.
+    assert one_fp[-4:] == [
+        "appendix", "capture[]", "capture.screenshot", "capture.requests",
+    ]

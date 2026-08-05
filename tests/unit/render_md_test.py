@@ -146,6 +146,29 @@ def test_a_degraded_capture_states_its_reason_in_the_mirror():
     assert "HAR malformed: line 1" in render_md(report)
 
 
+def test_a_degraded_reason_surfaces_even_when_the_har_parsed_fine():
+    # design §8's "path set, file gone" case: the HAR parses fine (requests
+    # are present, total_requests > 0) but the screenshot file is missing.
+    # The `{% if entry.total_requests %}` branch never sees `degraded` in
+    # that case, and render_md has no images map to notice the screenshot
+    # is gone the way render_html does — so `degraded` is the only signal
+    # the mirror has, and must not stay silent about it.
+    report = Report.model_validate(a_report(appendix=[
+        an_appendix_entry(requests=True, degraded=["screenshot file missing"])
+    ]))
+    md = render_md(report)
+    assert "screenshot file missing" in md
+    # The requests summary line still renders normally alongside it.
+    assert "Heaviest 1 of 214 requests" in md
+
+
+def test_no_screenshot_retained_renders_its_empty_state():
+    report = Report.model_validate(a_report(appendix=[
+        an_appendix_entry(screenshot=None)
+    ]))
+    assert "No screenshot was retained for this capture." in render_md(report)
+
+
 def test_an_empty_appendix_still_renders_the_heading():
     assert "## Appendix" in render_md(Report.model_validate(a_report(appendix=[])))
 

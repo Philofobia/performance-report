@@ -225,8 +225,13 @@ def test_a_zero_top_requests_is_rejected_at_load_time():
 
 
 def test_the_shipped_settings_file_parses_its_appendix_block():
+    # The shipped value (20) deliberately differs from AppendixConfig's
+    # model default (15, asserted above via cl.Settings()) so this test can
+    # actually distinguish "parsed from config/settings.yaml" from "pydantic
+    # defaults fired because the block was never read" — a bare `>= 1` check
+    # passes either way and proves nothing.
     settings = cl.load_settings()
-    assert settings.report.appendix.top_requests >= 1
+    assert settings.report.appendix.top_requests == 20
 
 
 def test_duplicate_page_names_raise(files):

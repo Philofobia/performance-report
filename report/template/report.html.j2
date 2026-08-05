@@ -357,7 +357,23 @@
     {% endif %}
   </article>
   {% else %}
-  <p class="empty">No captures were recorded for this campaign.</p>
+  <article data-section="capture" class="capture">
+    <p class="empty">No captures were recorded for this campaign.</p>
+
+    <figure data-section="capture.screenshot" class="shot">
+      <p class="empty">No screenshot was embedded for this capture.</p>
+    </figure>
+
+    <table data-section="capture.requests" class="metrics requests">
+      <caption>No requests were available for this capture</caption>
+      <thead>
+        <tr><th>Request</th><th>Type</th><th>Status</th><th>Transfer</th><th>Time</th></tr>
+      </thead>
+      <tbody>
+        <tr><td colspan="5" class="empty">No requests recorded.</td></tr>
+      </tbody>
+    </table>
+  </article>
   {% endfor %}
 </section>
 

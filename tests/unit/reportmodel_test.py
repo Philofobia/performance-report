@@ -364,3 +364,20 @@ def test_appendix_breaks_ties_on_device_and_network_when_run_ids_collide():
     assert [(e.device, e.network) for e in report.appendix] == [
         ("desktop", "fast-3g"), ("mid-mobile", "slow-4g"),
     ]
+
+
+def test_methodology_captures_break_ties_on_device_and_network_too():
+    # Same collision as above, but on methodology.captures: store/sql.py
+    # orders rows by (created_at DESC, run_id DESC), so a full tie on both
+    # leaves SQLite's row order unconstrained. (page, run_id) alone is not a
+    # total order; device/network must break the tie deterministically here
+    # exactly as they do for the appendix, or the two lists can disagree.
+    page = a_page()
+    page.runs = [
+        make_run("run_x", device="mid-mobile", network="slow-4g"),
+        make_run("run_x", device="desktop", network="fast-3g"),
+    ]
+    report = build([page])
+    assert [(c.device, c.network) for c in report.methodology.captures] == [
+        ("desktop", "fast-3g"), ("mid-mobile", "slow-4g"),
+    ]

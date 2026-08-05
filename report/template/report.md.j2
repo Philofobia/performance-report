@@ -110,10 +110,14 @@ conditions. They are comparable run to run, and are not field data.
 _No screenshot was retained for this capture._
 {% endif %}
 
+{% if entry.degraded %}
+_Capture recorded issues: {{ entry.degraded|map('table_cell')|join('; ') }}_
+{% endif %}
+
 {% if entry.total_requests %}
 Heaviest {{ entry.requests|length }} of {{ entry.total_requests }} requests · {{ entry.total_transfer_bytes|transfer_size }} transferred in total.
 {% else %}
-_{{ entry.degraded|map('table_cell')|join('; ') if entry.degraded else 'No requests were recorded for this capture.' }}_
+_No requests were recorded for this capture._
 {% endif %}
 
 | Request | Type | Status | Transfer | Time (ms) |
