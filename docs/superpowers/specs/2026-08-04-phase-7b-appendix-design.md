@@ -138,8 +138,16 @@ the file they opened is the file the report was built from.
 
 ### 4.1 Ordering
 
-Entries sort by `(page, run_id)` — the key `methodology.captures` already uses,
-so the two lists read in the same order.
+Entries sort by `(page, run_id, device, network)`, and `methodology.captures`
+was given the same key, so the two lists read in the same order.
+
+`(page, run_id)` alone is not enough: two runs of one page can share a `run_id`
+on the `load_runs` path, which reads `data/processed/*.json` with no uniqueness
+constraint. On such a tie the order fell back to input position — and for
+`methodology.captures` that position came from `store/sql.py`'s
+`ORDER BY created_at DESC, run_id DESC`, which is itself unconstrained when both
+columns tie. `CaptureRow` gained `device` and `network` so it could carry the
+key rather than sort on something it does not hold.
 
 Rows sort by `(transfer_bytes is None, -transfer_bytes, url, index)` — known
 sizes first, heaviest first within that group, unknown-size rows always last
