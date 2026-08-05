@@ -6,6 +6,7 @@ in this repo where a browser is required for rendering.
 from __future__ import annotations
 
 import re
+import warnings
 
 import numpy as np
 import pytest
@@ -87,9 +88,16 @@ def test_an_embedded_screenshot_reaches_the_pdf(tmp_path):
     pipeline, which a byte count alone cannot distinguish from an unrelated
     change in page content (font subsetting, empty-state caption text, etc).
 
-    The size comparison is kept as a secondary sanity check, satisfied here
-    because the fixture image has real entropy — but it is not the check
-    doing the proving.
+    The size comparison is *not* re-asserted here, even as a "secondary"
+    check: an `assert` gates pass/fail exactly like the primary check does,
+    and the same probe that discredited it as the primary signal (a
+    flat-colour screenshot compresses smaller than the caption it replaces)
+    means nothing pins the margin staying positive for this gradient fixture
+    either — a future Chromium/Skia compression change, or a smoother
+    capture, could flip it and fail this test for a reason unrelated to the
+    feature. It is instead recorded as a non-gating observation (a warning,
+    only surfaced when it doesn't hold) so a human notices without a run
+    failing on it.
     """
     screenshot = _a_realistic_screenshot(tmp_path / "shot.png")
     report = Report.model_validate(
@@ -109,6 +117,18 @@ def test_an_embedded_screenshot_reaches_the_pdf(tmp_path):
     assert not _pdf_has_image_xobject(
         without_images, width=embedded.width, height=embedded.height
     )
-    # Secondary, weaker signal — true for this entropy-rich fixture, but not
-    # by itself proof of anything (see docstring above).
-    assert len(with_images) > len(without_images)
+
+    # Non-gating observation, not an assertion (see docstring): the size
+    # comparison is fragile to compression changes, so a shrink is reported
+    # to a human rather than failing a run over a signal already shown to be
+    # unreliable on its own.
+    if len(with_images) <= len(without_images):
+        warnings.warn(
+            "the PDF with the embedded screenshot was not larger than the "
+            "one without it (with=%d bytes, without=%d bytes) — the image "
+            "XObject checks above still passed, so this is not a failure, "
+            "but the size margin this test previously relied on as a "
+            "secondary signal no longer holds and is worth a look."
+            % (len(with_images), len(without_images)),
+            stacklevel=2,
+        )
