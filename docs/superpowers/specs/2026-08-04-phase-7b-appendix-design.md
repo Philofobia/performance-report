@@ -320,6 +320,28 @@ PDF size grows materially — six 720px captures is roughly 1–3 MB against the
 current tens of KB. That is the feature working, not a regression, but it is
 worth stating: the report becomes an artifact you attach rather than paste.
 
+## 11a. Known limitations
+
+Two things the final review surfaced that ship as-is, recorded so nobody has to
+rediscover them.
+
+**A request with no recorded size renders "0 B", not "—".** §4 types
+`RequestRow.transfer_bytes` as a non-Optional `int`, and `entry_transfer_bytes`
+returns `0` when `_transferSize`, `bodySize` and `headersSize` are all absent —
+indistinguishable from a confirmed zero. That violates the project's rule that a
+value which does not exist prints `—`, never `0`, and the rule is stated in
+`transfer_size`'s own docstring. The branch honours it everywhere the value can
+actually be `None`; the appendix table is the one place the type forbids `None`
+so the `—` branch is unreachable. Cache hits legitimately transfer zero bytes and
+the size ranking is unaffected, so this is cosmetic rather than misleading — but
+fixing it properly means making the field Optional, which is a schema change.
+
+**Markdown screenshot paths are not confined to the artifacts root.**
+`report/images.py` refuses to *open* any path outside `settings.storage.raw_dir`,
+because embedding reads the file. `render_md.link_path` only *writes* the path
+into a link and never reads it, so there is nothing to disclose and no check is
+applied. The asymmetry is deliberate, not an oversight.
+
 ## 12. Configuration
 
 ```yaml
