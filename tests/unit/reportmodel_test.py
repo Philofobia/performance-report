@@ -32,13 +32,22 @@ def a_png_file(tmp_path, name="screenshot.png"):
 
 
 def a_har_file(tmp_path, *, sizes=(1000,), name="capture.har"):
+    """A HAR with one entry per size. ``None`` in ``sizes`` omits every size
+    field on that entry, so it round-trips as an unknown-size request rather
+    than a confirmed zero.
+    """
     import json as _json
+
+    def response(size):
+        base = {"status": 200, "content": {"mimeType": "text/javascript"}}
+        if size is not None:
+            base["_transferSize"] = size
+        return base
 
     entries = [
         {"time": 10.0,
          "request": {"url": f"https://example.com/{i}.js"},
-         "response": {"status": 200, "_transferSize": size,
-                      "content": {"mimeType": "text/javascript"}}}
+         "response": response(size)}
         for i, size in enumerate(sizes)
     ]
     path = tmp_path / name
@@ -325,6 +334,26 @@ def test_a_capture_with_no_artifacts_degrades_without_dropping_the_entry():
     assert report.appendix[0].degraded == [
         "screenshot not retained", "HAR not retained",
     ]
+
+
+def test_a_request_with_no_recorded_size_carries_none_not_zero(tmp_path):
+    # RequestRow.transfer_bytes must stay Optional end-to-end through
+    # build_report — a size the HAR never carried must not become 0.
+    report = a_report_with_captures(har=a_har_file(tmp_path, sizes=(None,)))
+    entry = report.appendix[0]
+    assert entry.requests[0].transfer_bytes is None
+
+
+def test_the_entry_total_is_none_when_not_one_request_has_a_known_size(tmp_path):
+    report = a_report_with_captures(har=a_har_file(tmp_path, sizes=(None, None)))
+    assert report.appendix[0].total_transfer_bytes is None
+
+
+def test_the_entry_total_sums_only_the_requests_with_a_known_size(tmp_path):
+    report = a_report_with_captures(har=a_har_file(tmp_path, sizes=(9000, None)))
+    entry = report.appendix[0]
+    assert [r.transfer_bytes for r in entry.requests] == [9000, None]
+    assert entry.total_transfer_bytes == 9000
 
 
 def test_degraded_entries_are_counted_in_meta():

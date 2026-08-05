@@ -94,7 +94,7 @@ class RequestRow(BaseModel):
     url: str                       # re-passed through store.artifacts.redact_url
     resource_type: str             # img/script/stylesheet/font/document/media/other
     status: Optional[int] = None
-    transfer_bytes: int = 0
+    transfer_bytes: Optional[int] = None   # None when the capture never recorded a size
     duration_ms: Optional[float] = None
 
 
@@ -109,9 +109,21 @@ class AppendixEntry(BaseModel):
     har_bytes: Optional[int] = None
     requests: List[RequestRow] = []        # the top N
     total_requests: int = 0                # the true count, so N stays honest
-    total_transfer_bytes: int = 0
+    total_transfer_bytes: Optional[int] = None
     degraded: List[str] = []
 ```
+
+**`transfer_bytes` is `Optional[int]`, not a non-Optional `int` defaulting to
+`0`.** A request the capture never recorded a size for must render as `—`, the
+same rule every other absent measurement in this report follows — a value that
+does not exist must never print as a confirmed zero. `total_transfer_bytes`
+follows the same rule at the entry level: it is the sum of the rows whose size
+is *known*, not `len(requests)` rows zero-filled. It is `None` only when not
+one row in the capture carries a known size; an entry with zero requests still
+sums to a real `0`, and an entry with a mix of known and unknown rows sums just
+the known ones — a partial total is real information, and folding the unknown
+rows in as zero would silently understate it. See §5 for where `None` first
+enters (`entry_transfer_bytes`) and §4.1 for how it sorts.
 
 `Report.appendix: List[AppendixEntry]` and
 `ReportMeta.degraded_appendix_entries: int`.
@@ -129,10 +141,14 @@ the file they opened is the file the report was built from.
 Entries sort by `(page, run_id)` — the key `methodology.captures` already uses,
 so the two lists read in the same order.
 
-Rows sort by `(-transfer_bytes, url)`. The URL tie-break matters: two requests
-with identical byte counts are common (empty 204s, identically-sized sprites),
-and without it their order comes from dict iteration and the report stops being
-reproducible.
+Rows sort by `(transfer_bytes is None, -transfer_bytes, url, index)` — known
+sizes first, heaviest first within that group, unknown-size rows always last
+regardless of magnitude, since a row with no recorded size cannot be claimed to
+be the heaviest. The URL tie-break matters: two requests with identical byte
+counts are common (empty 204s, identically-sized sprites), and without it their
+order comes from dict iteration and the report stops being reproducible. The
+original index is the final tie-break, needed because URL and size together are
+still not quite total (a duplicated request can share both).
 
 ### 4.2 `methodology.captures` is left alone
 
@@ -151,10 +167,15 @@ helpers (`read_har`, `summarize_capture`), and neither raises: something has to
 open the file, and keeping that here means HAR handling lives in one module
 rather than being split across two.
 
-- **Transfer size** from `entry.response._transferSize` when present, falling
-  back to `response.bodySize + response.headersSize`, clamped at zero. A HAR
-  from a cache hit reports `-1`; a negative byte count in a size table is worse
-  than a zero.
+- **Transfer size** from `entry.response._transferSize` when present — including
+  `0`, a real confirmed zero — falling back to `response.bodySize +
+  response.headersSize` (summed where positive) when it is absent. A HAR from a
+  cache hit reports `-1` for `_transferSize`; that is not a negative transfer,
+  it is a cache hit that genuinely moved nothing, so it clamps to `0` rather
+  than sorting to the bottom as if it were corrupt. When none of the three
+  fields carry a usable number, the size is `None` — unknown, never `0`, since
+  `0` would read as "this request was free" instead of "this was never
+  measured".
 - **Resource type** from Playwright's `_resourceType` when present, else derived
   from `response.content.mimeType`, else from the URL extension, else `other`.
   Derivation is a pure lookup so the same HAR always classifies the same way.
@@ -322,19 +343,22 @@ worth stating: the report becomes an artifact you attach rather than paste.
 
 ## 11a. Known limitations
 
-Two things the final review surfaced that ship as-is, recorded so nobody has to
-rediscover them.
+One thing the final review surfaced shipped as-is for a short while, then was
+resolved before this branch merged: see the follow-up note below. One
+remaining limitation is recorded so nobody has to rediscover it.
 
-**A request with no recorded size renders "0 B", not "—".** §4 types
-`RequestRow.transfer_bytes` as a non-Optional `int`, and `entry_transfer_bytes`
-returns `0` when `_transferSize`, `bodySize` and `headersSize` are all absent —
-indistinguishable from a confirmed zero. That violates the project's rule that a
-value which does not exist prints `—`, never `0`, and the rule is stated in
-`transfer_size`'s own docstring. The branch honours it everywhere the value can
-actually be `None`; the appendix table is the one place the type forbids `None`
-so the `—` branch is unreachable. Cache hits legitimately transfer zero bytes and
-the size ranking is unaffected, so this is cosmetic rather than misleading — but
-fixing it properly means making the field Optional, which is a schema change.
+**Resolved — a request with no recorded size no longer renders "0 B".**
+`RequestRow.transfer_bytes` and `AppendixEntry.total_transfer_bytes` are both
+`Optional[int]`, `entry_transfer_bytes` returns `None` (never `0`) when
+`_transferSize`, `bodySize` and `headersSize` are all absent or unusable, and
+`_sort_key` sorts unknown-size rows after every known one so the ranking stays
+honest about what it doesn't know. `0` stays reachable and distinct — a
+confirmed `_transferSize: 0` and a cache hit's `-1` both still render "0 B" —
+so a real zero and an unmeasured request are no longer the same table cell.
+See §4 and §5 for the resolved semantics; this was a genuine schema change
+(`RequestRow.transfer_bytes` and `AppendixEntry.total_transfer_bytes` both
+moved from non-Optional to `Optional`), landed without bumping
+`SCHEMA_VERSION` because the branch is unreleased.
 
 **Markdown screenshot paths are not confined to the artifacts root.**
 `report/images.py` refuses to *open* any path outside `settings.storage.raw_dir`,

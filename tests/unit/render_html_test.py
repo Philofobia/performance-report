@@ -5,6 +5,7 @@ tested as a security property, not a nicety.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 from analysis.reportmodel import Report
@@ -245,19 +246,27 @@ def test_build_charts_returns_one_entry_per_page():
     assert charts["comparison"]
 
 
+_UNSET = object()
+
+
 def an_appendix_entry(run_id="run_homepage", *, screenshot="data/raw/s.png",
-                      requests=True, degraded=()):
+                      requests=True, degraded=(), request_rows=None,
+                      total_transfer_bytes=_UNSET):
+    default_rows = [
+        {"url": "https://example.com/hero.mp4", "resource_type": "media",
+         "status": 200, "transfer_bytes": 4_200_000, "duration_ms": 3100.0},
+    ] if requests else []
+    rows = default_rows if request_rows is None else list(request_rows)
+    if total_transfer_bytes is _UNSET:
+        total_transfer_bytes = 8_100_000 if requests else 0
     return {
         "page": "homepage", "run_id": run_id,
         "device": "mid-mobile", "network": "slow-4g",
         "screenshot": screenshot, "har": "data/raw/capture.har",
         "har_sha256": "a" * 64, "har_bytes": 4096,
-        "requests": [
-            {"url": "https://example.com/hero.mp4", "resource_type": "media",
-             "status": 200, "transfer_bytes": 4_200_000, "duration_ms": 3100.0},
-        ] if requests else [],
+        "requests": rows,
         "total_requests": 214 if requests else 0,
-        "total_transfer_bytes": 8_100_000 if requests else 0,
+        "total_transfer_bytes": total_transfer_bytes,
         "degraded": list(degraded),
     }
 
@@ -279,6 +288,39 @@ def test_the_request_table_shows_the_url_and_its_transfer_size():
 def test_the_true_request_count_is_stated_beside_the_truncated_table():
     report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
     assert "214" in render_html(report)
+
+
+def test_unknown_and_zero_transfer_size_render_differently_in_the_same_table():
+    # The whole point of the fix: a request whose size was never recorded
+    # must not read the same as a request that genuinely transferred zero
+    # bytes. Both rows sit in the same table so the two dashes/values can be
+    # told apart by more than test isolation.
+    report = Report.model_validate(a_report(appendix=[an_appendix_entry(
+        request_rows=[
+            {"url": "https://example.com/cached.js", "resource_type": "script",
+             "status": 304, "transfer_bytes": 0, "duration_ms": 5.0},
+            {"url": "https://example.com/unmeasured.js", "resource_type": "script",
+             "status": 200, "transfer_bytes": None, "duration_ms": 12.0},
+        ],
+        total_transfer_bytes=0,
+    )]))
+    html = render_html(report)
+    rows = re.findall(r"<tr>.*?</tr>", html, flags=re.S)
+    cached_row = next(r for r in rows if "cached.js" in r)
+    unmeasured_row = next(r for r in rows if "unmeasured.js" in r)
+    assert "<td>0 B</td>" in cached_row
+    assert "<td>—</td>" in unmeasured_row
+    assert "0 B" not in unmeasured_row
+    assert "—</td>" not in cached_row
+
+
+def test_an_unknown_total_reads_sensibly_rather_than_a_bare_dash():
+    report = Report.model_validate(a_report(appendix=[an_appendix_entry(
+        total_transfer_bytes=None,
+    )]))
+    html = render_html(report)
+    assert "total transferred size unknown" in html
+    assert "— transferred in total" not in html
 
 
 def test_a_screenshot_is_embedded_when_an_image_is_supplied():

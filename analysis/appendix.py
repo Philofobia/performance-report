@@ -61,11 +61,22 @@ _EXTENSIONS = {
 
 @dataclass(frozen=True)
 class HarSummary:
-    """The appendix's view of one capture's requests."""
+    """The appendix's view of one capture's requests.
+
+    ``total_transfer_bytes`` is the sum of the rows whose size is *known*
+    (``transfer_bytes is not None``). An empty ``rows`` list sums to a real
+    ``0`` — zero requests genuinely transferred zero bytes. A non-empty
+    ``rows`` list where every row's size is unknown sums to ``None`` instead:
+    claiming "0 bytes" for a capture that plainly made requests would be the
+    exact "missing measurement reads as a perfect one" bug this module exists
+    to avoid. A capture with a mix of known and unknown rows sums only the
+    known ones — a partial total is still real information, and treating the
+    unknown rows as zero would understate it silently.
+    """
 
     rows: List[Dict[str, Any]]
     total_requests: int
-    total_transfer_bytes: int
+    total_transfer_bytes: Optional[int]
 
 
 @dataclass(frozen=True)
@@ -76,7 +87,7 @@ class CaptureSummary:
     har_bytes: Optional[int] = None
     requests: List[Dict[str, Any]] = field(default_factory=list)
     total_requests: int = 0
-    total_transfer_bytes: int = 0
+    total_transfer_bytes: Optional[int] = None
     degraded: List[str] = field(default_factory=list)
 
 
@@ -118,12 +129,20 @@ def classify(entry: Mapping[str, Any]) -> str:
     return _EXTENSIONS.get(suffix, "other")
 
 
-def entry_transfer_bytes(entry: Mapping[str, Any]) -> int:
-    """Bytes on the wire for one entry, never negative.
+def entry_transfer_bytes(entry: Mapping[str, Any]) -> Optional[int]:
+    """Bytes on the wire for one entry, or ``None`` when the capture never
+    recorded a size for it.
 
-    ``_transferSize`` is authoritative when present. A response served from
-    cache reports ``-1``, and a negative number in a size table is worse than a
-    zero — it sorts to the bottom and reads as corrupt data.
+    ``_transferSize`` is authoritative when present, including ``0`` — a real,
+    confirmed zero. A response served from cache reports ``-1``; that is not a
+    negative transfer, it is a cache hit that genuinely moved nothing, so it
+    clamps to ``0`` rather than sorting to the bottom as if it were corrupt.
+
+    When ``_transferSize`` is absent, ``bodySize``/``headersSize`` (summed
+    where positive) stand in. When none of the three fields carry a usable
+    number, the size is unknown and this returns ``None`` — never ``0``, which
+    would read as "this request was free" rather than "this was never
+    measured".
     """
     response = _response(entry)
     size = response.get("_transferSize")
@@ -133,10 +152,12 @@ def entry_transfer_bytes(entry: Mapping[str, Any]) -> int:
     body = response.get("bodySize")
     headers = response.get("headersSize")
     total = 0
+    known = False
     for part in (body, headers):
         if isinstance(part, (int, float)) and part > 0:
             total += int(part)
-    return total
+            known = True
+    return total if known else None
 
 
 def _row(entry: Mapping[str, Any]) -> Dict[str, Any]:
@@ -147,15 +168,21 @@ def _row(entry: Mapping[str, Any]) -> Dict[str, Any]:
         "url": redact_url(_url(entry)),
         "resource_type": classify(entry),
         "status": int(status) if isinstance(status, (int, float)) else None,
+        # Absent, not zero: a missing measurement must never read as a
+        # perfect one. transfer_bytes and duration_ms both follow this rule.
         "transfer_bytes": entry_transfer_bytes(entry),
-        # Absent, not zero: the run listing already established that a missing
-        # measurement must never read as a perfect one.
         "duration_ms": round(float(time), 3) if isinstance(time, (int, float)) else None,
     }
 
 
-def _sort_key(indexed_row: Tuple[int, Dict[str, Any]]) -> Tuple[int, str, int]:
-    """The total order used to rank HAR rows: heaviest first, ties broken deterministically.
+def _sort_key(indexed_row: Tuple[int, Dict[str, Any]]) -> Tuple[bool, int, str, int]:
+    """The total order used to rank HAR rows: heaviest first, unknown-size
+    rows last, ties broken deterministically.
+
+    A row whose size is unknown cannot be claimed to be the heaviest, so
+    ``transfer_bytes is None`` sorts first in the key — ``False`` (known)
+    before ``True`` (unknown) — pushing every unknown-size row after every
+    known one regardless of magnitude.
 
     Size and URL alone are not a total order — two entries can share both (a
     tracking pixel fired twice, a duplicated script request), and a key that
@@ -165,7 +192,8 @@ def _sort_key(indexed_row: Tuple[int, Dict[str, Any]]) -> Tuple[int, str, int]:
     what makes this a total order rather than a merely-usually-sufficient one.
     """
     index, row = indexed_row
-    return (-row["transfer_bytes"], row["url"], index)
+    size = row["transfer_bytes"]
+    return (size is None, -(size or 0), row["url"], index)
 
 
 def reduce_har(har: Mapping[str, Any], *, top_n: int = 15) -> HarSummary:
@@ -187,10 +215,15 @@ def reduce_har(har: Mapping[str, Any], *, top_n: int = 15) -> HarSummary:
     # `_sort_key` for why the index is also part of the key.
     indexed = sorted(enumerate(rows), key=_sort_key)
     rows = [row for _, row in indexed]
+    known_sizes = [r["transfer_bytes"] for r in rows if r["transfer_bytes"] is not None]
+    # See HarSummary's docstring: sum the known rows; None only when rows
+    # exist but not one of them carries a known size. Zero rows sums to a
+    # real 0 (nothing to be unknown about).
+    total_transfer_bytes = None if (rows and not known_sizes) else sum(known_sizes)
     return HarSummary(
         rows=rows[: max(0, int(top_n))],
         total_requests=len(rows),
-        total_transfer_bytes=sum(r["transfer_bytes"] for r in rows),
+        total_transfer_bytes=total_transfer_bytes,
     )
 
 

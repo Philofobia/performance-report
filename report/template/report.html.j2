@@ -323,7 +323,11 @@
       <caption>
         {% if entry.total_requests %}
         Heaviest {{ entry.requests|length }} of {{ entry.total_requests }} requests ·
+        {% if entry.total_transfer_bytes is not none %}
         {{ entry.total_transfer_bytes|transfer_size }} transferred in total
+        {% else %}
+        total transferred size unknown
+        {% endif %}
         {% else %}
         No requests were available for this capture
         {% endif %}

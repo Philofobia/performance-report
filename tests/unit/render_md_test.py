@@ -182,6 +182,34 @@ def test_the_har_size_is_stated_through_the_same_filter_as_the_html():
     assert transfer_size(entry.har_bytes) in md
 
 
+def test_unknown_and_zero_transfer_size_render_differently_in_the_markdown_table():
+    report = Report.model_validate(a_report(appendix=[an_appendix_entry(
+        request_rows=[
+            {"url": "https://example.com/cached.js", "resource_type": "script",
+             "status": 304, "transfer_bytes": 0, "duration_ms": 5.0},
+            {"url": "https://example.com/unmeasured.js", "resource_type": "script",
+             "status": 200, "transfer_bytes": None, "duration_ms": 12.0},
+        ],
+        total_transfer_bytes=0,
+    )]))
+    md = render_md(report)
+    cached_row = next(line for line in md.splitlines() if "cached.js" in line)
+    unmeasured_row = next(line for line in md.splitlines() if "unmeasured.js" in line)
+    assert "| 0 B |" in cached_row
+    assert "| — |" in unmeasured_row
+    assert "0 B" not in unmeasured_row
+    assert "| — |" not in cached_row
+
+
+def test_an_unknown_total_reads_sensibly_in_the_markdown_mirror():
+    report = Report.model_validate(a_report(appendix=[an_appendix_entry(
+        total_transfer_bytes=None,
+    )]))
+    md = render_md(report)
+    assert "total transferred size unknown" in md
+    assert "— transferred in total" not in md
+
+
 def test_a_pipe_in_a_url_does_not_shift_the_table_columns():
     report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
     entry = report.appendix[0]

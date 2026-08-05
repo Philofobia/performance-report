@@ -87,8 +87,9 @@ def test_top_n_truncates_but_totals_describe_the_whole_capture():
 
 
 def test_negative_transfer_size_from_a_cache_hit_clamps_to_zero():
-    # A HAR reports -1 for a served-from-cache response. A negative byte count
-    # in a size table is worse than a zero.
+    # A HAR reports -1 for a served-from-cache response. A cache hit genuinely
+    # transferred nothing, so this is a real zero — not the same thing as
+    # "unknown", which is why it must not clamp to None instead.
     assert entry_transfer_bytes(an_entry(size=-1)) == 0
 
 
@@ -96,6 +97,76 @@ def test_transfer_size_falls_back_to_body_plus_headers():
     entry = {"request": {"url": "https://example.com/a.js"},
              "response": {"bodySize": 900, "headersSize": 100}}
     assert entry_transfer_bytes(entry) == 1000
+
+
+def test_a_confirmed_zero_transfer_size_is_not_unknown():
+    # `_transferSize: 0` is a real, recorded zero (e.g. a 304 Not Modified).
+    # It must stay distinguishable from a size that was never recorded.
+    assert entry_transfer_bytes(an_entry(size=0)) == 0
+    assert entry_transfer_bytes(an_entry(size=0)) is not None
+
+
+def test_transfer_size_is_none_when_no_size_field_is_present_at_all():
+    # No `_transferSize`, no `bodySize`, no `headersSize`: the capture never
+    # recorded a size for this request. `0` would read as "this request was
+    # free", which is exactly the reading the project's `—` rule forbids.
+    entry = {"request": {"url": "https://example.com/a.js"}, "response": {}}
+    assert entry_transfer_bytes(entry) is None
+
+
+def test_transfer_size_is_none_when_body_and_headers_are_present_but_not_positive():
+    # bodySize/headersSize of 0 are not treated as a confirmed zero sum here —
+    # only a positive contribution counts as "known" for the fallback path.
+    entry = {"request": {"url": "https://example.com/a.js"},
+             "response": {"bodySize": 0, "headersSize": 0}}
+    assert entry_transfer_bytes(entry) is None
+
+
+def test_rows_with_unknown_size_sort_after_every_known_row():
+    har = a_har([
+        {"request": {"url": "https://example.com/unknown.js"}, "response": {}},
+        an_entry("https://example.com/tiny.js", size=1),
+    ])
+    rows = reduce_har(har, top_n=10).rows
+    assert [r["url"] for r in rows] == [
+        "https://example.com/tiny.js",
+        "https://example.com/unknown.js",
+    ]
+    assert rows[-1]["transfer_bytes"] is None
+
+
+def test_the_sort_key_is_total_even_when_two_rows_both_have_unknown_size():
+    # Same argument as the existing total-order test, but for the branch that
+    # is new here: two distinct rows that are both unknown-size must still get
+    # distinct, comparable keys rather than raising or colliding.
+    row = {"url": "https://example.com/dup.js", "transfer_bytes": None}
+    key_first = _sort_key((0, row))
+    key_second = _sort_key((1, row))
+    assert key_first != key_second
+    assert sorted([key_second, key_first]) == [key_first, key_second]
+
+
+def test_total_transfer_bytes_is_none_when_not_one_row_has_a_known_size():
+    har = a_har([{"request": {"url": "https://example.com/a.js"}, "response": {}}])
+    summary = reduce_har(har, top_n=5)
+    assert summary.total_transfer_bytes is None
+
+
+def test_total_transfer_bytes_sums_only_the_rows_that_are_known():
+    # A capture with a mix of known and unknown rows reports the sum of the
+    # known ones — a partial total is real information; folding the unknown
+    # rows in as zero would silently understate it. The unknown row's own
+    # transfer_bytes must stay None rather than be coerced to 0 in the row
+    # itself — asserting only the total would pass even against the old
+    # "absent means 0" code, since 0 is the identity for sum().
+    har = a_har([
+        an_entry("https://example.com/a.js", size=1000),
+        {"request": {"url": "https://example.com/b.js"}, "response": {}},
+    ])
+    summary = reduce_har(har, top_n=5)
+    assert summary.total_transfer_bytes == 1000
+    unknown_row = next(r for r in summary.rows if r["url"].endswith("b.js"))
+    assert unknown_row["transfer_bytes"] is None
 
 
 def test_resource_type_prefers_playwrights_own_label():

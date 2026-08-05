@@ -225,7 +225,10 @@ class RequestRow(BaseModel):
     url: str
     resource_type: str = "other"
     status: Optional[int] = None
-    transfer_bytes: int = 0
+    #: `None` when the capture never recorded a size for this request —
+    #: distinct from a confirmed `0` (e.g. a cache hit). Rendered as `—`,
+    #: never `0`: see `report/render_html.py:transfer_size`.
+    transfer_bytes: Optional[int] = None
     duration_ms: Optional[float] = None
 
 
@@ -250,7 +253,13 @@ class AppendixEntry(BaseModel):
     har_bytes: Optional[int] = None
     requests: List[RequestRow] = Field(default_factory=list)
     total_requests: int = 0
-    total_transfer_bytes: int = 0
+    #: Sum of the KNOWN row sizes (`RequestRow.transfer_bytes is not None`),
+    #: not `len(requests)` zero-filled. `None` only when not one row in the
+    #: capture carries a known size — an empty `requests` list still sums to
+    #: a real `0`. A capture with a mix of known and unknown rows sums just
+    #: the known ones: a partial total is real information, and folding the
+    #: unknown rows in as zero would silently understate it.
+    total_transfer_bytes: Optional[int] = None
     degraded: List[str] = Field(default_factory=list)
 
 
