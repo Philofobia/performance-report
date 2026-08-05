@@ -100,18 +100,43 @@ def test_the_screenshot_is_linked_relative_to_the_report(tmp_path):
     assert "../../raw/homepage/screenshot.png" in md.replace("\\", "/")
 
 
-def test_an_unrelatable_path_falls_back_to_absolute(tmp_path):
-    # Windows: a report on C: and artifacts on D: have no relative path.
+def test_no_base_dir_links_the_absolute_path():
+    # Without a base_dir there is nothing to compute a relative path against,
+    # so the screenshot is linked absolutely. This does not exercise the
+    # os.path.relpath ValueError fallback — see the cross-drive test below,
+    # which does, by monkeypatching relpath rather than by omitting base_dir.
     report = Report.model_validate(
-        a_report(appendix=[an_appendix_entry(screenshot=str(tmp_path / "s.png"))])
+        a_report(appendix=[an_appendix_entry(screenshot="/abs/shot.png")])
     )
     md = render_md(report, base_dir=None)
-    assert str(tmp_path / "s.png").replace("\\", "/") in md.replace("\\", "/")
+    assert "/abs/shot.png" in md.replace("\\", "/")
+
+
+def test_a_cross_drive_path_falls_back_to_absolute(tmp_path, monkeypatch):
+    # Windows: a report on C: and artifacts on D: have no relative path, and
+    # os.path.relpath raises ValueError rather than returning something
+    # usable. A real base_dir is passed so the `if base_dir is not None`
+    # branch is taken and the try/except is the code path actually under
+    # test — passing base_dir=None here would never reach os.path.relpath at
+    # all, which is exactly the bug this replaces.
+    import report.render_md as render_md_module
+
+    def raise_value_error(*_args, **_kwargs):
+        raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+    monkeypatch.setattr(render_md_module.os.path, "relpath", raise_value_error)
+
+    shot = tmp_path / "shot.png"
+    report = Report.model_validate(
+        a_report(appendix=[an_appendix_entry(screenshot=str(shot))])
+    )
+    md = render_md(report, base_dir=tmp_path / "reports")
+    assert str(shot).replace("\\", "/") in md.replace("\\", "/")
 
 
 def test_the_request_table_is_a_markdown_table():
     md = render_md(Report.model_validate(a_report(appendix=[an_appendix_entry()])))
-    assert "| Request | Type | Status | Transfer | Time |" in md
+    assert "| Request | Type | Status | Transfer | Time (ms) |" in md
 
 
 def test_a_degraded_capture_states_its_reason_in_the_mirror():
@@ -123,3 +148,29 @@ def test_a_degraded_capture_states_its_reason_in_the_mirror():
 
 def test_an_empty_appendix_still_renders_the_heading():
     assert "## Appendix" in render_md(Report.model_validate(a_report(appendix=[])))
+
+
+def test_the_har_size_is_stated_through_the_same_filter_as_the_html():
+    report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
+    md = render_md(report)
+    entry = report.appendix[0]
+    from report.render_html import transfer_size
+
+    assert transfer_size(entry.har_bytes) in md
+
+
+def test_a_pipe_in_a_url_does_not_shift_the_table_columns():
+    report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
+    entry = report.appendix[0]
+    entry.requests[0].url = "https://example.com/hero.mp4?a=1|b=2"
+    md = render_md(report)
+    row = next(
+        line for line in md.splitlines() if "hero.mp4" in line and line.startswith("|")
+    )
+    assert "a=1\\|b=2" in row
+    # A GFM parser stops at an unescaped `|`; splitting on one that isn't
+    # preceded by a backslash is exactly what it does. 5 columns delimited by
+    # leading/trailing pipes split into 7 parts (2 empty boundaries + 5 cells)
+    # -- the escaped pipe inside the URL must not add an 8th.
+    cells = re.split(r"(?<!\\)\|", row)
+    assert len(cells) == 7

@@ -113,17 +113,17 @@ _No screenshot was retained for this capture._
 {% if entry.total_requests %}
 Heaviest {{ entry.requests|length }} of {{ entry.total_requests }} requests · {{ entry.total_transfer_bytes|transfer_size }} transferred in total.
 {% else %}
-_{{ entry.degraded|join('; ') if entry.degraded else 'No requests were recorded for this capture.' }}_
+_{{ entry.degraded|map('table_cell')|join('; ') if entry.degraded else 'No requests were recorded for this capture.' }}_
 {% endif %}
 
-| Request | Type | Status | Transfer | Time |
+| Request | Type | Status | Transfer | Time (ms) |
 | --- | --- | --- | --- | --- |
 {% for row in entry.requests %}
-| `{{ row.url }}` | {{ row.resource_type }} | {{ row.status if row.status is not none else '—' }} | {{ row.transfer_bytes|transfer_size }} | {{ row.duration_ms|round|int if row.duration_ms is not none else '—' }} |
+| `{{ row.url|table_cell }}` | {{ row.resource_type|table_cell }} | {{ row.status if row.status is not none else '—' }} | {{ row.transfer_bytes|transfer_size }} | {{ row.duration_ms|round|int if row.duration_ms is not none else '—' }} |
 {% endfor %}
 {% if entry.har %}
 
-HAR: `{{ entry.har }}`{% if entry.har_sha256 %} · sha256 `{{ entry.har_sha256[:12] }}`{% endif %}
+HAR: `{{ entry.har }}`{% if entry.har_sha256 %} · sha256 `{{ entry.har_sha256[:12] }}`{% endif %}{% if entry.har_bytes %} · {{ entry.har_bytes|transfer_size }}{% endif %}
 {% endif %}
 
 {% else %}

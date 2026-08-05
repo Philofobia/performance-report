@@ -60,6 +60,21 @@ def _link_path(path: Optional[str], base_dir: Optional[Path]) -> str:
     return target.as_posix()
 
 
+def _table_cell(value: Optional[object]) -> object:
+    """Escape ``|`` so an arbitrary string can sit inside a GFM table cell.
+
+    A pipe is legal in a URL's query string or fragment; interpolated
+    unescaped, it opens a new column and shifts everything after it.
+    ``render_md`` runs with autoescape off by design (see the module
+    docstring) — that boundary protects prose from HTML-escaping, not table
+    cells from GFM's own delimiter, so this is a separate, narrower escape
+    applied only to cell text.
+    """
+    if value is None:
+        return value
+    return str(value).replace("|", "\\|")
+
+
 def _env(base_dir: Optional[Path] = None) -> Environment:
     env = Environment(
         loader=FileSystemLoader(str(TEMPLATE_DIR)),
@@ -73,6 +88,7 @@ def _env(base_dir: Optional[Path] = None) -> Environment:
     env.filters["metric_label"] = metric_label
     env.filters["transfer_size"] = transfer_size
     env.filters["link_path"] = lambda p: _link_path(p, base_dir)
+    env.filters["table_cell"] = _table_cell
     return env
 
 
