@@ -20,6 +20,7 @@ import pytest
 from report.skeleton import (
     BASELINE_PATH,
     BASELINE_VERSION,
+    GROUP_ROOTS,
     PAGE_GROUP,
     collapse,
     diff_sections,
@@ -201,3 +202,61 @@ def test_the_committed_baseline_is_page_count_independent():
 
     three = fingerprint(render_html(a_report(pages=("homepage", "pdp", "plp"))))
     assert three == load_baseline(BASELINE_PATH)
+
+
+# --- Phase 7B: a second repeating root (appendix) ---------------------------
+
+
+def appendix_entry():
+    return (
+        '<article data-section="appendix">'
+        '<figure data-section="appendix.screenshot"></figure>'
+        '<table data-section="appendix.requests"></table>'
+        "</article>"
+    )
+
+
+def test_repeated_appendix_entries_collapse_to_one_group():
+    sections = ["appendix", "appendix.screenshot", "appendix.requests"] * 4
+    assert collapse(sections) == [
+        "appendix[]", "appendix.screenshot", "appendix.requests",
+    ]
+
+
+def test_a_one_capture_and_a_six_capture_report_fingerprint_identically():
+    # The same argument as one page versus three pages: the skeleton must be
+    # independent of how much data the campaign happened to produce.
+    def document_with(count):
+        return (
+            "<html><body>"
+            + page_block("homepage")
+            + '<section data-section="methodology"></section>'
+            + '<section data-section="appendix">'
+            + "".join(appendix_entry() for _ in range(count))
+            + "</section></body></html>"
+        )
+
+    assert fingerprint(document_with(1)) == fingerprint(document_with(6))
+
+
+def test_page_and_appendix_groups_both_collapse_in_one_document():
+    sections = [
+        "cover",
+        "page", "page.header", "page", "page.header",
+        "methodology",
+        "appendix", "appendix.screenshot", "appendix", "appendix.screenshot",
+    ]
+    assert collapse(sections) == [
+        "cover", "page[]", "page.header", "methodology",
+        "appendix[]", "appendix.screenshot",
+    ]
+
+
+def test_a_document_without_an_appendix_fingerprints_exactly_as_before():
+    # Proves the generalization is not itself a drift event.
+    sections = ["cover", "page", "page.header", "page", "page.header", "methodology"]
+    assert collapse(sections) == ["cover", "page[]", "page.header", "methodology"]
+
+
+def test_a_group_root_with_no_children_is_still_emitted():
+    assert collapse(["cover", "appendix", "appendix"]) == ["cover", "appendix[]"]

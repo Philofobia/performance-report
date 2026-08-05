@@ -28,10 +28,12 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import List, Sequence, Tuple, Union
 
-PAGE_GROUP = "page[]"
+#: Section roots whose blocks repeat once per data item. Each collapses to
+#: ``<root>[]`` plus the children of its *first* occurrence, so the fingerprint
+#: is independent of how many pages or captures the campaign produced.
+GROUP_ROOTS: Tuple[str, ...] = ("page", "appendix")
 
-_PAGE_ROOT = "page"
-_PAGE_CHILD_PREFIX = "page."
+PAGE_GROUP = "page[]"  # kept: the page group is named in tests and docs
 
 BASELINE_PATH = Path(__file__).with_name("skeleton.baseline.json")
 
@@ -58,31 +60,35 @@ class _SectionCollector(HTMLParser):
                 self.sections.append(value)
 
 
-def collapse(sections: Sequence[str]) -> List[str]:
-    """Fold repeated per-page blocks into one ``page[]`` group.
+def collapse(
+    sections: Sequence[str], *, roots: Sequence[str] = GROUP_ROOTS
+) -> List[str]:
+    """Fold repeated per-item blocks into one ``<root>[]`` group each.
 
-    Only the *first* page block contributes its children, so the result is
-    independent of how many pages the campaign covered — which is the property
-    that makes cross-campaign comparison meaningful.
+    Only the *first* block of each root contributes its children, so the result
+    is independent of how many pages the campaign covered or how many captures
+    it retained — which is the property that makes cross-campaign comparison
+    meaningful.
     """
     out: List[str] = []
-    emitted_page_block = False
+    emitted: set = set()
     index = 0
     while index < len(sections):
         section = sections[index]
-        if section != _PAGE_ROOT:
+        if section not in roots:
             out.append(section)
             index += 1
             continue
 
-        block = [PAGE_GROUP]
+        prefix = f"{section}."
+        block = [f"{section}[]"]
         index += 1
-        while index < len(sections) and sections[index].startswith(_PAGE_CHILD_PREFIX):
+        while index < len(sections) and sections[index].startswith(prefix):
             block.append(sections[index])
             index += 1
-        if not emitted_page_block:
+        if section not in emitted:
             out.extend(block)
-            emitted_page_block = True
+            emitted.add(section)
     return out
 
 
