@@ -31,7 +31,7 @@ from typing import List, Sequence, Tuple, Union
 #: Section roots whose blocks repeat once per data item. Each collapses to
 #: ``<root>[]`` plus the children of its *first* occurrence, so the fingerprint
 #: is independent of how many pages or captures the campaign produced.
-GROUP_ROOTS: Tuple[str, ...] = ("page", "appendix")
+GROUP_ROOTS: Tuple[str, ...] = ("page", "capture")
 
 PAGE_GROUP = "page[]"  # kept: the page group is named in tests and docs
 

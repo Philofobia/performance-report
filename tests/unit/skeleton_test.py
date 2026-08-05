@@ -204,51 +204,78 @@ def test_the_committed_baseline_is_page_count_independent():
     assert three == load_baseline(BASELINE_PATH)
 
 
-# --- Phase 7B: a second repeating root (appendix) ---------------------------
+# --- Phase 7B: a second repeating root (capture) ----------------------------
+#
+# The real appendix markup wraps a non-repeating section, tagged
+# data-section="appendix", around N repeating per-capture entries. Using
+# "appendix" for both the wrapper and the repeating entry was tried first and
+# is wrong: collapse() opens a block on the wrapper's bare "appendix", the
+# very next token is the first entry's bare "appendix" (not
+# "appendix."-prefixed), so the wrapper's block closes with zero children and
+# the entry block that actually carries the children is discarded as already
+# emitted. The fingerprint silently loses capture.screenshot/capture.requests
+# for every campaign, which is exactly the kind of drift this module exists
+# to catch. The fix names the repeating entry "capture" instead, so it cannot
+# collide with the wrapper. See test_the_old_appendix_reuse_would_lose_the_
+# capture_children below for the locked-in regression.
 
 
-def appendix_entry():
+def capture_entry():
     return (
-        '<article data-section="appendix">'
-        '<figure data-section="appendix.screenshot"></figure>'
-        '<table data-section="appendix.requests"></table>'
+        '<article data-section="capture">'
+        '<figure data-section="capture.screenshot"></figure>'
+        '<table data-section="capture.requests"></table>'
         "</article>"
     )
 
 
-def test_repeated_appendix_entries_collapse_to_one_group():
-    sections = ["appendix", "appendix.screenshot", "appendix.requests"] * 4
+def appendix_block(count):
+    return (
+        '<section data-section="appendix">'
+        + "".join(capture_entry() for _ in range(count))
+        + "</section>"
+    )
+
+
+def test_repeated_capture_entries_collapse_to_one_group():
+    sections = ["capture", "capture.screenshot", "capture.requests"] * 4
     assert collapse(sections) == [
-        "appendix[]", "appendix.screenshot", "appendix.requests",
+        "capture[]", "capture.screenshot", "capture.requests",
     ]
 
 
 def test_a_one_capture_and_a_six_capture_report_fingerprint_identically():
     # The same argument as one page versus three pages: the skeleton must be
-    # independent of how much data the campaign happened to produce.
+    # independent of how much data the campaign happened to produce. Uses the
+    # real nested shape: an "appendix" wrapper section around N "capture"
+    # entry articles.
     def document_with(count):
-        return (
-            "<html><body>"
-            + page_block("homepage")
-            + '<section data-section="methodology"></section>'
-            + '<section data-section="appendix">'
-            + "".join(appendix_entry() for _ in range(count))
-            + "</section></body></html>"
-        )
+        return document(["homepage"]) + appendix_block(count)
 
-    assert fingerprint(document_with(1)) == fingerprint(document_with(6))
+    one = fingerprint(document_with(1))
+    six = fingerprint(document_with(6))
+    assert one == six
+    # Equality alone isn't enough: both sides degrading to the same *empty*
+    # group would satisfy `one == six` too. Assert the children actually
+    # survived the collapse.
+    assert one[-4:] == [
+        "appendix", "capture[]", "capture.screenshot", "capture.requests",
+    ]
 
 
-def test_page_and_appendix_groups_both_collapse_in_one_document():
+def test_appendix_wrapper_survives_as_its_own_ungrouped_section():
+    # The wrapper is genuinely non-repeating, like "methodology" — it must
+    # stay a plain section, distinct from the "capture[]" group it contains.
     sections = [
         "cover",
         "page", "page.header", "page", "page.header",
         "methodology",
-        "appendix", "appendix.screenshot", "appendix", "appendix.screenshot",
+        "appendix",
+        "capture", "capture.screenshot", "capture", "capture.screenshot",
     ]
     assert collapse(sections) == [
         "cover", "page[]", "page.header", "methodology",
-        "appendix[]", "appendix.screenshot",
+        "appendix", "capture[]", "capture.screenshot",
     ]
 
 
@@ -259,4 +286,21 @@ def test_a_document_without_an_appendix_fingerprints_exactly_as_before():
 
 
 def test_a_group_root_with_no_children_is_still_emitted():
-    assert collapse(["cover", "appendix", "appendix"]) == ["cover", "appendix[]"]
+    assert collapse(["cover", "capture", "capture"]) == ["cover", "capture[]"]
+
+
+def test_the_old_appendix_reuse_would_lose_the_capture_children():
+    # Regression lock for the rejected design: GROUP_ROOTS = ("page",
+    # "appendix") with the wrapper and the repeating entry both tagged
+    # "appendix" silently drops the children from the fingerprint, because
+    # the wrapper's own block closes before any child is seen and the entry
+    # block that carries the children is then discarded as a duplicate.
+    sections = [
+        "methodology",
+        "appendix",  # wrapper
+        "appendix", "appendix.screenshot", "appendix.requests",  # entry
+    ]
+    broken = collapse(sections, roots=("page", "appendix"))
+    assert broken == ["methodology", "appendix[]"]
+    assert "appendix.screenshot" not in broken
+    assert "appendix.requests" not in broken
