@@ -287,5 +287,79 @@
   {% endif %}
 </section>
 
+<section data-section="appendix" class="sheet">
+  <p class="eyebrow">Appendix</p>
+  <h2>What was captured</h2>
+  <p class="serif">
+    One screenshot and the heaviest requests for each page and condition
+    measured. Request tables are truncated to the largest transfers; the full
+    count is stated beside each.
+  </p>
+
+  {% for entry in report.appendix %}
+  <article data-section="capture" class="capture">
+    <h3>{{ entry.page }} <span class="cond">{{ entry.device }} · {{ entry.network }}</span></h3>
+    <p class="mono meta-line">{{ entry.run_id }}</p>
+
+    <figure data-section="capture.screenshot" class="shot">
+      {% set shot = images.get(entry|entry_key) %}
+      {% if shot %}
+      <img src="{{ shot.data_uri }}" width="{{ shot.width }}" height="{{ shot.height }}"
+           alt="Screenshot of {{ entry.page }} on {{ entry.device }} over {{ entry.network }}">
+      <figcaption>
+        {% if shot.cropped %}
+        Top {{ shot.height }} pixels of a full-page capture.
+        {% else %}
+        Full-page capture, scaled to {{ shot.width }} pixels wide.
+        {% endif %}
+      </figcaption>
+      {% else %}
+      <p class="empty">No screenshot was embedded for this capture.</p>
+      <figcaption class="mono">{{ entry.screenshot or '—' }}</figcaption>
+      {% endif %}
+    </figure>
+
+    <table data-section="capture.requests" class="metrics requests">
+      <caption>
+        {% if entry.total_requests %}
+        Heaviest {{ entry.requests|length }} of {{ entry.total_requests }} requests ·
+        {{ entry.total_transfer_bytes|transfer_size }} transferred in total
+        {% else %}
+        No requests were available for this capture
+        {% endif %}
+      </caption>
+      <thead>
+        <tr><th>Request</th><th>Type</th><th>Status</th><th>Transfer</th><th>Time</th></tr>
+      </thead>
+      <tbody>
+      {% for row in entry.requests %}
+        <tr>
+          <td class="mono url">{{ row.url }}</td>
+          <td>{{ row.resource_type }}</td>
+          <td>{{ row.status if row.status is not none else '—' }}</td>
+          <td>{{ row.transfer_bytes|transfer_size }}</td>
+          <td>{{ row.duration_ms|round|int if row.duration_ms is not none else '—' }}<span class="unit">ms</span></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="empty">
+          {{ entry.degraded|join('; ') if entry.degraded else 'No requests recorded.' }}
+        </td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    {% if entry.har %}
+    <p class="mono meta-line">
+      HAR: {{ entry.har }}
+      {% if entry.har_sha256 %}· sha256 {{ entry.har_sha256[:12] }}{% endif %}
+      {% if entry.har_bytes %}· {{ entry.har_bytes|transfer_size }}{% endif %}
+    </p>
+    {% endif %}
+  </article>
+  {% else %}
+  <p class="empty">No captures were recorded for this campaign.</p>
+  {% endfor %}
+</section>
+
 </body>
 </html>

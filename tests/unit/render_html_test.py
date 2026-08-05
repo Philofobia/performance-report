@@ -24,7 +24,8 @@ def a_trend(metric="lcp_ms", *, values=(6200.0, 4820.0), direction="improved",
 
 
 def a_report(pages=("homepage",), *, recommendations=True, mode="llm",
-             finding_title="Hero video is the LCP element", trends=()):
+             finding_title="Hero video is the LCP element", trends=(),
+             appendix=None):
     def page_block(name):
         return {
             "trends": list(trends),
@@ -87,6 +88,18 @@ def a_report(pages=("homepage",), *, recommendations=True, mode="llm",
         "comparison": [{"page": p, "device": "mid-mobile", "network": "slow-4g",
                         "lcp_ms": 6200, "cls": 0.42, "inp_ms": 480,
                         "tbt_ms": 620, "verdict": "fail"} for p in pages],
+        # `None` (the default) derives one realistic entry per page, the same
+        # way `methodology.captures` below already does — a real campaign's
+        # appendix is never actually empty, since every run produces one
+        # entry (see `analysis.reportmodel._appendix`). Passing `appendix=[]`
+        # explicitly still exercises the genuinely-empty-appendix path.
+        "appendix": (list(appendix) if appendix is not None else [
+            {"page": p, "run_id": f"run_{p}", "device": "mid-mobile",
+             "network": "slow-4g", "screenshot": "shot.png",
+             "har": None, "har_sha256": None, "har_bytes": None,
+             "requests": [], "total_requests": 0, "total_transfer_bytes": 0,
+             "degraded": []} for p in pages
+        ]),
         "methodology": {"devices": ["mid-mobile"], "networks": ["slow-4g"],
                         "runs_per_condition": [3],
                         "captures": ([{"page": pages[0], "run_id": f"run_{pages[0]}",
@@ -229,3 +242,94 @@ def test_build_charts_returns_one_entry_per_page():
     assert set(charts["pages"]) == {"homepage", "plp"}
     assert "gauges" in charts["pages"]["homepage"]
     assert charts["comparison"]
+
+
+def an_appendix_entry(run_id="run_homepage", *, screenshot="data/raw/s.png",
+                      requests=True, degraded=()):
+    return {
+        "page": "homepage", "run_id": run_id,
+        "device": "mid-mobile", "network": "slow-4g",
+        "screenshot": screenshot, "har": "data/raw/capture.har",
+        "har_sha256": "a" * 64, "har_bytes": 4096,
+        "requests": [
+            {"url": "https://example.com/hero.mp4", "resource_type": "media",
+             "status": 200, "transfer_bytes": 4_200_000, "duration_ms": 3100.0},
+        ] if requests else [],
+        "total_requests": 214 if requests else 0,
+        "total_transfer_bytes": 8_100_000 if requests else 0,
+        "degraded": list(degraded),
+    }
+
+
+def test_the_appendix_renders_an_entry_per_capture():
+    report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
+    html = render_html(report)
+    assert html.count('data-section="capture.screenshot"') == 1
+    assert html.count('data-section="capture.requests"') == 1
+
+
+def test_the_request_table_shows_the_url_and_its_transfer_size():
+    report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
+    html = render_html(report)
+    assert "https://example.com/hero.mp4" in html
+    assert "4.0 MB" in html  # 4_200_000 bytes / 1024 / 1024 = 4.005…
+
+
+def test_the_true_request_count_is_stated_beside_the_truncated_table():
+    report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
+    assert "214" in render_html(report)
+
+
+def test_a_screenshot_is_embedded_when_an_image_is_supplied():
+    from report.images import EmbeddedImage, entry_key
+
+    report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
+    entry = report.appendix[0]
+    html = render_html(report, images={
+        entry_key(entry): EmbeddedImage(data_uri="data:image/png;base64,AAAA",
+                                      width=720, height=450, cropped=False),
+    })
+    assert "data:image/png;base64,AAAA" in html
+
+
+def test_a_cropped_screenshot_says_so_in_the_caption():
+    from report.images import EmbeddedImage, entry_key
+
+    report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
+    entry = report.appendix[0]
+    html = render_html(report, images={
+        entry_key(entry): EmbeddedImage(data_uri="data:image/png;base64,AAAA",
+                                      width=720, height=1600, cropped=True),
+    })
+    assert "Top 1600" in html
+
+
+def test_without_images_the_figure_renders_its_empty_state_not_a_broken_img():
+    report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
+    html = render_html(report)
+    assert 'data-section="capture.screenshot"' in html
+    assert "data:image" not in html
+
+
+def test_a_capture_with_no_requests_still_renders_the_table_block():
+    report = Report.model_validate(
+        a_report(appendix=[an_appendix_entry(requests=False,
+                                             degraded=["HAR not retained"])])
+    )
+    html = render_html(report)
+    assert 'data-section="capture.requests"' in html
+    assert "HAR not retained" in html
+
+
+def test_an_empty_appendix_still_renders_the_section():
+    # No section is ever conditionally omitted.
+    html = render_html(Report.model_validate(a_report(appendix=[])))
+    assert 'data-section="appendix"' in html
+
+
+def test_a_one_capture_and_a_six_capture_report_share_a_fingerprint():
+    one = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
+    six = Report.model_validate(a_report(appendix=[
+        an_appendix_entry(run_id=f"run_{i}") for i in range(6)
+    ]))
+    assert fingerprint(render_html(one)) == fingerprint(render_html(six))

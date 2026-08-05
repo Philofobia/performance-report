@@ -20,12 +20,16 @@ no asset paths for Chromium to resolve at print time.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from analysis.reportmodel import Report
 from report import charts
+from report.images import entry_key
+
+if TYPE_CHECKING:
+    from report.images import EmbeddedImage
 
 TEMPLATE_DIR = Path(__file__).parent / "template"
 HTML_TEMPLATE = "report.html.j2"
@@ -41,6 +45,21 @@ def metric_label(metric: str) -> str:
     return charts.METRIC_LABELS.get(str(metric), str(metric))
 
 
+def transfer_size(value: Optional[float]) -> str:
+    """Bytes as a short human string. Naming, not computing.
+
+    A value the capture does not carry prints `—`, never `0`: a request with no
+    recorded size is not a free request.
+    """
+    if value is None:
+        return "—"
+    size = float(value)
+    for unit, scale in (("MB", 1024 * 1024), ("kB", 1024)):
+        if size >= scale:
+            return f"{size / scale:.1f} {unit}"
+    return f"{int(size)} B"
+
+
 def _env() -> Environment:
     """Jinja environment with escaping on and whitespace kept predictable."""
     env = Environment(
@@ -53,6 +72,8 @@ def _env() -> Environment:
         keep_trailing_newline=True,
     )
     env.filters["metric_label"] = metric_label
+    env.filters["transfer_size"] = transfer_size
+    env.filters["entry_key"] = entry_key
     return env
 
 
@@ -90,12 +111,23 @@ def build_charts(report: Report) -> Dict[str, Any]:
     }
 
 
-def render_html(report: Report) -> str:
-    """Render the report to a single self-contained HTML document."""
+def render_html(
+    report: Report, *, images: Optional[Mapping[str, "EmbeddedImage"]] = None
+) -> str:
+    """Render the report to a single self-contained HTML document.
+
+    ``images`` maps an appendix entry's :func:`report.images.entry_key` to its
+    embedded screenshot. It is built by the caller because embedding reads
+    files, and this module is the one place the document is assembled —
+    keeping the I/O outside it means a render is reproducible from its
+    arguments alone. Omitting it renders the appendix with path-only rows,
+    which is exactly what ``--no-appendix-images`` wants.
+    """
     stylesheet = (TEMPLATE_DIR / STYLESHEET).read_text(encoding="utf-8")
     template = _env().get_template(HTML_TEMPLATE)
     return template.render(
         report=report,
         charts=build_charts(report),
+        images=images or {},
         stylesheet=stylesheet,
     )

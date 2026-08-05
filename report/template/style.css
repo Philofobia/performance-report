@@ -432,3 +432,15 @@ p { margin: 0 0 2.5mm; }
   body { max-width: 210mm; margin: 0 auto; padding: 16mm 15mm; }
   .page { border-top: 0.4pt dashed var(--rule); padding-top: 10mm; }
 }
+
+/* --------------------------------------------------------------------------
+ * Appendix — one capture per block, screenshot above its request table.
+ * ----------------------------------------------------------------------- */
+.capture { break-inside: avoid-page; margin-block-end: 2rem; }
+.capture .cond { font-weight: 400; color: var(--muted); font-size: 0.85em; }
+.shot { margin: 0.75rem 0; }
+.shot img { max-width: 100%; height: auto; border: 1px solid var(--rule); }
+.shot figcaption { font-size: 0.8rem; color: var(--muted); margin-block-start: 0.35rem; }
+/* URLs are long and must wrap rather than widen the page. */
+.requests .url { word-break: break-all; max-width: 24rem; }
+.meta-line { font-size: 0.75rem; color: var(--muted); }
