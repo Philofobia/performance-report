@@ -51,6 +51,19 @@ untrusted data); test asserts no unescaped `<script>` survives malicious input.
 HAR/screenshots may contain cookies/tokens — scrub `Cookie`/`Authorization` from
 stored HAR or keep artifacts in gitignored `data/`; document in README.
 
+- **Appendix path confinement.** `report/images.py:embed_png` resolves every
+  screenshot path and refuses anything outside `settings.storage.raw_dir`. The
+  path arrives from `report.json`, a file on disk a user can edit; a renderer
+  that base64s any path it is handed into a shareable document is a
+  file-disclosure primitive.
+- **Screenshots are page contents.** A capture of an authenticated page shows
+  whatever was on screen — cart contents, an email address, an order number —
+  and the PDF gets emailed. `report --no-appendix-images` renders path-only
+  rows so the answer to "can I share this?" is not "re-run the campaign".
+- **HAR URLs are re-redacted at render.** The stored HAR is scrubbed on the way
+  in, but a HAR written before a scrubbing rule existed is still in the store,
+  so `analysis/appendix.py` re-applies `store.artifacts.redact_url`.
+
 ### 2.7 Dependency & secret scanning (CI)
 `pip-audit -r requirements.txt` (fail on high/critical);
 gitleaks (pinned version) over both the working tree and full commit history —

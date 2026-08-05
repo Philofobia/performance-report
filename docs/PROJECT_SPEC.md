@@ -534,7 +534,10 @@ subsystems, and one of them (prior-run memory) had already shipped in Phase 4.
       throttling noise does not read as a regression, and target crossing reported
       separately from direction. The trend never feeds a verdict. Design:
       `docs/superpowers/specs/2026-08-04-phase-7-trend-comparison-design.md`.
-- [ ] 7b — PDF appendix with screenshots + HAR.
+- [x] **7b — PDF appendix with screenshots + HAR.** `analysis/appendix.py`
+      reduces the scrubbed HAR to its heaviest requests; `report/images.py`
+      embeds screenshots as deterministic, path-confined data URIs. Design:
+      `docs/superpowers/specs/2026-08-04-phase-7b-appendix-design.md`.
 - [ ] 7c — Optional lightweight web UI (reuse frontend/CSS skills) for manual entry.
 - [ ] 7d — CI to auto-regenerate a real campaign report and catch skeleton drift.
       The data-free half already runs: a unit test asserts the committed

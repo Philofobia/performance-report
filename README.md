@@ -20,13 +20,13 @@ grounded prompts) · optional per-target request headers for bot-protected sites
 grounded per-page analysis with rule-based improvement projections · a fixed-skeleton
 PDF, HTML and Markdown mirror rendered from the Report JSON · a unified `python -m cli`
 entry point and a `--skeleton-check` drift guard enforced against a committed baseline ·
-**campaign-over-campaign trends per page and condition**.
+**campaign-over-campaign trends per page and condition** · **a per-capture appendix
+embedding each screenshot and its heaviest HAR requests**.
 
 **Missing — the rest of phase 7:**
 
 | Gap                              | Consequence today                                            |
 | -------------------------------- | ------------------------------------------------------------ |
-| Screenshot / HAR appendix        | The report lists capture paths; it does not embed the images |
 | Optional web UI for manual entry | Manual runs are entered on the command line                  |
 | CI report regeneration           | CI guards the skeleton with a synthetic render, not a real campaign |
 
@@ -303,6 +303,7 @@ python -m cli report                                # newest campaign in data/re
 python -m cli report --campaign storefront-9f3ab120
 python -m cli report --input data/reports/<id>/report.json
 python -m cli report --no-pdf                       # HTML + Markdown only, no browser
+python -m cli report --no-appendix-images           # path-only rows, no embedded screenshots
 python -m cli report --skeleton-check               # fail if the structure drifted
 python -m cli report --update-baseline              # accept a structural change
 ```
@@ -341,6 +342,24 @@ green page red without any threshold being crossed. The first campaign you ever 
 reports every series as `new` and produces a complete report; a missing or unreadable
 store degrades the same way, because analysis never fails over unavailable history.
 
+**The appendix carries the evidence.** Each capture gets its screenshot embedded
+as a data URI — the PDF is printed via `set_content` with no origin, so a
+`file://` reference would resolve to nothing — plus the heaviest requests from
+its scrubbed HAR. The table is truncated to the largest transfers and always
+states the true request count and total bytes beside it, because 15 rows summing
+to 2 MB reads as the whole page unless the document says the page made 214
+requests totalling 8 MB.
+
+Full-page captures run to tens of thousands of pixels tall. Past
+`settings.report.appendix.screenshot_max_height_px` the image is cropped from the
+top and the caption says so; scaling one to fit would produce a smear a reader
+cannot distinguish from a broken capture.
+
+A missing screenshot, a cleaned `data/raw`, or a HAR the browser truncated
+degrades that entry alone — the section and both its sub-blocks always render,
+and `meta.degraded_appendix_entries` counts what analysis found missing. Use
+`--no-appendix-images` when the captures show an authenticated session.
+
 `--skeleton-check` diffs that fingerprint against the committed
 `report/skeleton.baseline.json` and exits non-zero on drift, naming what moved:
 
@@ -376,7 +395,7 @@ offline suite stays browser-free; only the real PDF run is `e2e`-marked.
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 648 offline tests, no browser, no network
+pytest -m "not e2e"      # 720 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 ```
 
@@ -421,8 +440,8 @@ affect day-to-day use:
 | 5     | Report rendering — fixed HTML skeleton → PDF + Markdown mirror       | Done     |
 | 6     | Unified CLI (`ingest` / `analyze` / `report`) + skeleton-drift check | Done     |
 | 7a    | Campaign-over-campaign trends per page and condition                 | Done     |
-| 7b    | Screenshot / HAR appendix embedded in the PDF                        | **Next** |
-| 7c    | Optional lightweight web UI for manual entry                         | Planned  |
+| 7b    | Screenshot / HAR appendix embedded in the PDF                        | Done     |
+| 7c    | Optional lightweight web UI for manual entry                         | **Next** |
 | 7d    | CI regeneration of a real campaign report                            | Planned  |
 
 ## Documentation
