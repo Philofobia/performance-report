@@ -18,7 +18,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Any, List, Mapping, Optional, Union
 
 from pydantic import ValidationError
 
@@ -90,18 +90,24 @@ def load_report(path: Union[str, Path]) -> Report:
         raise ValueError(f"{path} is not a valid report: {exc}") from exc
 
 
-def write_outputs(report: Report, *, output_dir: Path, with_pdf: bool) -> List[Path]:
+def write_outputs(
+    report: Report,
+    *,
+    output_dir: Path,
+    with_pdf: bool,
+    images: Optional[Mapping[str, Any]] = None,
+) -> List[Path]:
     """Write report.html, report.md and optionally report.pdf."""
     output_dir.mkdir(parents=True, exist_ok=True)
     written: List[Path] = []
 
-    html = render_html(report)
+    html = render_html(report, images=images)
     html_path = output_dir / "report.html"
     html_path.write_text(html, encoding="utf-8")
     written.append(html_path)
 
     md_path = output_dir / "report.md"
-    md_path.write_text(render_md(report), encoding="utf-8")
+    md_path.write_text(render_md(report, base_dir=output_dir), encoding="utf-8")
     written.append(md_path)
 
     if with_pdf:
@@ -129,6 +135,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Where to write outputs (default: the input's directory).")
     p.add_argument("--no-pdf", action="store_true",
                    help="Skip PDF generation; no browser is launched.")
+    p.add_argument("--no-appendix-images", action="store_true",
+                   help="Do not embed screenshots. A capture of an "
+                        "authenticated page shows whatever was on screen, and "
+                        "the PDF gets emailed.")
     p.add_argument("--baseline", default=str(BASELINE_PATH),
                    help="Skeleton baseline file (default report/skeleton.baseline.json).")
     skeleton = p.add_mutually_exclusive_group()
@@ -192,10 +202,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
+    images = None
+    if not args.no_appendix_images:
+        from config.load import ConfigError, load_settings
+        from report.images import build_appendix_images
+
+        # Rendering an existing report.json must not depend on the config
+        # being loadable — the report is already assembled, and the appendix
+        # degrades to path-only rows exactly as it does for a missing capture.
+        try:
+            settings = load_settings()
+        except ConfigError as exc:
+            print(f"Appendix images skipped: {exc}", file=sys.stderr)
+        else:
+            appendix_cfg = settings.report.appendix
+            images = build_appendix_images(
+                report,
+                root=Path(settings.storage.raw_dir).resolve(),
+                width=appendix_cfg.screenshot_width_px,
+                max_height=appendix_cfg.screenshot_max_height_px,
+            )
+
     output_dir = Path(args.output_dir) if args.output_dir else source.parent
     try:
         written = write_outputs(
-            report, output_dir=output_dir, with_pdf=not args.no_pdf
+            report, output_dir=output_dir, with_pdf=not args.no_pdf,
+            images=images,
         )
     except OSError as exc:
         print(f"Could not write the report: {exc}", file=sys.stderr)

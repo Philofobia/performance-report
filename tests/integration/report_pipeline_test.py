@@ -26,6 +26,12 @@ def campaign_dir(tmp_path):
     return directory
 
 
+@pytest.fixture
+def a_report_json(campaign_dir):
+    """A freshly-written report.json, for tests that only need the file."""
+    return campaign_dir / "report.json"
+
+
 # --------------------------------------------------------------------------- #
 # discovery
 # --------------------------------------------------------------------------- #
@@ -140,3 +146,30 @@ def test_the_written_html_keeps_the_skeleton(campaign_dir, tmp_path):
     single = fingerprint((single_dir / "report.html").read_text(encoding="utf-8"))
 
     assert multi == single
+
+
+# --------------------------------------------------------------------------- #
+# appendix images
+# --------------------------------------------------------------------------- #
+def test_no_appendix_images_leaves_no_embedded_image(tmp_path, a_report_json):
+    out = tmp_path / "out"
+    code = main([
+        "--input", str(a_report_json), "--output-dir", str(out),
+        "--no-pdf", "--no-appendix-images",
+    ])
+    assert code == 0
+    assert "data:image/png;base64," not in (out / "report.html").read_text(encoding="utf-8")
+
+
+def test_the_appendix_section_renders_even_with_images_disabled(tmp_path, a_report_json):
+    out = tmp_path / "out"
+    main(["--input", str(a_report_json), "--output-dir", str(out),
+          "--no-pdf", "--no-appendix-images"])
+    assert 'data-section="appendix"' in (out / "report.html").read_text(encoding="utf-8")
+
+
+def test_a_report_whose_artifacts_were_deleted_still_renders(tmp_path, a_report_json):
+    # data/raw gets cleaned; a months-old campaign must still re-render.
+    out = tmp_path / "out"
+    assert main(["--input", str(a_report_json), "--output-dir", str(out),
+                "--no-pdf"]) == 0
