@@ -822,7 +822,14 @@ git commit -m "Carry per-capture evidence in the Report JSON"
   - `DATA_URI_PREFIX: str = "data:image/png;base64,"`
   - `@dataclass(frozen=True) EmbeddedImage(data_uri: str, width: int, height: int, cropped: bool)`
   - `embed_png(path, *, width: int, max_height: int, root: str | Path) -> Optional[EmbeddedImage]`
-  - `build_appendix_images(report, *, root, width, max_height) -> Dict[str, EmbeddedImage]` — keyed by `run_id`
+  - `entry_key(entry) -> str` — the four-part `(page, run_id, device, network)` identity
+  - `build_appendix_images(report, *, root, width, max_height) -> Dict[str, EmbeddedImage]` — keyed by `entry_key(entry)`
+
+**Corrected during execution:** this task originally specified keying by
+`run_id` alone. Task 2 established that `run_id` is not unique on the
+`load_runs` path — which is why the appendix sort carries a four-part
+tie-break — so two colliding entries would silently overwrite each other and
+attach the *wrong* screenshot to a capture. Worse than showing none.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1223,8 +1230,13 @@ git commit -m "Let the skeleton guard more than one repeating block"
 - Test: `tests/unit/render_html_test.py`
 
 **Interfaces:**
-- Consumes: `report.images.EmbeddedImage`, `report.images.build_appendix_images` (Task 3); `Report.appendix` (Task 2)
+- Consumes: `report.images.EmbeddedImage`, `report.images.entry_key`, `report.images.build_appendix_images` (Task 3); `Report.appendix` (Task 2)
 - Produces: `render_html(report, *, images: Optional[Mapping[str, EmbeddedImage]] = None) -> str`
+
+**The template must look images up by `report.images.entry_key(entry)`, not by
+`entry.run_id`** — run ids are not unique across appendix entries. Register
+`entry_key` as a Jinja filter in `_env()` so the template and the image builder
+cannot drift apart on what identifies a capture.
 
 `images` defaults to `None` (path-only rows) so every existing caller and test keeps working unchanged, and so `--no-appendix-images` is expressed by simply not building the map.
 
@@ -1270,22 +1282,24 @@ def test_the_true_request_count_is_stated_beside_the_truncated_table():
 
 
 def test_a_screenshot_is_embedded_when_an_image_is_supplied():
-    from report.images import EmbeddedImage
+    from report.images import EmbeddedImage, entry_key
 
     report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
+    entry = report.appendix[0]
     html = render_html(report, images={
-        "run_homepage": EmbeddedImage(data_uri="data:image/png;base64,AAAA",
+        entry_key(entry): EmbeddedImage(data_uri="data:image/png;base64,AAAA",
                                       width=720, height=450, cropped=False),
     })
     assert "data:image/png;base64,AAAA" in html
 
 
 def test_a_cropped_screenshot_says_so_in_the_caption():
-    from report.images import EmbeddedImage
+    from report.images import EmbeddedImage, entry_key
 
     report = Report.model_validate(a_report(appendix=[an_appendix_entry()]))
+    entry = report.appendix[0]
     html = render_html(report, images={
-        "run_homepage": EmbeddedImage(data_uri="data:image/png;base64,AAAA",
+        entry_key(entry): EmbeddedImage(data_uri="data:image/png;base64,AAAA",
                                       width=720, height=1600, cropped=True),
     })
     assert "top 1600" in html
@@ -1397,8 +1411,8 @@ Append to `report/template/report.html.j2`, after the methodology section closes
     <p class="mono meta-line">{{ entry.run_id }}</p>
 
     <figure data-section="appendix.screenshot" class="shot">
-      {% if images.get(entry.run_id) %}
-      {% set shot = images[entry.run_id] %}
+      {% set shot = images.get(entry|entry_key) %}
+      {% if shot %}
       <img src="{{ shot.data_uri }}" width="{{ shot.width }}" height="{{ shot.height }}"
            alt="Screenshot of {{ entry.page }} on {{ entry.device }} over {{ entry.network }}">
       <figcaption>
