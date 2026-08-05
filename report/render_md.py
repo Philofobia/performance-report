@@ -16,13 +16,14 @@ system publishes.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 from jinja2 import Environment, FileSystemLoader
 
 from analysis.reportmodel import Report
-from report.render_html import metric_label
+from report.render_html import metric_label, transfer_size
 
 TEMPLATE_DIR = Path(__file__).parent / "template"
 MD_TEMPLATE = "report.md.j2"
@@ -35,10 +36,31 @@ MD_SECTIONS: Tuple[str, ...] = (
     "Pages",
     "Cross-page comparison",
     "Methodology",
+    "Appendix",
 )
 
 
-def _env() -> Environment:
+def _link_path(path: Optional[str], base_dir: Optional[Path]) -> str:
+    """A screenshot path as the Markdown should link it.
+
+    Relative to the report when a relative path exists, absolute otherwise.
+    On Windows a report on ``C:`` and artifacts on ``D:`` have no relative
+    path at all, and ``os.path.relpath`` raises rather than returning
+    something usable — so the absolute path is the honest fallback, not a
+    failure.
+    """
+    if not path:
+        return ""
+    target = Path(path)
+    if base_dir is not None:
+        try:
+            return Path(os.path.relpath(target, base_dir)).as_posix()
+        except ValueError:
+            pass
+    return target.as_posix()
+
+
+def _env(base_dir: Optional[Path] = None) -> Environment:
     env = Environment(
         loader=FileSystemLoader(str(TEMPLATE_DIR)),
         autoescape=False,  # Markdown, not HTML — see module docstring
@@ -46,12 +68,20 @@ def _env() -> Environment:
         lstrip_blocks=True,
         keep_trailing_newline=True,
     )
-    # The same filter the HTML path uses, so the mirror names metrics
-    # identically rather than falling back to raw field names.
+    # The same filters the HTML path uses, so the mirror names metrics and
+    # byte counts identically rather than formatting them a second way.
     env.filters["metric_label"] = metric_label
+    env.filters["transfer_size"] = transfer_size
+    env.filters["link_path"] = lambda p: _link_path(p, base_dir)
     return env
 
 
-def render_md(report: Report) -> str:
-    """Render the Markdown mirror."""
-    return _env().get_template(MD_TEMPLATE).render(report=report)
+def render_md(report: Report, *, base_dir: Optional[Path] = None) -> str:
+    """Render the Markdown mirror.
+
+    ``base_dir`` is where the ``report.md`` will be written, used to link
+    screenshots relatively. The mirror links rather than embeds: a data URI
+    that makes sense in a self-contained HTML file is megabytes of noise in a
+    document meant to be read as text in a pull request.
+    """
+    return _env(base_dir).get_template(MD_TEMPLATE).render(report=report)

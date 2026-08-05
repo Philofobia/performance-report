@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import re
 
+from analysis.reportmodel import Report
 from report.render_md import MD_SECTIONS, render_md
-from tests.unit.render_html_test import a_report
+from tests.unit.render_html_test import a_report, an_appendix_entry
 
 
 def headings(markdown: str):
@@ -78,3 +79,47 @@ def test_markdown_is_not_html_escaped():
 def test_rendering_is_a_pure_function():
     report = a_report()
     assert render_md(report) == render_md(report)
+
+
+def test_the_mirror_carries_the_appendix_section():
+    md = render_md(Report.model_validate(a_report(appendix=[an_appendix_entry()])))
+    assert "## Appendix" in md
+
+
+def test_the_screenshot_is_linked_relative_to_the_report(tmp_path):
+    shot = tmp_path / "raw" / "homepage" / "screenshot.png"
+    shot.parent.mkdir(parents=True)
+    shot.write_bytes(b"")
+    out = tmp_path / "reports" / "campaign"
+    out.mkdir(parents=True)
+
+    report = Report.model_validate(
+        a_report(appendix=[an_appendix_entry(screenshot=str(shot))])
+    )
+    md = render_md(report, base_dir=out)
+    assert "../../raw/homepage/screenshot.png" in md.replace("\\", "/")
+
+
+def test_an_unrelatable_path_falls_back_to_absolute(tmp_path):
+    # Windows: a report on C: and artifacts on D: have no relative path.
+    report = Report.model_validate(
+        a_report(appendix=[an_appendix_entry(screenshot=str(tmp_path / "s.png"))])
+    )
+    md = render_md(report, base_dir=None)
+    assert str(tmp_path / "s.png").replace("\\", "/") in md.replace("\\", "/")
+
+
+def test_the_request_table_is_a_markdown_table():
+    md = render_md(Report.model_validate(a_report(appendix=[an_appendix_entry()])))
+    assert "| Request | Type | Status | Transfer | Time |" in md
+
+
+def test_a_degraded_capture_states_its_reason_in_the_mirror():
+    report = Report.model_validate(a_report(appendix=[
+        an_appendix_entry(requests=False, degraded=["HAR malformed: line 1"])
+    ]))
+    assert "HAR malformed: line 1" in render_md(report)
+
+
+def test_an_empty_appendix_still_renders_the_heading():
+    assert "## Appendix" in render_md(Report.model_validate(a_report(appendix=[])))

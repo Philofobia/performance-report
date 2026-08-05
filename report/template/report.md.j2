@@ -96,3 +96,36 @@ conditions. They are comparable run to run, and are not field data.
 - Networks: {{ report.methodology.networks|join(', ') }}
 - Runs per condition: {{ report.methodology.runs_per_condition|join(', ') }}
 - Knowledge base: `{{ report.meta.knowledge_digest[:12] }}`
+
+## Appendix
+
+{% for entry in report.appendix %}
+### {{ entry.page }} — {{ entry.device }} / {{ entry.network }}
+
+`{{ entry.run_id }}`
+
+{% if entry.screenshot %}
+![Screenshot of {{ entry.page }} on {{ entry.device }} over {{ entry.network }}]({{ entry.screenshot|link_path }})
+{% else %}
+_No screenshot was retained for this capture._
+{% endif %}
+
+{% if entry.total_requests %}
+Heaviest {{ entry.requests|length }} of {{ entry.total_requests }} requests · {{ entry.total_transfer_bytes|transfer_size }} transferred in total.
+{% else %}
+_{{ entry.degraded|join('; ') if entry.degraded else 'No requests were recorded for this capture.' }}_
+{% endif %}
+
+| Request | Type | Status | Transfer | Time |
+| --- | --- | --- | --- | --- |
+{% for row in entry.requests %}
+| `{{ row.url }}` | {{ row.resource_type }} | {{ row.status if row.status is not none else '—' }} | {{ row.transfer_bytes|transfer_size }} | {{ row.duration_ms|round|int if row.duration_ms is not none else '—' }} |
+{% endfor %}
+{% if entry.har %}
+
+HAR: `{{ entry.har }}`{% if entry.har_sha256 %} · sha256 `{{ entry.har_sha256[:12] }}`{% endif %}
+{% endif %}
+
+{% else %}
+_No captures were recorded for this campaign._
+{% endfor %}
