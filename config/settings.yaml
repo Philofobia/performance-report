@@ -42,7 +42,7 @@ report:
     # How many requests the per-capture table shows, largest transfer first.
     # The true total is always stated beside the table, so this truncates the
     # listing without ever misrepresenting the capture.
-    top_requests: 20
+    top_requests: 15
     # Screenshots are downscaled before embedding; a full-page mobile capture
     # is otherwise several MB of base64 per entry.
     screenshot_width_px: 720
