@@ -9,8 +9,11 @@ import os
 import time
 
 import pytest
+from PIL import Image
 
+import config.load as config_load
 from analysis.reportmodel import to_json
+from config.load import Settings, StorageConfig
 from report.__main__ import find_report, load_report, main
 from report.skeleton import fingerprint
 from tests.unit.render_html_test import a_report
@@ -24,6 +27,12 @@ def campaign_dir(tmp_path):
         to_json(a_report(("homepage", "plp"))), encoding="utf-8"
     )
     return directory
+
+
+@pytest.fixture
+def a_report_json(campaign_dir):
+    """A freshly-written report.json, for tests that only need the file."""
+    return campaign_dir / "report.json"
 
 
 # --------------------------------------------------------------------------- #
@@ -140,3 +149,106 @@ def test_the_written_html_keeps_the_skeleton(campaign_dir, tmp_path):
     single = fingerprint((single_dir / "report.html").read_text(encoding="utf-8"))
 
     assert multi == single
+
+
+# --------------------------------------------------------------------------- #
+# appendix images
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def appendix_capture(tmp_path):
+    """A report.json whose sole appendix entry points at a real screenshot.
+
+    ``raw_dir`` is a real directory holding a genuine PNG (not a stub path),
+    and ``settings`` is a real :class:`Settings` with only ``storage.raw_dir``
+    overridden to point at it — the model that ``build_appendix_images``
+    actually confines paths against, not a hand-rolled substitute.
+    """
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    shot = raw_dir / "shot.png"
+    Image.new("RGB", (12, 8), color=(200, 40, 40)).save(shot)
+
+    campaign = tmp_path / "reports" / "storefront-abc12345"
+    campaign.mkdir(parents=True)
+    report_json = campaign / "report.json"
+    report_json.write_text(to_json(a_report(
+        ("homepage",),
+        appendix=[{
+            "page": "homepage", "run_id": "run_homepage", "device": "mid-mobile",
+            "network": "slow-4g", "screenshot": str(shot),
+            "har": None, "har_sha256": None, "har_bytes": None,
+            "requests": [], "total_requests": 0, "total_transfer_bytes": 0,
+            "degraded": [],
+        }],
+    )), encoding="utf-8")
+
+    settings = Settings(storage=StorageConfig(raw_dir=str(raw_dir)))
+    return report_json, settings
+
+
+def test_appendix_images_are_embedded_when_a_capture_exists(
+    tmp_path, appendix_capture, monkeypatch
+):
+    # The positive case: proves build_appendix_images is actually wired into
+    # main(), not just that the flag is accepted.
+    report_json, settings = appendix_capture
+    monkeypatch.setattr(config_load, "load_settings", lambda: settings)
+
+    out = tmp_path / "out"
+    code = main(["--input", str(report_json), "--output-dir", str(out), "--no-pdf"])
+    assert code == 0
+    html = (out / "report.html").read_text(encoding="utf-8")
+    assert "data:image/png;base64," in html
+    assert 'data-section="appendix"' in html
+
+
+def test_no_appendix_images_omits_the_embedded_image(
+    tmp_path, appendix_capture, monkeypatch
+):
+    # Same real capture as the positive test above; only the flag differs.
+    # Without a passing positive test, this one is meaningless — a renderer
+    # that never embeds anything would also satisfy it.
+    report_json, settings = appendix_capture
+    monkeypatch.setattr(config_load, "load_settings", lambda: settings)
+
+    out = tmp_path / "out"
+    code = main(["--input", str(report_json), "--output-dir", str(out),
+                 "--no-pdf", "--no-appendix-images"])
+    assert code == 0
+    html = (out / "report.html").read_text(encoding="utf-8")
+    assert "data:image/png;base64," not in html
+    assert 'data-section="appendix"' in html
+
+
+def test_a_missing_screenshot_degrades_to_path_only_rows(tmp_path, a_report_json):
+    # data/raw gets cleaned; a months-old campaign must still re-render.
+    # `a_report_json`'s appendix entry points at "shot.png", which exists
+    # nowhere — this exercises the missing-capture path, not the flag.
+    out = tmp_path / "out"
+    code = main(["--input", str(a_report_json), "--output-dir", str(out), "--no-pdf"])
+    assert code == 0
+    html = (out / "report.html").read_text(encoding="utf-8")
+    assert "data:image/png;base64," not in html
+    assert 'data-section="appendix"' in html
+
+
+def test_an_undecodable_settings_file_degrades_to_path_only_rows_with_a_stderr_note(
+    tmp_path, a_report_json, monkeypatch, capsys
+):
+    # A settings.yaml saved in a non-UTF-8 encoding is plausible on Windows.
+    # `load_yaml` only wraps `yaml.YAMLError`, not the open/read itself, so
+    # this must be handled at the call site in report/__main__.py.
+    bad_settings = tmp_path / "settings.yaml"
+    bad_settings.write_bytes(b"\xff\xfe\x00\x01not valid utf-8")
+    real_load_settings = config_load.load_settings
+    monkeypatch.setattr(
+        config_load, "load_settings", lambda: real_load_settings(bad_settings)
+    )
+
+    out = tmp_path / "out"
+    code = main(["--input", str(a_report_json), "--output-dir", str(out), "--no-pdf"])
+    assert code == 0
+    html = (out / "report.html").read_text(encoding="utf-8")
+    assert "data:image/png;base64," not in html
+    assert 'data-section="appendix"' in html
+    assert "Appendix images skipped" in capsys.readouterr().err

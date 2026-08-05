@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from config import load as cl
 
@@ -209,6 +210,53 @@ def test_unknown_network_raises(files):
     )
     with pytest.raises(cl.ConfigError, match="Unknown network"):
         cl.load_config(**files)
+
+
+def test_appendix_settings_have_working_defaults():
+    settings = cl.Settings()
+    assert settings.report.appendix.top_requests == 15
+    assert settings.report.appendix.screenshot_width_px == 720
+    assert settings.report.appendix.screenshot_max_height_px == 1600
+
+
+def test_a_zero_top_requests_is_rejected_at_load_time():
+    with pytest.raises(ValidationError):
+        cl.AppendixConfig(top_requests=0)
+
+
+def test_the_shipped_settings_files_appendix_keys_match_the_model():
+    # A value comparison here would be a tautology: the shipped YAML's
+    # appendix values are identical to AppendixConfig's own defaults, so a
+    # load_settings() bug that silently fell back to defaults (block renamed,
+    # field typo'd, block deleted) would produce the exact same numbers as a
+    # correct load and the test would prove nothing either way.
+    #
+    # Compare key *names* instead. pydantic's `extra="ignore"` means a
+    # renamed block (`appendix:` -> `appendixx:`) or a typo'd field
+    # (`top_requests:` -> `top_request:`) is swallowed silently — the model
+    # just falls back to defaults with no error. Reading the raw YAML
+    # ourselves and checking its key set against AppendixConfig's declared
+    # fields catches exactly that failure mode, independent of what any
+    # value is.
+    #
+    # Equality, not a subset check, in either direction: every field on
+    # AppendixConfig documents a deliberate choice for the shipped report
+    # (see the comments in settings.yaml), so the file is expected to name
+    # all of them and none besides. A subset check would miss a field
+    # silently dropped from the file (it'd still pass as "subset"), and a
+    # superset check would miss an extra/misspelled key sitting alongside
+    # the real ones. Equality catches both.
+    #
+    # Blind spot: this only proves the file's appendix block names the right
+    # keys, not that load_settings() correctly threads their values into the
+    # model. It also means any future optional AppendixConfig field must be
+    # spelled out in the shipped file even if its default would do — a
+    # deliberate tradeoff given this file already documents every field by
+    # hand.
+    with open(cl.SETTINGS_FILE, encoding="utf-8") as f:
+        raw = yaml.safe_load(f)
+    raw_appendix_keys = set((raw.get("report") or {}).get("appendix") or {})
+    assert raw_appendix_keys == set(cl.AppendixConfig.model_fields.keys())
 
 
 def test_duplicate_page_names_raise(files):

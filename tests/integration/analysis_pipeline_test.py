@@ -249,7 +249,7 @@ def test_cli_writes_a_report_json(input_dir, tmp_path, capsys):
     written = list(out.glob("*/report.json"))
     assert len(written) == 1
     payload = json.loads(written[0].read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["meta"]["analysis_mode"] == "rule_based"
     # --no-llm is the user's choice, not a missing key
     assert payload["meta"]["degradation_reason"] == "llm_disabled"

@@ -222,8 +222,23 @@ class StorageConfig(BaseModel):
     raw_dir: str = "data/raw"
 
 
+class AppendixConfig(BaseModel):
+    """The capture appendix (PROJECT_SPEC §10 Phase 7B).
+
+    ``screenshot_max_height_px`` exists because a full-page mobile capture runs
+    to tens of thousands of pixels. Scaling one to fit a page renders an
+    unreadable smear, so beyond this height the image is cropped from the top
+    and the crop is stated in the caption.
+    """
+
+    top_requests: int = Field(default=15, ge=1)
+    screenshot_width_px: int = Field(default=720, ge=64)
+    screenshot_max_height_px: int = Field(default=1600, ge=64)
+
+
 class ReportConfig(BaseModel):
     output_dir: str = "data/reports"
+    appendix: AppendixConfig = Field(default_factory=AppendixConfig)
 
 
 class TrendsConfig(BaseModel):

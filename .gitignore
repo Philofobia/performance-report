@@ -30,3 +30,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Subagent-driven-development scratch workspace (ledger, briefs, review packages)
+.superpowers/

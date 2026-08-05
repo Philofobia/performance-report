@@ -96,3 +96,45 @@ conditions. They are comparable run to run, and are not field data.
 - Networks: {{ report.methodology.networks|join(', ') }}
 - Runs per condition: {{ report.methodology.runs_per_condition|join(', ') }}
 - Knowledge base: `{{ report.meta.knowledge_digest[:12] }}`
+
+## Appendix
+
+{% for entry in report.appendix %}
+### {{ entry.page }} — {{ entry.device }} / {{ entry.network }}
+
+`{{ entry.run_id }}`
+
+{% if entry.screenshot %}
+![Screenshot of {{ entry.page }} on {{ entry.device }} over {{ entry.network }}]({{ entry.screenshot|link_path }})
+{% else %}
+_No screenshot was retained for this capture._
+{% endif %}
+
+{% if entry.degraded %}
+_Capture recorded issues: {{ entry.degraded|map('table_cell')|join('; ') }}_
+{% endif %}
+
+{% if entry.total_requests %}
+Heaviest {{ entry.requests|length }} of {{ entry.total_requests }} requests ·
+{% if entry.total_transfer_bytes is not none %}
+{{ entry.total_transfer_bytes|transfer_size }} transferred in total.
+{% else %}
+total transferred size unknown.
+{% endif %}
+{% else %}
+_No requests were recorded for this capture._
+{% endif %}
+
+| Request | Type | Status | Transfer | Time (ms) |
+| --- | --- | --- | --- | --- |
+{% for row in entry.requests %}
+| `{{ row.url|table_cell }}` | {{ row.resource_type|table_cell }} | {{ row.status if row.status is not none else '—' }} | {{ row.transfer_bytes|transfer_size }} | {{ row.duration_ms|round|int if row.duration_ms is not none else '—' }} |
+{% endfor %}
+{% if entry.har %}
+
+HAR: `{{ entry.har }}`{% if entry.har_sha256 %} · sha256 `{{ entry.har_sha256[:12] }}`{% endif %}{% if entry.har_bytes %} · {{ entry.har_bytes|transfer_size }}{% endif %}
+{% endif %}
+
+{% else %}
+_No captures were recorded for this campaign._
+{% endfor %}

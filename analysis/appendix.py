@@ -1,0 +1,294 @@
+"""HAR reduction for the report appendix (PROJECT_SPEC §10 Phase 7B).
+
+A HAR is a multi-megabyte transcript of every request the page made. Embedding
+it in a PDF is meaningless; the question a reader actually has is "what was
+heavy", and that is a short table sorted by transfer size.
+
+The reduction is pure — it takes a parsed HAR dict and returns rows. Only
+:func:`read_har` and :func:`summarize_capture` touch the filesystem, and
+neither raises: a campaign whose ``data/raw`` was cleaned three months ago must
+still re-analyse and still produce a complete report.
+
+**The input is the scrubbed HAR** written by ``store/artifacts.py``, so
+credentials are already redacted. URLs are re-passed through
+:func:`store.artifacts.redact_url` anyway: a HAR written before a scrubbing
+rule existed is still sitting in the store, and this is the layer where it
+becomes a rendered document.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional, Tuple
+from urllib.parse import urlsplit
+
+from store.artifacts import redact_url
+
+#: Playwright's own `_resourceType` vocabulary, kept verbatim rather than
+#: mapped onto the `initiatorType` values in `PageBlock.resource_type_totals`.
+#: The two come from different browser APIs; renaming one to match the other
+#: would imply the tables are the same taxonomy when they are not.
+CANONICAL_TYPES: Tuple[str, ...] = (
+    "document", "stylesheet", "script", "image", "font", "media", "xhr", "other",
+)
+
+_MIME_PREFIXES = (
+    ("text/html", "document"),
+    ("text/css", "stylesheet"),
+    ("image/", "image"),
+    ("font/", "font"),
+    ("audio/", "media"),
+    ("video/", "media"),
+    ("application/javascript", "script"),
+    ("text/javascript", "script"),
+    ("application/json", "xhr"),
+    ("application/font", "font"),
+)
+
+_EXTENSIONS = {
+    ".html": "document", ".htm": "document",
+    ".css": "stylesheet",
+    ".js": "script", ".mjs": "script",
+    ".png": "image", ".jpg": "image", ".jpeg": "image", ".gif": "image",
+    ".webp": "image", ".avif": "image", ".svg": "image", ".ico": "image",
+    ".woff": "font", ".woff2": "font", ".ttf": "font", ".otf": "font",
+    ".mp4": "media", ".webm": "media", ".mp3": "media",
+    ".json": "xhr",
+}
+
+
+@dataclass(frozen=True)
+class HarSummary:
+    """The appendix's view of one capture's requests.
+
+    ``total_transfer_bytes`` is the sum of the rows whose size is *known*
+    (``transfer_bytes is not None``). An empty ``rows`` list sums to a real
+    ``0`` — zero requests genuinely transferred zero bytes. A non-empty
+    ``rows`` list where every row's size is unknown sums to ``None`` instead:
+    claiming "0 bytes" for a capture that plainly made requests would be the
+    exact "missing measurement reads as a perfect one" bug this module exists
+    to avoid. A capture with a mix of known and unknown rows sums only the
+    known ones — a partial total is still real information, and treating the
+    unknown rows as zero would understate it silently.
+    """
+
+    rows: List[Dict[str, Any]]
+    total_requests: int
+    total_transfer_bytes: Optional[int]
+
+
+@dataclass(frozen=True)
+class CaptureSummary:
+    """One appendix entry's derived data, degradation included."""
+
+    har_sha256: Optional[str] = None
+    har_bytes: Optional[int] = None
+    requests: List[Dict[str, Any]] = field(default_factory=list)
+    total_requests: int = 0
+    total_transfer_bytes: Optional[int] = None
+    degraded: List[str] = field(default_factory=list)
+
+
+def _response(entry: Mapping[str, Any]) -> Mapping[str, Any]:
+    response = entry.get("response")
+    return response if isinstance(response, Mapping) else {}
+
+
+def _url(entry: Mapping[str, Any]) -> str:
+    request = entry.get("request")
+    url = request.get("url") if isinstance(request, Mapping) else None
+    return str(url or "")
+
+
+def classify(entry: Mapping[str, Any]) -> str:
+    """The resource type for one HAR entry.
+
+    Playwright's label first, then the response mime type, then the URL
+    extension. Every branch is a pure lookup, so the same HAR always classifies
+    the same way — a classifier that guessed differently between runs would
+    reorder nothing but would still make two renders disagree.
+    """
+    label = str(entry.get("_resourceType") or "").lower()
+    if label in CANONICAL_TYPES:
+        return label
+    if label in ("fetch", "xhr"):
+        return "xhr"
+    if label == "img":
+        return "image"
+
+    content = _response(entry).get("content")
+    mime_value = content.get("mimeType") if isinstance(content, Mapping) else None
+    mime = str(mime_value or "").lower()
+    for prefix, kind in _MIME_PREFIXES:
+        if mime.startswith(prefix):
+            return kind
+
+    suffix = Path(urlsplit(_url(entry)).path).suffix.lower()
+    return _EXTENSIONS.get(suffix, "other")
+
+
+def entry_transfer_bytes(entry: Mapping[str, Any]) -> Optional[int]:
+    """Bytes on the wire for one entry, or ``None`` when the capture never
+    recorded a size for it.
+
+    ``_transferSize`` is authoritative when present, including ``0`` — a real,
+    confirmed zero. A response served from cache reports ``-1``; that is not a
+    negative transfer, it is a cache hit that genuinely moved nothing, so it
+    clamps to ``0`` rather than sorting to the bottom as if it were corrupt.
+
+    When ``_transferSize`` is absent, ``bodySize``/``headersSize`` (summed
+    where positive) stand in. When none of the three fields carry a usable
+    number, the size is unknown and this returns ``None`` — never ``0``, which
+    would read as "this request was free" rather than "this was never
+    measured".
+    """
+    response = _response(entry)
+    size = response.get("_transferSize")
+    if isinstance(size, (int, float)):
+        return max(0, int(size))
+
+    body = response.get("bodySize")
+    headers = response.get("headersSize")
+    total = 0
+    known = False
+    for part in (body, headers):
+        if isinstance(part, (int, float)) and part > 0:
+            total += int(part)
+            known = True
+    return total if known else None
+
+
+def _row(entry: Mapping[str, Any]) -> Dict[str, Any]:
+    response = _response(entry)
+    status = response.get("status")
+    time = entry.get("time")
+    return {
+        "url": redact_url(_url(entry)),
+        "resource_type": classify(entry),
+        "status": int(status) if isinstance(status, (int, float)) else None,
+        # Absent, not zero: a missing measurement must never read as a
+        # perfect one. transfer_bytes and duration_ms both follow this rule.
+        "transfer_bytes": entry_transfer_bytes(entry),
+        "duration_ms": round(float(time), 3) if isinstance(time, (int, float)) else None,
+    }
+
+
+def _sort_key(indexed_row: Tuple[int, Dict[str, Any]]) -> Tuple[bool, int, str, int]:
+    """The total order used to rank HAR rows: heaviest first, unknown-size
+    rows last, ties broken deterministically.
+
+    A row whose size is unknown cannot be claimed to be the heaviest, so
+    ``transfer_bytes is None`` sorts first in the key — ``False`` (known)
+    before ``True`` (unknown) — pushing every unknown-size row after every
+    known one regardless of magnitude.
+
+    Size and URL alone are not a total order — two entries can share both (a
+    tracking pixel fired twice, a duplicated script request), and a key that
+    is not total lets the sort silently fall back to whatever position the
+    entries happened to arrive in. The original index is appended precisely
+    because it can never itself be equal between two distinct rows, which is
+    what makes this a total order rather than a merely-usually-sufficient one.
+    """
+    index, row = indexed_row
+    size = row["transfer_bytes"]
+    return (size is None, -(size or 0), row["url"], index)
+
+
+def reduce_har(har: Mapping[str, Any], *, top_n: int = 15) -> HarSummary:
+    """Reduce a parsed HAR to its heaviest ``top_n`` requests plus true totals.
+
+    ``total_requests`` accompanies the truncated rows deliberately. A table of
+    15 rows summing to 2 MB, with nothing saying the page made 214 requests
+    totalling 8 MB, is a misleading document.
+    """
+    log = har.get("log") if isinstance(har, Mapping) else None
+    entries = log.get("entries") if isinstance(log, Mapping) else None
+    if not isinstance(entries, list):
+        entries = []
+
+    rows = [_row(e) for e in entries if isinstance(e, Mapping)]
+    # The URL tie-break is what makes the order reproducible: identically-sized
+    # responses (empty 204s, sprites from one build) are common, and without it
+    # their order comes from input order and two renders can disagree. See
+    # `_sort_key` for why the index is also part of the key.
+    indexed = sorted(enumerate(rows), key=_sort_key)
+    rows = [row for _, row in indexed]
+    known_sizes = [r["transfer_bytes"] for r in rows if r["transfer_bytes"] is not None]
+    # See HarSummary's docstring: sum the known rows; None only when rows
+    # exist but not one of them carries a known size. Zero rows sums to a
+    # real 0 (nothing to be unknown about).
+    total_transfer_bytes = None if (rows and not known_sizes) else sum(known_sizes)
+    return HarSummary(
+        rows=rows[: max(0, int(top_n))],
+        total_requests=len(rows),
+        total_transfer_bytes=total_transfer_bytes,
+    )
+
+
+def read_har(path: str | Path) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Read and parse a HAR, returning ``(har, error)`` rather than raising.
+
+    The caller is assembling a report that must be produced regardless, so a
+    truncated capture is a fact to record, not an exception to propagate.
+    """
+    p = Path(path)
+    try:
+        payload = json.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None, f"HAR file not found: {p.name}"
+    except OSError as exc:
+        return None, f"HAR unreadable: {exc.strerror or exc}"
+    except json.JSONDecodeError as exc:
+        return None, f"HAR malformed: {exc}"
+    if not isinstance(payload, dict):
+        return None, "HAR malformed: top level is not an object"
+    return payload, None
+
+
+def summarize_capture(
+    *, screenshot: Optional[str], har: Optional[str], top_n: int
+) -> CaptureSummary:
+    """Derive one appendix entry's data, degrading per artifact.
+
+    Screenshot handling here is a *stat only* — whether the file exists. Whether
+    it decodes is discoverable only by decoding it, which happens in the report
+    layer at render time, and the report layer must never reach back and edit
+    ``report.json`` to record what it found.
+    """
+    degraded: List[str] = []
+
+    if not screenshot:
+        degraded.append("screenshot not retained")
+    elif not Path(screenshot).is_file():
+        degraded.append("screenshot file missing")
+
+    if not har:
+        degraded.append("HAR not retained")
+        return CaptureSummary(degraded=degraded)
+
+    har_path = Path(har)
+    if not har_path.is_file():
+        degraded.append("HAR file missing")
+        return CaptureSummary(degraded=degraded)
+
+    raw = har_path.read_bytes()
+    payload, error = read_har(har_path)
+    if payload is None:
+        degraded.append(error or "HAR unreadable")
+        return CaptureSummary(
+            har_sha256=hashlib.sha256(raw).hexdigest(),
+            har_bytes=len(raw),
+            degraded=degraded,
+        )
+
+    summary = reduce_har(payload, top_n=top_n)
+    return CaptureSummary(
+        har_sha256=hashlib.sha256(raw).hexdigest(),
+        har_bytes=len(raw),
+        requests=summary.rows,
+        total_requests=summary.total_requests,
+        total_transfer_bytes=summary.total_transfer_bytes,
+        degraded=degraded,
+    )

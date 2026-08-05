@@ -38,6 +38,17 @@ storage:
 
 report:
   output_dir: data/reports
+  appendix:
+    # How many requests the per-capture table shows, largest transfer first.
+    # The true total is always stated beside the table, so this truncates the
+    # listing without ever misrepresenting the capture.
+    top_requests: 15
+    # Screenshots are downscaled before embedding; a full-page mobile capture
+    # is otherwise several MB of base64 per entry.
+    screenshot_width_px: 720
+    # Beyond this height the image is cropped from the top, and the caption
+    # says so.
+    screenshot_max_height_px: 1600
 
 trends:
   # Campaign-over-campaign comparison. A change smaller than this reads as

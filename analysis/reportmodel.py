@@ -23,7 +23,7 @@ from analysis.trends import TrendSeries
 from config.load import Settings
 from normalize.schema import Run
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # 2: adds Report.appendix (Phase 7B)
 
 _SEVERITY_RANK = {"pass": 0, "warn": 1, "fail": 2}
 
@@ -212,9 +212,55 @@ class ComparisonRow(BaseModel):
 class CaptureRow(BaseModel):
     page: str
     run_id: str
+    device: str
+    network: str
     screenshot: Optional[str] = None
     har: Optional[str] = None
     trace: Optional[str] = None
+
+
+class RequestRow(BaseModel):
+    """One request from a capture's HAR, as the appendix table shows it."""
+
+    url: str
+    resource_type: str = "other"
+    status: Optional[int] = None
+    #: `None` when the capture never recorded a size for this request —
+    #: distinct from a confirmed `0` (e.g. a cache hit). Rendered as `—`,
+    #: never `0`: see `report/render_html.py:transfer_size`.
+    transfer_bytes: Optional[int] = None
+    duration_ms: Optional[float] = None
+
+
+class AppendixEntry(BaseModel):
+    """One capture's evidence: the screenshot path and its heaviest requests.
+
+    ``screenshot`` is a path, never bytes. Embedding base64 here would cost the
+    thing report.json exists for — a text document a reviewer can read and a
+    diff can compare.
+
+    ``total_requests`` sits beside the truncated ``requests`` list so the top-N
+    can never read as the whole capture.
+    """
+
+    page: str
+    run_id: str
+    device: str
+    network: str
+    screenshot: Optional[str] = None
+    har: Optional[str] = None
+    har_sha256: Optional[str] = None
+    har_bytes: Optional[int] = None
+    requests: List[RequestRow] = Field(default_factory=list)
+    total_requests: int = 0
+    #: Sum of the KNOWN row sizes (`RequestRow.transfer_bytes is not None`),
+    #: not `len(requests)` zero-filled. `None` only when not one row in the
+    #: capture carries a known size — an empty `requests` list still sums to
+    #: a real `0`. A capture with a mix of known and unknown rows sums just
+    #: the known ones: a partial total is real information, and folding the
+    #: unknown rows in as zero would silently understate it.
+    total_transfer_bytes: Optional[int] = None
+    degraded: List[str] = Field(default_factory=list)
 
 
 class Methodology(BaseModel):
@@ -232,6 +278,10 @@ class ReportMeta(BaseModel):
     playbooks_cited: List[str] = Field(default_factory=list)
     dropped_recommendations: int = 0
     knowledge_digest: str = ""
+    #: Entries whose artifacts were missing or malformed *at analysis time*. A
+    #: screenshot that exists but will not decode is only discoverable when
+    #: something decodes it, which is render time, so it is not counted here.
+    degraded_appendix_entries: int = 0
 
 
 class Report(BaseModel):
@@ -241,6 +291,7 @@ class Report(BaseModel):
     pages: List[PageBlock]
     comparison: List[ComparisonRow]
     methodology: Methodology
+    appendix: List[AppendixEntry] = Field(default_factory=list)
     meta: ReportMeta
 
 
@@ -356,6 +407,7 @@ def _methodology(pages: Sequence[PageAnalysis], settings: Settings) -> Methodolo
             run_counts.add(run.condition.runs)
             captures.append(CaptureRow(
                 page=page.page_name, run_id=run.run_id,
+                device=run.condition.device, network=run.condition.network,
                 screenshot=run.captures.screenshot, har=run.captures.har,
                 trace=run.captures.trace,
             ))
@@ -364,9 +416,49 @@ def _methodology(pages: Sequence[PageAnalysis], settings: Settings) -> Methodolo
         devices=sorted(devices),
         networks=sorted(networks),
         runs_per_condition=sorted(run_counts),
-        captures=sorted(captures, key=lambda c: (c.page, c.run_id)),
+        # (page, run_id) alone ties completely when two runs of the same page
+        # share a run_id — real on the load_runs path (see _appendix below,
+        # which required the same fix). device/network break the tie so
+        # this list's order is never left to SQLite's unconstrained row
+        # order on a full tie of created_at/run_id (store/sql.py).
+        captures=sorted(captures, key=lambda c: (c.page, c.run_id, c.device, c.network)),
         thresholds={k: float(v) for k, v in sorted(th.model_dump().items())},
     )
+
+
+def _appendix(pages: Sequence[PageAnalysis], settings: Settings) -> List[AppendixEntry]:
+    """One entry per capture, in the order methodology.captures uses.
+
+    Never raises. A campaign whose raw artifacts were cleaned still analyses;
+    the entries simply carry their degradation reasons.
+    """
+    from analysis import appendix as appendix_reduce
+
+    top_n = settings.report.appendix.top_requests
+    entries: List[AppendixEntry] = []
+    for page in pages:
+        for run in page.runs:
+            summary = appendix_reduce.summarize_capture(
+                screenshot=run.captures.screenshot,
+                har=run.captures.har,
+                top_n=top_n,
+            )
+            entries.append(AppendixEntry(
+                page=page.page_name, run_id=run.run_id,
+                device=run.condition.device, network=run.condition.network,
+                screenshot=run.captures.screenshot, har=run.captures.har,
+                har_sha256=summary.har_sha256, har_bytes=summary.har_bytes,
+                requests=[RequestRow(**row) for row in summary.requests],
+                total_requests=summary.total_requests,
+                total_transfer_bytes=summary.total_transfer_bytes,
+                degraded=list(summary.degraded),
+            ))
+    # (page, run_id) alone ties completely when two runs of the same page
+    # share a run_id — possible on the load_runs path, which reads
+    # data/processed/*.json directly with no uniqueness constraint on run_id
+    # (normalize/schema.py only requires min_length=1). device/network break
+    # the tie so the order never falls back to input position.
+    return sorted(entries, key=lambda e: (e.page, e.run_id, e.device, e.network))
 
 
 def build_report(
@@ -393,6 +485,7 @@ def build_report(
     run_ids = [run.run_id for page in ordered for run in page.runs]
 
     degraded = [p for p in ordered if p.mode != "llm"]
+    appendix = _appendix(ordered, settings)
     return Report(
         schema_version=SCHEMA_VERSION,
         cover=Cover(
@@ -417,6 +510,7 @@ def build_report(
         ],
         comparison=_comparison(ordered, settings),
         methodology=_methodology(ordered, settings),
+        appendix=appendix,
         meta=ReportMeta(
             analysis_mode="rule_based" if degraded else "llm",
             degradation_reason=degraded[0].degradation_reason if degraded else None,
@@ -424,6 +518,7 @@ def build_report(
             playbooks_cited=sorted({s for p in ordered for s in p.playbooks_cited}),
             dropped_recommendations=sum(p.dropped_recommendations for p in ordered),
             knowledge_digest=knowledge_digest,
+            degraded_appendix_entries=sum(1 for e in appendix if e.degraded),
         ),
     )
 
