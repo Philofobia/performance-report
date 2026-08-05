@@ -212,7 +212,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         # degrades to path-only rows exactly as it does for a missing capture.
         try:
             settings = load_settings()
-        except ConfigError as exc:
+        except (ConfigError, OSError, UnicodeDecodeError) as exc:
+            # ConfigError covers missing files and malformed YAML/schema, but
+            # `load_yaml` only wraps `yaml.YAMLError` — it does not wrap the
+            # open/read itself, so a permission error, a broken symlink, or a
+            # settings.yaml saved in a non-UTF-8 encoding (plausible on
+            # Windows) would otherwise propagate uncaught and crash the
+            # render of an already-valid report.json.
             print(f"Appendix images skipped: {exc}", file=sys.stderr)
         else:
             appendix_cfg = settings.report.appendix
