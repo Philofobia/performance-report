@@ -8,30 +8,22 @@
 # secret is committed. Omit the block entirely and nothing changes — headers are
 # opt-in and header-less runs behave exactly as they always have.
 #
-# Worked example for a target behind Akamai bot protection — uncomment and set
-# AKAMAI_BOT_TOKEN in .env:
-#
-# project: oakley
-# headers:
-#   X-Akamai-Bot: ${AKAMAI_BOT_TOKEN}
-# pages:
-#   - name: homepage
-#     url: https://www.oakley.com/en-us
-#   - name: plp
-#     url: https://www.oakley.com/en-us/category/sunglasses
-#   - name: pdp
-#     url: https://www.oakley.com/en-us/product/W0OO9102?variant=888392335937
-project: storefront
+project: oakley
+headers:
+  X-Akamai-Bot: ${AKAMAI_BOT_TOKEN}
 pages:
   - name: homepage
-    url: https://example.com/
+    url: https://www.oakley.com/en-us
+    tests:
+      - { device: mid-mobile, network: slow-4g, runs: 3 }
+      - { device: desktop, network: fast-3g, runs: 3 }
+  - name: plp
+    url: https://www.oakley.com/en-us/category/sunglasses
     tests:
       - { device: mid-mobile, network: slow-4g, runs: 3 }
       - { device: desktop, network: fast-3g, runs: 3 }
   - name: pdp
-    url: https://example.com/p/123
+    url: https://www.oakley.com/en-us/product/W0OO9102?variant=888392335937
     tests:
       - { device: mid-mobile, network: slow-4g, runs: 3 }
-      - { device: desktop, network: online, runs: 1 }
-  - name: plp
-    url: https://example.com/category/shoes
+      - { device: desktop, network: fast-3g, runs: 3 }

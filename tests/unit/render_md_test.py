@@ -225,3 +225,23 @@ def test_a_pipe_in_a_url_does_not_shift_the_table_columns():
     # -- the escaped pipe inside the URL must not add an 8th.
     cells = re.split(r"(?<!\\)\|", row)
     assert len(cells) == 7
+
+
+def test_each_finding_is_its_own_markdown_bullet():
+    """`trim_blocks` eats the newline after a block tag.
+
+    A findings line ending in `{% endif %}` therefore loses its line break and
+    every bullet runs into the next, so the list renders as one paragraph.
+    """
+    report = a_report()
+    # Two findings, both carrying evidence — the case that ends in `{% endif %}`.
+    page = report.pages[0]
+    page.findings = [
+        page.findings[0].model_copy(update={"title": "First problem"}),
+        page.findings[0].model_copy(update={"title": "Second problem"}),
+    ]
+    markdown = render_md(report)
+    bullets = [ln for ln in markdown.splitlines() if ln.startswith("- **")]
+    titles = [b for b in bullets if "First problem" in b or "Second problem" in b]
+    assert len(titles) == 2, f"findings collapsed onto one line: {bullets}"
+    assert not any("First problem" in b and "Second problem" in b for b in bullets)

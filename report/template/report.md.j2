@@ -30,8 +30,14 @@ _No actions identified._
 | Condition | LCP | CLS | INP | TBT |
 | --- | --- | --- | --- | --- |
 {% for row in page.conditions %}
-| {{ row.device }} / {{ row.network }} | {{ row.metrics.lcp_ms|round|int if row.metrics.lcp_ms is not none else '—' }} | {{ '%.2f'|format(row.metrics.cls) if row.metrics.cls is not none else '—' }} | {{ row.metrics.inp_ms|round|int if row.metrics.inp_ms is not none else '—' }} | {{ row.metrics.tbt_ms|round|int if row.metrics.tbt_ms is not none else '—' }} |
+| {{ row.device }} / {{ row.network }} | {{ row.metrics.lcp_ms|round|int if row.metrics.lcp_ms is not none else '—' }}{% if row.lcp_underestimated %} †{% endif %} | {{ '%.2f'|format(row.metrics.cls) if row.metrics.cls is not none else '—' }} | {{ row.metrics.inp_ms|round|int if row.metrics.inp_ms is not none else '—' }} | {{ row.metrics.tbt_ms|round|int if row.metrics.tbt_ms is not none else '—' }} |
 {% endfor %}
+{% if page.conditions|selectattr('lcp_underestimated')|list %}
+† LCP is a **lower bound** for this condition. The largest element on the page was
+a cross-origin resource served without a `Timing-Allow-Origin` header, so the
+browser exposed no render time for it. The figure shown is the largest element
+that *did* report a time; the real LCP is later by an unknown margin.
+{% endif %}
 
 **Trend**
 
@@ -51,7 +57,11 @@ _No prior campaigns for this condition._
 
 {% if page.findings %}
 {% for finding in page.findings %}
-- **{{ finding.title }}** {{ finding.detail }}{% if finding.evidence %} ({{ finding.evidence|join(' · ') }}){% endif %}
+{% if finding.evidence %}
+- **{{ finding.title }}** {{ finding.detail }} ({{ finding.evidence|join(' · ') }})
+{% else %}
+- **{{ finding.title }}** {{ finding.detail }}
+{% endif %}
 {% endfor %}
 {% else %}
 _No findings were produced for this page._

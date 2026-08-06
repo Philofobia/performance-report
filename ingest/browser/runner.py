@@ -231,9 +231,18 @@ class BrowserRunner:
                 )
 
             if not network.offline:
-                page.wait_for_load_state(
-                    "networkidle", timeout=self._network_idle_timeout_ms
-                )
+                # Best-effort settle, exactly like the LCP/INP waits below:
+                # `load` has already fired, so networkidle only buys late
+                # resources a chance to land. A commerce page with continuous
+                # analytics beacons may never reach it, and aborting there
+                # would discard the entire campaign — every condition already
+                # measured included — over a wait that was an optimisation.
+                try:
+                    page.wait_for_load_state(
+                        "networkidle", timeout=self._network_idle_timeout_ms
+                    )
+                except Exception:
+                    pass
 
             # LCP is dispatched asynchronously after load, and freezes at the
             # first interaction — so settle it BEFORE interacting.

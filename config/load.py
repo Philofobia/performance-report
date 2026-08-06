@@ -257,8 +257,27 @@ class TrendsConfig(BaseModel):
     window: int = Field(default=5, ge=2)
 
 
+class TimeoutsConfig(BaseModel):
+    """Per-navigation budgets for the browser runner.
+
+    The defaults suit a typical page. A heavy commerce page measured under CPU
+    *and* network throttling while HAR and trace recording are active can take
+    well over 30s to fire `load` — so these are configuration, not constants.
+
+    ``navigation_ms`` failing is a real failure: the page never loaded, and
+    there is nothing to measure. ``network_idle_ms`` is only a settle window
+    and its expiry is non-fatal (see ``ingest/browser/runner.py``).
+    """
+
+    navigation_ms: int = Field(default=30_000, ge=1_000)
+    network_idle_ms: int = Field(default=5_000, ge=0)
+    lcp_ms: int = Field(default=3_000, ge=0)
+    inp_ms: int = Field(default=1_000, ge=0)
+
+
 class Settings(BaseModel):
     run_defaults: RunDefaults = Field(default_factory=RunDefaults)
+    timeouts: TimeoutsConfig = Field(default_factory=TimeoutsConfig)
     thresholds: Thresholds = Field(default_factory=Thresholds)
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     rag: RagConfig = Field(default_factory=RagConfig)

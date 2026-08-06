@@ -120,6 +120,13 @@ p { margin: 0 0 2.5mm; }
 
 .mono { font-family: var(--mono); font-size: 8pt; }
 .unit { font-family: var(--mono); font-size: 6.5pt; color: var(--muted); margin-left: 0.4em; }
+/* Marks a figure the browser could not measure exactly (see .qualifier-note). */
+.qualifier { color: var(--warn, #b45309); font-weight: 700; margin-left: 0.2em; }
+.qualifier-note {
+  font-size: 7pt; line-height: 1.45; color: var(--muted);
+  margin-top: 0.6em; max-width: 120mm;
+}
+.qualifier-note code { font-family: var(--mono); font-size: 6.5pt; }
 
 .caption { font-size: 7.5pt; color: var(--muted); margin-top: 1mm; }
 
