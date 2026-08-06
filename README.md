@@ -90,7 +90,7 @@ Four files in `config/`, all validated on load with clean error messages:
 | `targets.yaml`  | Named pages + the per-page test matrix                                    |
 | `devices.yaml`  | Device presets (viewport, DPR, UA, CPU throttle)                          |
 | `networks.yaml` | Throttling presets (`online`, `fast-3g`, `slow-4g`, `slow-3g`, `offline`) |
-| `settings.yaml` | Thresholds, model choices, run defaults, storage paths                    |
+| `settings.yaml` | Thresholds, model choices, run defaults, storage paths, browser timeouts  |
 
 A target is a named page with a list of conditions. One **run** = one page × one
 condition, repeated N times with the median reported.
@@ -110,6 +110,25 @@ pages:
 ```
 
 Unknown device or network names are rejected at load time, naming the offending page.
+
+### Timeouts
+
+A heavy commerce page measured under CPU *and* network throttling, while HAR and trace
+recording are active, can take far longer to fire `load` than a typical page — so the
+per-navigation budgets are configuration rather than constants:
+
+```yaml
+# config/settings.yaml
+timeouts:
+  navigation_ms: 90000    # fatal on expiry: nothing loaded, nothing to measure
+  network_idle_ms: 15000  # NOT fatal: `load` already fired, idle is a settle window
+  lcp_ms: 5000
+  inp_ms: 1000
+```
+
+Only `navigation_ms` expiring fails a run. A page with continuous analytics beacons may
+never reach network idle, and aborting there would discard the whole campaign — every
+condition already measured included — over a wait that was only ever an optimisation.
 
 ### Targets behind bot protection (optional)
 
@@ -208,6 +227,13 @@ The details that make the numbers trustworthy:
   observer entries; an observer attached after `load` misses the very entries being
   measured. Same for CDP counters, which only accumulate while the domain is enabled.
 - **LCP settles before any interaction**, because LCP freezes at the first user input.
+- **An LCP candidate with no timing cannot become the measurement.** A cross-origin
+  resource served without `Timing-Allow-Origin` can produce an LCP entry whose
+  `renderTime` *and* `loadTime` are both 0 — seen on a hero `<video>`. That 0 is an
+  absence of timing, not a 0 ms paint, so it is never allowed to overwrite a real
+  earlier candidate. The reported LCP is then the largest element that *did* report a
+  time, `cwp.lcp_underestimated` is set, and the report labels the figure a **lower
+  bound** rather than presenting it as the measurement.
 - **INP is measured, not assumed.** A lab page load contains no interaction, so the
   runner drives a synthetic one — Escape, plus a click on a point _proven_
   non-interactive. On a page with no handlers at all, interactions resolve faster than
@@ -395,7 +421,7 @@ offline suite stays browser-free; only the real PDF run is `e2e`-marked.
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 720 offline tests, no browser, no network
+pytest -m "not e2e"      # 758 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 ```
 

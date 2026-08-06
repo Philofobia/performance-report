@@ -154,6 +154,11 @@ class ConditionRow(BaseModel):
     cpu_throttle: float
     runs: int
     metrics: Dict[str, Optional[float]]
+    #: Qualifies ``metrics["lcp_ms"]``: it is a lower bound, because the page's
+    #: largest element was cross-origin without ``Timing-Allow-Origin`` and the
+    #: browser exposed no render time for it. A separate field rather than a
+    #: `metrics` key — the dict is float-typed, and a qualifier is not a metric.
+    lcp_underestimated: bool = False
 
 
 class FindingModel(BaseModel):
@@ -310,6 +315,8 @@ def _condition_row(run: Run) -> ConditionRow:
             "lcp_ms": cwp.lcp_ms, "cls": cwp.cls, "inp_ms": cwp.inp_ms,
             "fcp_ms": cwp.fcp_ms, "ttfb_ms": cwp.ttfb_ms, "tbt_ms": cwp.tbt_ms,
         },
+        # Without this the table would present a lower bound as a measurement.
+        lcp_underestimated=cwp.lcp_underestimated,
     )
 
 

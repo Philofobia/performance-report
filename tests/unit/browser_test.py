@@ -156,17 +156,23 @@ class FakePage:
         return self._cwp  # __PERF_CAPTURE__ read
 
 
+class FakeTimeout(Exception):
+    """Stands in for playwright's TimeoutError — the offline suite imports no
+    browser package, and the runner catches by behaviour, not by type."""
+
+
 class FakeContext:
-    def __init__(self, log, page_kwargs=None):
+    def __init__(self, log, page_kwargs=None, page_cls=None):
         self.log = log
         self.pages = []
         self.closed = False
         self.tracing = FakeTracing(log)
         self.cdp = FakeCDP(log)
         self._page_kwargs = page_kwargs or {}
+        self._page_cls = page_cls or FakePage
 
     def new_page(self):
-        page = FakePage(self.log, **self._page_kwargs)
+        page = self._page_cls(self.log, **self._page_kwargs)
         self.pages.append(page)
         return page
 
@@ -179,13 +185,14 @@ class FakeContext:
 
 
 class FakeBrowser:
-    def __init__(self, page_kwargs=None):
+    def __init__(self, page_kwargs=None, page_cls=None):
         self.contexts = []
         self.log = []
         self._page_kwargs = page_kwargs
+        self._page_cls = page_cls
 
     def new_context(self, **kwargs):
-        ctx = FakeContext(self.log, self._page_kwargs)
+        ctx = FakeContext(self.log, self._page_kwargs, self._page_cls)
         self.contexts.append((kwargs, ctx))
         return ctx
 
@@ -338,6 +345,59 @@ def test_run_condition_skips_networkidle_when_offline(public_dns):
     make_runner(browser).run_condition("https://example.com/", DEVICE, OFFLINE)
     _, ctx = browser.contexts[0]
     assert ctx.pages[0].wait_states == []
+
+
+def test_networkidle_timeout_does_not_abort_the_measurement(public_dns):
+    """`load` already fired; networkidle is a settle, not a correctness gate.
+
+    A commerce page with continuous beacons may never go idle. Aborting there
+    discards the whole campaign — every condition already measured included —
+    over a wait that was only ever an optimisation. Matches how the LCP/INP
+    waits already treat a timeout: the measurement proceeds.
+    """
+    class NeverIdlePage(FakePage):
+        def wait_for_load_state(self, *args, **kwargs):
+            super().wait_for_load_state(*args, **kwargs)
+            raise FakeTimeout("Timeout 5000ms exceeded.")
+
+    browser = FakeBrowser(page_cls=NeverIdlePage)
+    result = make_runner(browser).run_condition(
+        "https://example.com/", DEVICE, NETWORK
+    )
+    # The run still yields real metrics rather than raising.
+    assert result["cwp"]["lcp_ms"] == 6200
+    _, ctx = browser.contexts[0]
+    assert any("networkidle" in str(a) for a, _ in ctx.pages[0].wait_states)
+
+
+def test_navigation_timeout_is_configurable(public_dns):
+    """A heavy page under CPU+network throttling needs a larger budget."""
+    browser = FakeBrowser()
+    make_runner(browser, navigation_timeout_ms=90_000).run_condition(
+        "https://example.com/", DEVICE, NETWORK
+    )
+    _, ctx = browser.contexts[0]
+    _, kwargs = ctx.pages[0].gotos[0]
+    assert kwargs["timeout"] == 90_000
+
+
+def test_network_idle_timeout_is_configurable(public_dns):
+    browser = FakeBrowser()
+    make_runner(browser, network_idle_timeout_ms=20_000).run_condition(
+        "https://example.com/", DEVICE, NETWORK
+    )
+    _, ctx = browser.contexts[0]
+    _, kwargs = ctx.pages[0].wait_states[0]
+    assert kwargs["timeout"] == 20_000
+
+
+def test_navigation_timeout_still_propagates(public_dns):
+    """Unlike networkidle, failing to load at all is a real failure."""
+    browser = FakeBrowser(
+        page_kwargs={"goto_error": FakeTimeout("Page.goto: Timeout 30000ms exceeded.")}
+    )
+    with pytest.raises(FakeTimeout):
+        make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
 
 
 def test_interaction_is_triggered_after_lcp_settles(public_dns):
@@ -508,6 +568,68 @@ def test_collector_script_is_a_self_invoking_iife():
     """add_init_script executes source; a bare arrow function would never run."""
     script = webser.COLLECTOR_SCRIPT.strip()
     assert script.startswith("(()") and script.endswith(")();")
+
+
+# --- LCP candidates with no exposable timing ------------------------------- #
+# A cross-origin resource served without `Timing-Allow-Origin` can produce an
+# LCP entry whose renderTime AND loadTime are both 0, so startTime is 0 (seen
+# on a hero <video>). Zero is an absence of timing, not a 0 ms paint: letting
+# it overwrite a real earlier candidate reports the page as instant.
+
+def test_lcp_underestimated_when_larger_candidate_has_no_timing():
+    assert webser.lcp_underestimated(
+        {"lcp_timed_max_size": 25742, "lcp_untimed_max_size": 1123200}
+    ) is True
+
+
+def test_lcp_not_underestimated_when_largest_candidate_is_timed():
+    assert webser.lcp_underestimated(
+        {"lcp_timed_max_size": 61440, "lcp_untimed_max_size": 5670}
+    ) is False
+
+
+def test_lcp_not_underestimated_when_no_untimed_candidates():
+    assert webser.lcp_underestimated({"lcp_timed_max_size": 9010}) is False
+    assert webser.lcp_underestimated({}) is False
+
+
+def test_collect_web_vitals_flags_underestimated_lcp():
+    class P:
+        def evaluate(self, script, arg=None):
+            return {
+                "lcp_ms": 1164.7,
+                "cls": 0.01,
+                "inp_ms": 120,
+                "fcp_ms": 900,
+                "lcp_timed_max_size": 25742,
+                "lcp_untimed_max_size": 1123200,
+            }
+
+    vitals = webser.collect_web_vitals(P())
+    # The largest timed candidate survives — never clobbered to 0.
+    assert vitals["lcp_ms"] == 1164.7
+    assert vitals["lcp_underestimated"] is True
+
+
+def test_collect_web_vitals_lcp_underestimated_defaults_false():
+    class P:
+        def evaluate(self, script, arg=None):
+            return {"lcp_ms": 2200, "cls": 0.0, "inp_ms": 90}
+
+    assert webser.collect_web_vitals(P())["lcp_underestimated"] is False
+
+
+def test_collector_script_ignores_zero_start_time_lcp_candidates():
+    """The guard must live in the JS: a 0 startTime may not become lcp_ms."""
+    script = webser.COLLECTOR_SCRIPT
+    assert "e.startTime > 0" in script
+    assert "lcp_untimed_max_size" in script
+    assert "lcp_timed_max_size" in script
+
+
+def test_read_script_exposes_lcp_candidate_sizes():
+    assert "lcp_timed_max_size" in webser.READ_SCRIPT
+    assert "lcp_untimed_max_size" in webser.READ_SCRIPT
 
 
 @pytest.mark.parametrize(
@@ -928,6 +1050,41 @@ def test_make_automated_run_rejects_missing_cwv_trio():
         )
 
 
+def test_merge_median_metrics_ors_lcp_underestimated_across_runs():
+    """A flag is not a measurement: it must not be medianed, it must be OR-ed.
+
+    If any run of the condition saw an untimed larger candidate, the reported
+    median LCP for that condition is an underestimate.
+    """
+    merged = automated.merge_median_metrics([
+        {"cwp": {"lcp_ms": 1000, "cls": 0.1, "inp_ms": 10, "lcp_underestimated": False}},
+        {"cwp": {"lcp_ms": 2000, "cls": 0.2, "inp_ms": 20, "lcp_underestimated": True}},
+        {"cwp": {"lcp_ms": 3000, "cls": 0.3, "inp_ms": 30, "lcp_underestimated": False}},
+    ])
+    assert merged["cwp"]["lcp_underestimated"] is True
+    assert merged["cwp"]["lcp_ms"] == 2000
+
+
+def test_merge_median_metrics_lcp_underestimated_false_when_no_run_flagged():
+    merged = automated.merge_median_metrics([
+        {"cwp": {"lcp_ms": 1000, "cls": 0.1, "inp_ms": 10}},
+        {"cwp": {"lcp_ms": 2000, "cls": 0.2, "inp_ms": 20}},
+    ])
+    assert merged["cwp"]["lcp_underestimated"] is False
+
+
+def test_make_automated_run_carries_lcp_underestimated_flag():
+    cfg = make_cfg()
+    measurements = [
+        {"cwp": {"lcp_ms": 1164.7, "cls": 0.1, "inp_ms": 10,
+                 "lcp_underestimated": True}},
+    ]
+    run = automated.make_automated_run(
+        cfg, cfg.pages[0], PageTest(device="mid-mobile", network="slow-4g", runs=1), measurements
+    )
+    assert run.metrics.cwp.lcp_underestimated is True
+
+
 def test_make_automated_run_carries_representative_artifacts():
     cfg = make_cfg()
     measurements = [
@@ -1183,7 +1340,7 @@ def test_cli_sends_configured_headers_by_default(monkeypatch, tmp_path):
     monkeypatch.setenv("AKAMAI_BOT_TOKEN", "tok")
     monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
     runner = RecordingRunner()
-    monkeypatch.setattr(automated, "_real_runner", lambda: (None, None, runner))
+    monkeypatch.setattr(automated, "_real_runner", lambda cfg=None: (None, None, runner))
 
     assert automated.main(["--pages", "pdp", "--output-dir", str(tmp_path)]) == 0
     assert runner.calls[0]["extra_http_headers"] == {"X-Akamai-Bot": "tok"}
@@ -1195,7 +1352,7 @@ def test_cli_no_headers_flag_suppresses_them(monkeypatch, tmp_path):
     monkeypatch.setenv("AKAMAI_BOT_TOKEN", "tok")
     monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
     runner = RecordingRunner()
-    monkeypatch.setattr(automated, "_real_runner", lambda: (None, None, runner))
+    monkeypatch.setattr(automated, "_real_runner", lambda cfg=None: (None, None, runner))
 
     assert automated.main(
         ["--pages", "pdp", "--no-headers", "--output-dir", str(tmp_path)]
@@ -1212,7 +1369,7 @@ def test_cli_reports_missing_token_without_leaking_it(monkeypatch, tmp_path, cap
     # the test environment and undo the delenv above.
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
     monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
-    monkeypatch.setattr(automated, "_real_runner", lambda: (None, None, RecordingRunner()))
+    monkeypatch.setattr(automated, "_real_runner", lambda cfg=None: (None, None, RecordingRunner()))
 
     code = automated.main(["--pages", "pdp", "--output-dir", str(tmp_path)])
     err = capsys.readouterr().err
@@ -1224,7 +1381,7 @@ def test_cli_writes_one_json_per_run(monkeypatch, tmp_path, capsys):
     cfg = make_cfg()
     monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
     runner = RecordingRunner()
-    monkeypatch.setattr(automated, "_real_runner", lambda: (None, None, runner))
+    monkeypatch.setattr(automated, "_real_runner", lambda cfg=None: (None, None, runner))
 
     code = automated.main([
         "--pages", "pdp", "--output-dir", str(tmp_path), "--artifacts-root", str(tmp_path / "raw"),

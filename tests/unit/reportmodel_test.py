@@ -19,6 +19,7 @@ from analysis.reportmodel import (
 )
 from config.load import Settings, Thresholds
 from normalize.schema import Run
+from analysis import reportmodel
 from rag import retrieve
 
 
@@ -410,3 +411,15 @@ def test_methodology_captures_break_ties_on_device_and_network_too():
     assert [(c.device, c.network) for c in report.methodology.captures] == [
         ("desktop", "fast-3g"), ("mid-mobile", "slow-4g"),
     ]
+
+
+def test_condition_row_carries_the_lcp_lower_bound_qualifier():
+    """The flag must survive Run -> ConditionRow, or the table lies silently."""
+    run = make_run()
+    run.metrics.cwp.lcp_underestimated = True
+    row = reportmodel._condition_row(run)
+    assert row.lcp_underestimated is True
+
+
+def test_condition_row_qualifier_defaults_false():
+    assert reportmodel._condition_row(make_run()).lcp_underestimated is False

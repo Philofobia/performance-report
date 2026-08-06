@@ -53,6 +53,11 @@ class CwpMetrics(BaseModel):
     # tasks (DevTools/Lighthouse definition). Complements INP, which is a
     # field metric requiring a real interaction.
     tbt_ms: Optional[float] = Field(default=None, ge=0)
+    #: ``lcp_ms`` is a lower bound: a larger LCP candidate existed whose
+    #: resource was cross-origin without ``Timing-Allow-Origin``, so the
+    #: browser exposed no render time for it. Defaulted so runs recorded
+    #: before this qualifier existed still validate.
+    lcp_underestimated: bool = False
     target_lcp_ms: Optional[float] = Field(default=None, ge=0)
     target_cls: Optional[float] = Field(default=None, ge=0, le=1)
     target_inp_ms: Optional[float] = Field(default=None, ge=0)

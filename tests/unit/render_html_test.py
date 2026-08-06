@@ -402,3 +402,36 @@ def test_a_one_capture_and_a_six_capture_report_share_a_fingerprint():
     assert one_fp[-4:] == [
         "appendix", "capture[]", "capture.screenshot", "capture.requests",
     ]
+
+
+# --- LCP lower-bound caveat ------------------------------------------------ #
+# When the largest LCP candidate was a cross-origin resource with no
+# Timing-Allow-Origin, the browser exposes no time for it and `lcp_ms` is the
+# largest *timed* element. The report must say so, or a 1165ms lower bound
+# reads as a comfortable pass.
+
+def _flag_lcp(report, flagged=True):
+    for page in report.pages:
+        page.conditions[0].lcp_underestimated = flagged
+    return report
+
+
+def test_html_marks_lcp_as_a_lower_bound_when_flagged():
+    report = _flag_lcp(a_report())
+    html = render_html(report)
+    assert "lower bound" in html
+    assert "Timing-Allow-Origin" in html
+
+
+def test_html_omits_lcp_caveat_when_not_flagged():
+    report = _flag_lcp(a_report(), flagged=False)
+    html = render_html(report)
+    assert "Timing-Allow-Origin" not in html
+
+
+def test_lcp_caveat_does_not_drift_the_skeleton():
+    """The caveat lives inside page.cwv-dashboard — it adds no new section."""
+    flagged = _flag_lcp(a_report())
+    plain = _flag_lcp(a_report(), flagged=False)
+    assert fingerprint(render_html(flagged)) == \
+           fingerprint(render_html(plain))

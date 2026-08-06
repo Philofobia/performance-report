@@ -12,6 +12,18 @@ run_defaults:
   desktop_device: desktop
   desktop_network: fast-3g
 
+timeouts:
+  # Per-navigation budgets for the browser runner (ms).
+  # A heavy commerce page under CPU *and* network throttling, with HAR and
+  # trace recording active, can need well over the 30s default to fire `load`
+  # — the Oakley PDP does. navigation_ms expiring is fatal (nothing loaded, so
+  # there is nothing to measure); network_idle_ms expiring is not, because
+  # `load` has already fired and idle is only a settle window.
+  navigation_ms: 90000
+  network_idle_ms: 15000
+  lcp_ms: 5000
+  inp_ms: 1000
+
 thresholds:
   # CWV "good" thresholds (ms) — LCP / INP.
   lcp_good_ms: 2500
@@ -24,7 +36,11 @@ thresholds:
   ttfb_good_ms: 800
 
 models:
-  embeddings: text-embedding-004
+  # text-embedding-004 was retired by Google — the API now answers it with
+  # 404 NOT_FOUND for embedContent. gemini-embedding-001 is the stable
+  # replacement. Changing this invalidates the embedding cache (it is keyed by
+  # content, not by model), so re-index after switching.
+  embeddings: gemini-embedding-001
   llm: gemini-2.0-flash
   embed_dimensions: 768
 

@@ -31,7 +31,8 @@ from urllib.parse import urlsplit
 COLLECTOR_SCRIPT = """
 (() => {
   if (window.__PERF_CAPTURE__) return;
-  const state = { lcp_ms: null, cls: 0, inp_ms: null, fcp_ms: null, longtasks: [] };
+  const state = { lcp_ms: null, cls: 0, inp_ms: null, fcp_ms: null, longtasks: [],
+                  lcp_timed_max_size: 0, lcp_untimed_max_size: 0 };
   window.__PERF_CAPTURE__ = state;
   const observe = (type, handler, extra) => {
     try {
@@ -39,8 +40,22 @@ COLLECTOR_SCRIPT = """
         .observe(Object.assign({ type: type, buffered: true }, extra || {}));
     } catch (e) { /* entry type unsupported in this browser — leave null */ }
   };
-  // Last LCP candidate wins (the spec's "largest so far" semantics).
-  observe('largest-contentful-paint', (e) => { state.lcp_ms = e.startTime; });
+  // Last LCP candidate wins (the spec's "largest so far" semantics) — but only
+  // if it carries timing. A cross-origin resource served without
+  // `Timing-Allow-Origin` can yield an entry whose renderTime AND loadTime are
+  // both 0, so startTime is 0 (observed on a hero <video>). That 0 is an
+  // absence of timing, not a 0 ms paint; letting it overwrite a real earlier
+  // candidate reports the page as having painted instantly. Keep the largest
+  // *timed* candidate and record the sizes, so the reader can be told the
+  // value is a lower bound rather than being quietly misled.
+  observe('largest-contentful-paint', (e) => {
+    if (e.startTime > 0) {
+      state.lcp_ms = e.startTime;
+      if (e.size > state.lcp_timed_max_size) state.lcp_timed_max_size = e.size;
+    } else if (e.size > state.lcp_untimed_max_size) {
+      state.lcp_untimed_max_size = e.size;
+    }
+  });
   // CLS = sum of layout shifts not tied to a recent user input.
   observe('layout-shift', (e) => { if (!e.hadRecentInput) state.cls += e.value; });
   observe('paint', (e) => {
@@ -72,7 +87,9 @@ READ_SCRIPT = """
     inp_ms: s.inp_ms === undefined ? null : s.inp_ms,
     fcp_ms: s.fcp_ms === undefined ? null : s.fcp_ms,
     ttfb_ms: nav ? nav.responseStart : null,
-    longtasks: s.longtasks || []
+    longtasks: s.longtasks || [],
+    lcp_timed_max_size: s.lcp_timed_max_size || 0,
+    lcp_untimed_max_size: s.lcp_untimed_max_size || 0
   };
 }
 """
@@ -147,10 +164,28 @@ def compute_tbt_ms(
     return round(total, 3)
 
 
-def collect_web_vitals(page) -> Dict[str, Optional[float]]:
+def lcp_underestimated(raw: Dict[str, Any]) -> bool:
+    """True when a larger LCP candidate existed that exposed no timing.
+
+    Chrome reports ``startTime == 0`` for an LCP candidate whose resource is
+    cross-origin and served without ``Timing-Allow-Origin``. When such a
+    candidate is *larger* than every candidate that did report a time, the
+    element that actually decides the page's LCP was never timed, and the value
+    we can report is the largest timed element — a lower bound.
+    """
+    def _size(key: str) -> float:
+        try:
+            return float(raw.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    return _size("lcp_untimed_max_size") > _size("lcp_timed_max_size")
+
+
+def collect_web_vitals(page) -> Dict[str, Any]:
     """Read captured CWV values off the page (LCP/CLS/INP/FCP/TTFB/TBT)."""
     raw = page.evaluate(READ_SCRIPT) or {}
-    out: Dict[str, Optional[float]] = {}
+    out: Dict[str, Any] = {}
     for key in CWP_KEYS:
         val = raw.get(key)
         try:
@@ -159,6 +194,8 @@ def collect_web_vitals(page) -> Dict[str, Optional[float]]:
             out[key] = None
     # TBT is derived, not observed directly.
     out["tbt_ms"] = compute_tbt_ms(raw.get("longtasks"), out.get("fcp_ms"))
+    # Not a measurement — a qualifier on lcp_ms. See lcp_underestimated().
+    out["lcp_underestimated"] = lcp_underestimated(raw)
     return out
 
 

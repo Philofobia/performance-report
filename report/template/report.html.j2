@@ -91,7 +91,7 @@
       {% for row in page.conditions %}
         <tr>
           <td>{{ row.device }} / {{ row.network }}</td>
-          <td>{{ row.metrics.lcp_ms|round|int if row.metrics.lcp_ms is not none else '—' }}<span class="unit">ms</span></td>
+          <td>{{ row.metrics.lcp_ms|round|int if row.metrics.lcp_ms is not none else '—' }}<span class="unit">ms</span>{% if row.lcp_underestimated %}<span class="qualifier">†</span>{% endif %}</td>
           <td>{{ '%.2f'|format(row.metrics.cls) if row.metrics.cls is not none else '—' }}</td>
           <td>{{ row.metrics.inp_ms|round|int if row.metrics.inp_ms is not none else '—' }}<span class="unit">ms</span></td>
           <td>{{ row.metrics.tbt_ms|round|int if row.metrics.tbt_ms is not none else '—' }}<span class="unit">ms</span></td>
@@ -99,6 +99,15 @@
       {% endfor %}
       </tbody>
     </table>
+    {% if page.conditions|selectattr('lcp_underestimated')|list %}
+      <p class="qualifier-note">
+        † LCP is a <strong>lower bound</strong> for this condition. The largest
+        element on the page was a cross-origin resource served without a
+        <code>Timing-Allow-Origin</code> header, so the browser exposed no render
+        time for it. The figure shown is the largest element that <em>did</em>
+        report a time; the real LCP is later by an unknown margin.
+      </p>
+    {% endif %}
   </div>
 
   <div data-section="page.trend" class="block">

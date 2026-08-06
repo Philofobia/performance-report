@@ -73,8 +73,16 @@ def merge_median_metrics(measurements: List[Dict[str, Any]]) -> Dict[str, Dict[s
         merged.update({k: median_int([r.get(k) for r in runs]) for k in int_keys})
         return merged
 
+    # A qualifier, not a measurement: medianing a bool is meaningless. If any
+    # run of this condition saw a larger untimed LCP candidate, the merged
+    # median LCP is a lower bound and must say so.
+    cwp_merged = _merge(cwp_runs, float_keys=cwp_keys)
+    cwp_merged["lcp_underestimated"] = any(
+        bool(r.get("lcp_underestimated")) for r in cwp_runs
+    )
+
     return {
-        "cwp": _merge(cwp_runs, float_keys=cwp_keys),
+        "cwp": cwp_merged,
         # Lighthouse category scores are integers 0-100.
         "lighthouse": _merge(lh_runs, int_keys=lh_keys),
         "network": _merge(net_runs, float_keys=net_float_keys, int_keys=net_int_keys),
@@ -249,14 +257,23 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _real_runner():
+def _real_runner(cfg: Optional[ProjectConfig] = None):
     """Build a real BrowserRunner (launches headless Chromium)."""
     from playwright.sync_api import sync_playwright  # local import for testability
     from ingest.browser.runner import BrowserRunner
 
     pw = sync_playwright().start()
     browser = pw.chromium.launch(headless=True)
-    return pw, browser, BrowserRunner(browser)
+    kwargs: Dict[str, Any] = {}
+    if cfg is not None:
+        t = cfg.settings.timeouts
+        kwargs = {
+            "navigation_timeout_ms": t.navigation_ms,
+            "network_idle_timeout_ms": t.network_idle_ms,
+            "lcp_timeout_ms": t.lcp_ms,
+            "inp_timeout_ms": t.inp_ms,
+        }
+    return pw, browser, BrowserRunner(browser, **kwargs)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -308,7 +325,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     pw = browser = None
     runner = None
     try:
-        pw, browser, runner = _real_runner()
+        pw, browser, runner = _real_runner(cfg)
         runs = run_campaign(
             cfg,
             runner,
