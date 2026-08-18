@@ -187,6 +187,12 @@ and `config/networks.yaml` — the same names the automated runner accepts, so a
 manual run can be compared against a measured one instead of sitting in a
 condition bucket of its own.
 
+They start on `settings.run_defaults.device` / `.network`, not on the first
+preset in the file. `networks.yaml` lists `online` first while a run defaults to
+`slow-4g`, so a select left untouched would otherwise record a condition the
+operator never chose — the CLI/UI disagreement this whole design exists to
+prevent, arriving through the one field nobody thinks to check.
+
 ### 3.6 No JavaScript
 
 The form submits with `method="post"`; the browser does the rest. Native

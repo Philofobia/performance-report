@@ -42,10 +42,16 @@ class Application:
     """The manual-entry form, as a WSGI application."""
 
     def __init__(self, *, output_dir: Path, devices: Sequence[str] = (),
-                 networks: Sequence[str] = ()) -> None:
+                 networks: Sequence[str] = (),
+                 defaults: Optional[Mapping[str, str]] = None) -> None:
         self.output_dir = Path(output_dir)
         self.devices = list(devices)
         self.networks = list(networks)
+        # Which option a `<select>` starts on. Without this the *first* preset
+        # wins, and `networks.yaml` lists `online` first while a run defaults
+        # to `slow-4g` — an untouched form would file the run under a
+        # condition nobody chose.
+        self.defaults = dict(defaults or {})
         # `select_autoescape()` matches on the *final* extension, so a file
         # named `form.html.j2` would not be escaped by its defaults. The form
         # echoes user prose back into HTML on both the error and success
@@ -189,6 +195,7 @@ class Application:
             form_level=errors.get(form.FORM_LEVEL, ""),
             devices=self.devices,
             networks=self.networks,
+            defaults=self.defaults,
         )
 
     def _respond(self, start_response: StartResponse, status: str, body: bytes,

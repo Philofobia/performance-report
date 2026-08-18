@@ -37,11 +37,18 @@ def _presets() -> tuple:
 
     A manual run recorded under an invented condition could never be compared
     against a measured one; it would sit in a bucket of its own forever.
+
+    The defaults come from ``settings.run_defaults`` rather than from the
+    first entry in each preset file: `networks.yaml` happens to list `online`
+    first, and a form that started there would quietly file runs under a
+    condition the operator never picked.
     """
-    from config.load import load_devices, load_networks
+    from config.load import load_devices, load_networks, load_settings
     devices = [d.name for d in load_devices().devices]
     networks = [n.name for n in load_networks().networks]
-    return devices, networks
+    run_defaults = load_settings().run_defaults
+    defaults = {"device": run_defaults.device, "network": run_defaults.network}
+    return devices, networks, defaults
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -74,14 +81,14 @@ def main(argv: Optional[List[str]] = None, *,
         return 2
 
     try:
-        devices, networks = _presets()
+        devices, networks, defaults = _presets()
     except Exception as exc:  # ConfigError and friends
         print(f"error: could not read the device/network presets: {exc}",
               file=sys.stderr)
         return 2
 
-    app = Application(output_dir=Path(args.output_dir),
-                      devices=devices, networks=networks)
+    app = Application(output_dir=Path(args.output_dir), devices=devices,
+                      networks=networks, defaults=defaults)
     server = (server_factory or _make_server)(args.host, args.port, app)
 
     print(f"Manual entry form: http://{args.host}:{args.port}/")

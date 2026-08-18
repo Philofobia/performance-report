@@ -87,6 +87,37 @@ def test_device_and_network_render_the_configured_presets(app):
     assert '<option value="fast-3g"' in body
 
 
+def test_the_selects_preselect_the_run_defaults(tmp_path):
+    """Otherwise the first option wins, and it is not the default condition.
+
+    `config/settings.yaml` defaults a run to slow-4g; `networks.yaml` lists
+    `online` first. A form that submitted `online` for an untouched select
+    would file runs under a condition the operator never chose.
+    """
+    app = Application(
+        output_dir=tmp_path / "processed",
+        devices=["mid-mobile", "desktop"],
+        networks=["online", "fast-3g", "slow-4g"],
+        defaults={"device": "desktop", "network": "slow-4g"},
+    )
+    _, _, body = call(app)
+    assert '<option value="desktop" selected' in body
+    assert '<option value="slow-4g" selected' in body
+    assert '<option value="online" selected' not in body
+
+
+def test_a_submitted_value_beats_the_default(tmp_path):
+    app = Application(
+        output_dir=tmp_path / "processed",
+        devices=["mid-mobile", "desktop"],
+        networks=["online", "fast-3g", "slow-4g"],
+        defaults={"device": "desktop", "network": "slow-4g"},
+    )
+    _, _, body = call(app, query=urlencode({"device": "mid-mobile"}))
+    assert '<option value="mid-mobile" selected' in body
+    assert '<option value="desktop" selected' not in body
+
+
 def test_the_saved_banner_names_the_run_and_prefills_the_context(app):
     _, _, body = call(app, query=urlencode({
         "saved": "run_20260818_101500_ab12",

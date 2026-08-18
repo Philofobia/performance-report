@@ -50,10 +50,10 @@
             >{{ values.get(field.name, '') }}</textarea>
 
           {% elif field.kind == 'select' %}
+          {% set chosen = values.get(field.name) or defaults.get(field.name) %}
           <select id="f-{{ field.name }}" name="{{ field.name }}">
             {% for option in (devices if field.name == 'device' else networks) %}
-            <option value="{{ option }}"
-              {% if values.get(field.name) == option %}selected{% endif %}>{{ option }}</option>
+            <option value="{{ option }}"{% if chosen == option %} selected{% endif %}>{{ option }}</option>
             {% endfor %}
           </select>
 

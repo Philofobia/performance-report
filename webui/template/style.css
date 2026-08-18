@@ -64,9 +64,13 @@ legend {
   color: var(--muted);
 }
 
+/* auto-fill, not auto-fit: empty tracks are kept, so a three-field group
+ * keeps the same column width as a four-field one. With auto-fit the three
+ * fields stretch to fill the row and every section measures differently,
+ * which reads as a layout accident rather than a grid. */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
   gap: 0.9rem 1.1rem;
 }
 

@@ -79,7 +79,7 @@ FIELDS: Tuple[FormField, ...] = (
     FormField("runs", "Runs", "Under what conditions", cast="int",
               loc=("condition", "runs"), model=Condition, attr="runs"),
 
-    FormField("problem", "What's wrong", "What's wrong", kind="textarea",
+    FormField("problem", "Description", "What's wrong", kind="textarea",
               cast="str", loc=("problem", "description")),
     FormField("keywords", "Keywords", "What's wrong", kind="text", cast="str",
               loc=("problem", "keywords")),
