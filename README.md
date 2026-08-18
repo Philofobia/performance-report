@@ -22,16 +22,11 @@ PDF, HTML and Markdown mirror rendered from the Report JSON · a unified `python
 entry point and a `--skeleton-check` drift guard enforced against a committed baseline ·
 **campaign-over-campaign trends per page and condition** · **a per-capture appendix
 embedding each screenshot and its heaviest HAR requests** · **a loopback-only web form
-for manual entry**.
+for manual entry** · **a CI job that regenerates a real campaign report and gates its
+skeleton**.
 
-**Missing — the rest of phase 7:**
-
-| Gap                    | Consequence today                                                   |
-| ---------------------- | ------------------------------------------------------------------- |
-| CI report regeneration | CI guards the skeleton with a synthetic render, not a real campaign |
-
-Full breakdown in [Roadmap](#roadmap). Everything listed as missing is **planned, not
-built** — nothing in this README describes it as working.
+**Missing:** nothing — every phase in the [Roadmap](#roadmap) is built. Anything
+this README does not describe as working is not there.
 
 ---
 
@@ -447,7 +442,7 @@ offline suite stays browser-free; only the real PDF run is `e2e`-marked.
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 812 offline tests, no browser, no network
+pytest -m "not e2e"      # 820 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 ```
 
@@ -455,6 +450,21 @@ The Playwright surface and every metric collector are injected, so the offline s
 runs entirely against fakes. CI additionally enforces ≥80% coverage, runs `pip-audit`
 on pinned dependencies, and runs `gitleaks` over both the working tree **and the full
 commit history** — a secret committed and later removed is still a leaked secret.
+
+CI additionally regenerates a **real** report on every push and pull request:
+a headless Chromium campaign against `config/ci-targets.yaml`, analysed
+`--no-llm` and rendered with `--skeleton-check`, with the resulting
+`report.json`/`.html`/`.md`/`.pdf` uploaded as a build artifact. Everything
+else in CI proves the parts against fakes; this is the only thing that proves
+the sequence.
+
+It gates *structure and execution*, never magnitude: the page belongs to
+someone else and its numbers move for reasons that have nothing to do with this
+repository. Its INP arrives as the Event Timing observer floor, so the CI
+report is not a benchmark and must not be read as one. A target that does not
+answer exits 3 and the job skips with a warning rather than turning a merge red
+— a schema violation, a render failure or skeleton drift all still fail hard.
+HAR and trace files are never uploaded (SECURITY_PLAN.md §2.6).
 
 ---
 
@@ -494,7 +504,7 @@ affect day-to-day use:
 | 7a    | Campaign-over-campaign trends per page and condition                 | Done     |
 | 7b    | Screenshot / HAR appendix embedded in the PDF                        | Done     |
 | 7c    | Loopback-only web form for manual entry                              | Done     |
-| 7d    | CI regeneration of a real campaign report                            | **Next** |
+| 7d    | CI regeneration of a real campaign report                            | Done     |
 
 ## Documentation
 
