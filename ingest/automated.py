@@ -28,9 +28,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from config.load import PageTarget, PageTest, ProjectConfig
+from ingest.browser.runner import TargetUnreachableError
 from normalize.schema import Run
 
 DEFAULT_RUNNER_NAME = "automated-campaign-1.0"
+
+#: Exit code for "the target did not answer", as distinct from a failure of
+#: this pipeline. 3 rather than 2, which argparse owns for usage errors.
+EXIT_TARGET_UNREACHABLE = 3
 
 Numeric = Optional[float]
 
@@ -343,6 +348,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             artifacts_root=args.artifacts_root,
             no_headers=args.no_headers,
         )
+    except TargetUnreachableError as exc:
+        print(f"error: target unreachable: {exc}", file=sys.stderr)
+        return EXIT_TARGET_UNREACHABLE
     except Exception as exc:
         print(f"error: campaign failed: {exc}", file=sys.stderr)
         return 1

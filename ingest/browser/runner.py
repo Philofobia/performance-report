@@ -43,6 +43,19 @@ class BlockedResponseError(RuntimeError):
     """
 
 
+class TargetUnreachableError(RuntimeError):
+    """Navigation itself failed — DNS, TLS, connection refused, or timeout.
+
+    Separated from every other failure so a caller can distinguish "the
+    network did not cooperate" from "this pipeline is broken". CI treats the
+    first as a skip and the second as a red build (PROJECT_SPEC §10 Phase 7D);
+    matching on Playwright's error text in a shell script could not be tested.
+
+    Deliberately *not* raised for a non-2xx document: that is a real
+    measurement of a block page, and `BlockedResponseError` already says so.
+    """
+
+
 def _no_lighthouse(url: str, cdp: object) -> dict:
     """Default: no Lighthouse audit.
 
@@ -217,9 +230,16 @@ class BrowserRunner:
                 # Trace + screenshot capture.
                 context.tracing.start(screenshots=True, snapshots=True)
 
-            response = page.goto(
-                url, wait_until="load", timeout=self._navigation_timeout_ms
-            )
+            try:
+                response = page.goto(
+                    url, wait_until="load", timeout=self._navigation_timeout_ms
+                )
+            except Exception as exc:
+                # The original message is the diagnosis — a bare "unreachable"
+                # sends whoever reads the CI log to reproduce it by hand.
+                raise TargetUnreachableError(
+                    f"Navigation to {url} failed: {exc}"
+                ) from exc
             main_status = getattr(response, "status", None) if response else None
             # Fail fast, before spending the LCP/INP settle time on a block page.
             if main_status is not None and not 200 <= main_status < 300:
