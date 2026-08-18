@@ -1,0 +1,22 @@
+# The campaign CI runs (PROJECT_SPEC §10 Phase 7D). Not the project's targets —
+# `config/targets.yaml` is, and this file exists so CI never has to touch it.
+#
+# Why wikipedia.org and not example.com: an automated run must carry the CWV
+# trio (normalize/schema.py), and INP only exists if an interaction produces an
+# Event Timing entry. example.com registers no handlers, so its runs are
+# rejected every time. Measured — see the design doc, §3.
+#
+# Why one page, two conditions, one run: the skeleton's page-count invariance is
+# already proven offline (report/skeleton.py's one-page-vs-three-page test), the
+# per-condition series keys are not, and the median of one renders the same
+# document as the median of three. One page load per condition per CI run is all
+# this asks of someone else's server.
+#
+# No `headers:` block: CI holds no bot-allowlist token and needs none.
+project: ci-smoke
+pages:
+  - name: homepage
+    url: https://www.wikipedia.org/
+    tests:
+      - { device: mid-mobile, network: slow-4g, runs: 1 }
+      - { device: desktop, network: fast-3g, runs: 1 }

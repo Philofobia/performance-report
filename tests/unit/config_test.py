@@ -272,3 +272,36 @@ def test_duplicate_page_names_raise(files):
     )
     with pytest.raises(cl.ConfigError, match="unique"):
         cl.load_config(**files)
+
+
+def test_ci_targets_file_resolves_to_two_single_run_conditions():
+    """The campaign CI runs must load and cross-validate like any other.
+
+    Pinned deliberately: a device or network renamed in the presets would
+    otherwise break CI at browser-launch time on a pull request, rather than
+    in the offline suite that is meant to catch it.
+    """
+    from config.load import CONFIG_DIR, load_config
+
+    cfg = load_config(targets=CONFIG_DIR / "ci-targets.yaml")
+
+    assert cfg.project == "ci-smoke"
+    assert [p.name for p in cfg.pages] == ["homepage"]
+    page = cfg.pages[0]
+    assert page.url.startswith("https://")
+    assert [(t.device, t.network, t.runs) for t in page.tests] == [
+        ("mid-mobile", "slow-4g", 1),
+        ("desktop", "fast-3g", 1),
+    ]
+    # No bot-allowlist header: CI has no such secret and needs none.
+    assert not cfg.headers
+
+
+def test_ci_target_url_passes_the_ssrf_gate():
+    """The CI campaign is subject to the same gate as any other target."""
+    from config.load import CONFIG_DIR, load_config
+    from normalize.url_safety import validate_url
+
+    cfg = load_config(targets=CONFIG_DIR / "ci-targets.yaml")
+    for page in cfg.pages:
+        assert validate_url(page.url, resolve=False) == page.url
