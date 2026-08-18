@@ -12,12 +12,15 @@ redirects.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from pydantic import ValidationError
 
+from ingest.manual import ManualValidationError, build_manual_run
 from webui import form
 
 TEMPLATE_DIR = Path(__file__).parent / "template"
@@ -99,8 +102,44 @@ class Application:
 
     def _post_run(self, environ: Mapping[str, Any],
                   start_response: StartResponse) -> List[bytes]:
-        return self._respond(start_response, "501 Not Implemented", b"",
-                             "text/plain; charset=utf-8")
+        submitted = self._read_form(environ)
+
+        kwargs, errors = form.parse(submitted)
+        run = None
+        if not errors:
+            try:
+                run = build_manual_run(**kwargs)
+            except ManualValidationError as exc:
+                errors = {form.manual_error_field(str(exc)): str(exc)}
+            except ValidationError as exc:
+                errors = form.field_errors(exc)
+
+        if errors:
+            page = self._render(submitted, errors=errors)
+            return self._respond(start_response, "400 Bad Request",
+                                 page.encode("utf-8"), "text/html; charset=utf-8")
+
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        destination = self.output_dir / f"{run.run_id}.json"
+        destination.write_text(
+            json.dumps(run.model_dump(mode="json"), indent=2), encoding="utf-8"
+        )
+
+        # 303 rather than a rendered result: a reload re-issues the GET, so it
+        # cannot write a second run. The context rides along in the query so
+        # the next entry — almost always the same page under a different
+        # condition — starts filled, while every metric starts empty.
+        query = {"saved": run.run_id}
+        query.update({name: submitted.get(name, "") for name in form.STICKY})
+        return self._respond(start_response, "303 See Other", b"",
+                             "text/plain; charset=utf-8",
+                             [("Location", "/?" + urlencode(query))])
+
+    def _read_form(self, environ: Mapping[str, Any]) -> Dict[str, str]:
+        """Read and decode the submitted form body."""
+        length = int(environ.get("CONTENT_LENGTH") or 0)
+        raw = environ["wsgi.input"].read(length).decode("utf-8", "replace")
+        return {k: v[0] for k, v in parse_qs(raw, keep_blank_values=True).items()}
 
     # --- helpers ------------------------------------------------------------
 
