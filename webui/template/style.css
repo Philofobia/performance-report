@@ -1,0 +1,125 @@
+/* Data-entry sheet for the manual-run form.
+ *
+ * Shares the report's palette tokens by value; report/palette.py remains the
+ * source of truth, exactly as report/template/style.css already declares. The
+ * report stylesheet itself is not reused: it is a print sheet built around
+ * @page, an A4 measure and tabular figures for a document nobody types into.
+ */
+
+:root {
+  --paper: #f2f4f3;
+  --paper-raised: #ffffff;
+  --ink: #1a1d21;
+  --muted: #6b7280;
+  --rule: #d8dce1;
+  --accent: #2f5d8f;
+  --pass: #1a7f4b;
+  --fail: #b3261e;
+
+  --sans: Corbel, "Segoe UI", Candara, "Trebuchet MS", sans-serif;
+  --mono: Consolas, "Cascadia Mono", "DejaVu Sans Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 2rem 1.25rem 4rem;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  line-height: 1.5;
+}
+
+main { max-width: 60rem; margin: 0 auto; }
+
+.masthead { border-bottom: 2px solid var(--ink); padding-bottom: 0.75rem; }
+.masthead h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
+.lede { margin: 0.4rem 0 0; color: var(--muted); max-width: 46ch; }
+
+code { font-family: var(--mono); font-size: 0.9em; }
+
+.banner {
+  margin: 1.25rem 0 0;
+  padding: 0.7rem 0.9rem;
+  border-left: 3px solid var(--accent);
+  background: var(--paper-raised);
+}
+.banner--ok { border-left-color: var(--pass); }
+.banner--bad { border-left-color: var(--fail); }
+
+fieldset {
+  margin: 1.75rem 0 0;
+  padding: 1rem 1.1rem 1.25rem;
+  border: 1px solid var(--rule);
+  background: var(--paper-raised);
+}
+
+legend {
+  padding: 0 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* auto-fill, not auto-fit: empty tracks are kept, so a three-field group
+ * keeps the same column width as a four-field one. With auto-fit the three
+ * fields stretch to fill the row and every section measures differently,
+ * which reads as a layout accident rather than a grid. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  gap: 0.9rem 1.1rem;
+}
+
+.field { display: flex; flex-direction: column; gap: 0.3rem; }
+.field:has(textarea) { grid-column: 1 / -1; }
+
+label { font-size: 0.85rem; font-weight: 600; }
+.unit { color: var(--muted); font-weight: 400; }
+.req {
+  margin-left: 0.35rem;
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+input, select, textarea {
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--paper-raised);
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+textarea { font-family: inherit; resize: vertical; }
+
+.field--bad input, .field--bad select, .field--bad textarea {
+  border-color: var(--fail);
+}
+.err { margin: 0; color: var(--fail); font-size: 0.8rem; }
+
+button {
+  margin-top: 1.5rem;
+  padding: 0.6rem 1.4rem;
+  border: 0;
+  border-radius: 2px;
+  background: var(--ink);
+  color: var(--paper-raised);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:hover { background: var(--accent); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

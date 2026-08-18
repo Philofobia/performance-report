@@ -31,6 +31,7 @@ COMMANDS: Dict[str, str] = {
     "analyze": "Turn stored runs into a Report JSON",
     "report": "Render a Report JSON to HTML, Markdown and PDF",
     "list-runs": "List the runs held in the SQLite run store",
+    "ui": "Serve the local manual-entry form (loopback only)",
 }
 
 _INGEST_MODES = ("auto", "manual")
@@ -61,6 +62,11 @@ def _list_runs() -> Delegate:
     return main
 
 
+def _ui() -> Delegate:
+    from webui.__main__ import main
+    return main
+
+
 #: Imports are deferred into these loaders so ``list-runs`` pays for neither
 #: Playwright nor matplotlib.
 _DELEGATES: Dict[str, Loader] = {
@@ -69,6 +75,7 @@ _DELEGATES: Dict[str, Loader] = {
     "analyze": _analyze,
     "report": _report,
     "list-runs": _list_runs,
+    "ui": _ui,
 }
 
 

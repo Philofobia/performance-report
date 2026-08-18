@@ -21,14 +21,14 @@ grounded per-page analysis with rule-based improvement projections · a fixed-sk
 PDF, HTML and Markdown mirror rendered from the Report JSON · a unified `python -m cli`
 entry point and a `--skeleton-check` drift guard enforced against a committed baseline ·
 **campaign-over-campaign trends per page and condition** · **a per-capture appendix
-embedding each screenshot and its heaviest HAR requests**.
+embedding each screenshot and its heaviest HAR requests** · **a loopback-only web form
+for manual entry**.
 
 **Missing — the rest of phase 7:**
 
-| Gap                              | Consequence today                                            |
-| -------------------------------- | ------------------------------------------------------------ |
-| Optional web UI for manual entry | Manual runs are entered on the command line                  |
-| CI report regeneration           | CI guards the skeleton with a synthetic render, not a real campaign |
+| Gap                    | Consequence today                                                   |
+| ---------------------- | ------------------------------------------------------------------- |
+| CI report regeneration | CI guards the skeleton with a synthetic render, not a real campaign |
 
 Full breakdown in [Roadmap](#roadmap). Everything listed as missing is **planned, not
 built** — nothing in this README describes it as working.
@@ -162,6 +162,7 @@ python -m cli ingest auto           # run a browser campaign
 python -m cli list-runs             # what is in the store
 python -m cli analyze               # runs  → report.json
 python -m cli report                # report.json → HTML + Markdown + PDF
+python -m cli ui                    # loopback-only form for manual entry
 ```
 
 `cli.py` is a façade: it consumes the command and passes every remaining flag
@@ -197,6 +198,31 @@ python -m cli ingest manual \
 
 Units and ranges are enforced — out-of-range values are rejected with a clear error
 rather than silently stored.
+
+### The manual-entry form
+
+```bash
+python -m cli ui                    # http://127.0.0.1:8765/
+python -m cli ui --port 9000 --output-dir data/processed
+```
+
+A browser front door to the same ingestion path: the form posts to
+`build_manual_run`, so every unit and range rule in `normalize/schema.py` applies
+exactly as it does on the command line, and the run JSON it writes is identical to the
+CLI's apart from the run id, the timestamp and `meta.runner`. A test asserts that
+parity on every run of the suite. The range limits in the markup are generated from the
+Pydantic model rather than typed into the template, so they cannot drift from it, and
+the device and network selects start on `settings.run_defaults` — not on whichever
+preset happens to be listed first, which would file untouched runs under `online`.
+
+It **serves loopback only**. A `--host` that is not `127.0.0.1`, `localhost` or `::1`
+exits with an error rather than a warning: the form has no authentication, and it
+writes files. There is nothing to log in to because there is nothing remote to reach
+it.
+
+A rejected submission comes back with every value still in it and the message beside
+the offending field — losing a filled page to one bad digit is the fastest way to send
+someone back to the CLI. No JavaScript, no build step, no new dependency.
 
 ### Seeing what you have
 
@@ -421,7 +447,7 @@ offline suite stays browser-free; only the real PDF run is `e2e`-marked.
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 758 offline tests, no browser, no network
+pytest -m "not e2e"      # 812 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 ```
 
@@ -467,8 +493,8 @@ affect day-to-day use:
 | 6     | Unified CLI (`ingest` / `analyze` / `report`) + skeleton-drift check | Done     |
 | 7a    | Campaign-over-campaign trends per page and condition                 | Done     |
 | 7b    | Screenshot / HAR appendix embedded in the PDF                        | Done     |
-| 7c    | Optional lightweight web UI for manual entry                         | **Next** |
-| 7d    | CI regeneration of a real campaign report                            | Planned  |
+| 7c    | Loopback-only web form for manual entry                              | Done     |
+| 7d    | CI regeneration of a real campaign report                            | **Next** |
 
 ## Documentation
 

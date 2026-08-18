@@ -40,6 +40,13 @@ def campaign(input_dir, tmp_path):
 # --- the pipeline through one entry point -----------------------------------
 
 
+def test_the_facade_exposes_the_manual_entry_ui():
+    """`python -m cli ui` reaches webui, and the table advertises it."""
+    assert "ui" in cli.COMMANDS
+    assert cli._DELEGATES["ui"]() is not None
+    assert "ui" in cli.usage()
+
+
 def test_analyze_then_report_produces_the_deliverables(campaign):
     assert cli.main(["report", "--input", str(campaign), "--no-pdf"]) == 0
     assert (campaign.parent / "report.html").exists()

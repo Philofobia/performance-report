@@ -1,0 +1,83 @@
+{# The manual-entry form.
+
+   No JavaScript: the browser submits it, and native `type="number"` with the
+   schema-derived min/max gives client-side feedback for free. A script would
+   only duplicate rules the server re-checks anyway — the second copy this
+   design exists to avoid. #}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Record a run — performance RAG</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <header class="masthead">
+    <h1>Record a run</h1>
+    <p class="lede">Hand-entered measurements, validated by the same schema the
+      browser campaigns use, written to <code>data/processed</code>.</p>
+  </header>
+
+  {% if saved %}
+  <p class="banner banner--ok" role="status">
+    Saved <code>{{ saved }}</code>. Run <code>python -m cli analyze</code> to
+    include it in the next report.
+  </p>
+  {% endif %}
+
+  {% if form_level %}
+  <p class="banner banner--bad" role="alert">{{ form_level }}</p>
+  {% endif %}
+
+  <form method="post" action="/runs">
+    {% for group, fields in groups %}
+    <fieldset>
+      <legend>{{ group }}</legend>
+      <div class="grid">
+        {% for field in fields %}
+        {% set limits = constraints(field) %}
+        <div class="field{% if errors.get(field.name) %} field--bad{% endif %}">
+          <label for="f-{{ field.name }}">
+            {{ field.label }}
+            {% if field.unit %}<span class="unit">{{ field.unit }}</span>{% endif %}
+            {% if field.required %}<span class="req" aria-hidden="true">required</span>{% endif %}
+          </label>
+
+          {% if field.kind == 'textarea' %}
+          <textarea id="f-{{ field.name }}" name="{{ field.name }}" rows="4"
+            >{{ values.get(field.name, '') }}</textarea>
+
+          {% elif field.kind == 'select' %}
+          {% set chosen = values.get(field.name) or defaults.get(field.name) %}
+          <select id="f-{{ field.name }}" name="{{ field.name }}">
+            {% for option in (devices if field.name == 'device' else networks) %}
+            <option value="{{ option }}"{% if chosen == option %} selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+
+          {% else %}
+          <input id="f-{{ field.name }}" name="{{ field.name }}"
+                 type="{{ 'number' if field.kind == 'number' else 'text' }}"
+                 value="{{ values.get(field.name, '') }}"
+                 {% if field.required %}required{% endif %}
+                 {% if 'min' in limits %}min="{{ limits['min'] }}"{% endif %}
+                 {% if 'max' in limits %}max="{{ limits['max'] }}"{% endif %}
+                 {% if 'step' in limits %}step="{{ limits['step'] }}"{% endif %}>
+          {% endif %}
+
+          {% if errors.get(field.name) %}
+          <p class="err">{{ errors[field.name] }}</p>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </fieldset>
+    {% endfor %}
+
+    <button type="submit">Save run</button>
+  </form>
+</main>
+</body>
+</html>

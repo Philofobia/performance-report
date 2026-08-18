@@ -538,7 +538,10 @@ subsystems, and one of them (prior-run memory) had already shipped in Phase 4.
       reduces the scrubbed HAR to its heaviest requests; `report/images.py`
       embeds screenshots as deterministic, path-confined data URIs. Design:
       `docs/superpowers/specs/2026-08-04-phase-7b-appendix-design.md`.
-- [ ] 7c — Optional lightweight web UI (reuse frontend/CSS skills) for manual entry.
+- [x] **7c — Local manual-entry web form.** `webui/` — a stdlib WSGI app over
+      `ingest.manual.build_manual_run`, bound to loopback by refusal, with the
+      form's range hints generated from the Pydantic model. Design:
+      `docs/superpowers/specs/2026-08-18-phase-7c-web-ui-design.md`.
 - [ ] 7d — CI to auto-regenerate a real campaign report and catch skeleton drift.
       The data-free half already runs: a unit test asserts the committed
       `report/skeleton.baseline.json` matches a rendered synthetic report.
