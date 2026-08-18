@@ -106,17 +106,27 @@ config/ci-targets.yaml
         │
         ▼
 python -m cli ingest auto --targets …        real Chromium, real network
-        │   ci-run/processed/*.json          normalized Runs (schema-gated)
-        │   ci-run/raw/…                     HAR + trace + screenshot
+        │   data/processed/*.json            normalized Runs (schema-gated)
+        │   data/raw/…                       HAR + trace + screenshot
         ▼
 python -m cli analyze --no-llm               rule-based; no API key, no quota
-        │   ci-run/reports/<campaign>/report.json
+        │   data/reports/<campaign>/report.json
         ▼
 python -m cli report --skeleton-check        HTML + MD + PDF, fingerprint diffed
         │
         ▼
 actions/upload-artifact                      the rendered document
 ```
+
+Every path is the **default**, and no step overrides one. Two reasons. The
+appendix resolves screenshots under `settings.storage.raw_dir` and refuses
+anything outside it, so a campaign writing to a scratch directory would render
+every capture as a path-only row and count it in `meta.degraded_appendix_entries`
+— the job would pass while silently exercising the degraded path. And
+`data/processed`, `data/raw` and `data/reports` are all gitignored, so a fresh
+checkout contains none of them and nothing stale can leak into the campaign.
+The commands CI runs are therefore the commands the README documents, with one
+flag added.
 
 ### 4.1 The campaign
 
@@ -209,9 +219,13 @@ navigation failing outright is environmental.
 `live-campaign-report`, `needs: security-and-tests`: no browser minutes are
 spent when the suite is already failing. It checks out, installs, installs
 Chromium, runs the three commands of §4, and uploads
-`ci-run/reports/**/report.{json,html,md,pdf}` with `if: always()` — a drifted
+`data/reports/**/report.{json,html,md,pdf}` with `if: always()` — a drifted
 report is exactly the artifact you need to diagnose the drift, and
 `--skeleton-check` writes it before exiting non-zero for that reason.
+
+The HAR and trace files under `data/raw` are **not** uploaded. SECURITY_PLAN.md
+§2.6 treats them as sensitive, and a build artifact is downloadable by anyone
+who can read the run.
 
 The existing `Determinism / skeleton check` step is deleted rather than fixed.
 Its data-free half already runs as a unit test, and its real half is this job.
