@@ -8,6 +8,7 @@ marked @pytest.mark.e2e.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -1332,6 +1333,41 @@ def test_cli_config_error_returns_nonzero(monkeypatch, capsys):
     code = automated.main(["--dry-run"])
     assert code == 1
     assert "error" in capsys.readouterr().err.lower()
+
+
+def test_cli_targets_flag_is_forwarded_to_the_loader(monkeypatch, capsys):
+    """--targets must reach load_config; nothing else selects the campaign."""
+    seen = {}
+
+    def recording_load_config(*args, **kwargs):
+        seen.update(kwargs)
+        return make_cfg()
+
+    monkeypatch.setattr("config.load.load_config", recording_load_config)
+    assert automated.main(["--dry-run", "--targets", "config/ci-targets.yaml"]) == 0
+    assert str(seen["targets"]) == str(Path("config/ci-targets.yaml"))
+
+
+def test_cli_without_targets_keeps_the_default(monkeypatch):
+    """Omitting the flag must not pass a path at all, so the loader default wins."""
+    seen = {}
+
+    def recording_load_config(*args, **kwargs):
+        seen["kwargs"] = kwargs
+        return make_cfg()
+
+    monkeypatch.setattr("config.load.load_config", recording_load_config)
+    assert automated.main(["--dry-run"]) == 0
+    assert "targets" not in seen["kwargs"]
+
+
+def test_cli_missing_targets_file_exits_one_naming_the_file(capsys):
+    """A bad path is a clean config error, not a traceback."""
+    code = automated.main(["--dry-run", "--targets", "config/nope.yaml"])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "nope.yaml" in err
+    assert "Traceback" not in err
 
 
 def test_cli_sends_configured_headers_by_default(monkeypatch, tmp_path):
