@@ -235,6 +235,12 @@ class BrowserRunner:
                     url, wait_until="load", timeout=self._navigation_timeout_ms
                 )
             except Exception as exc:
+                # Programming errors are not outages. Reclassifying a TypeError
+                # as "unreachable" would hand CI a green skip for a broken
+                # pipeline — the exact failure mode this exception exists to
+                # prevent, inverted.
+                if isinstance(exc, (TypeError, AttributeError, ValueError)):
+                    raise
                 # The original message is the diagnosis — a bare "unreachable"
                 # sends whoever reads the CI log to reproduce it by hand.
                 raise TargetUnreachableError(

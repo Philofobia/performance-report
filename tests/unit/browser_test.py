@@ -409,6 +409,14 @@ def test_navigation_failure_raises_target_unreachable(public_dns):
     assert isinstance(excinfo.value.__cause__, FakeTimeout)
 
 
+def test_navigation_type_error_propagates_not_reclassified(public_dns):
+    """A programming error is not an outage — reclassifying it as
+    TargetUnreachableError would hand CI a green skip for a broken pipeline."""
+    browser = FakeBrowser(page_kwargs={"goto_error": TypeError("bad kwarg")})
+    with pytest.raises(TypeError):
+        make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+
+
 def test_interaction_is_triggered_after_lcp_settles(public_dns):
     """LCP freezes at first interaction, so it must settle first."""
     browser = FakeBrowser()
