@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import (
+    Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple,
+)
 from urllib.parse import parse_qs, urlencode
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -102,6 +104,13 @@ class Application:
 
     def _post_run(self, environ: Mapping[str, Any],
                   start_response: StartResponse) -> List[bytes]:
+        refusal = self._refuse_request(environ)
+        if refusal is not None:
+            status, message = refusal
+            return self._respond(start_response, status,
+                                 message.encode("utf-8"),
+                                 "text/plain; charset=utf-8")
+
         submitted = self._read_form(environ)
 
         kwargs, errors = form.parse(submitted)
@@ -135,9 +144,36 @@ class Application:
                              "text/plain; charset=utf-8",
                              [("Location", "/?" + urlencode(query))])
 
+    def _refuse_request(
+        self, environ: Mapping[str, Any]
+    ) -> Optional[Tuple[str, str]]:
+        """Reject a request that must not reach the parser. ``None`` to proceed.
+
+        The size cap is checked against the declared length and the body is
+        never read, so an oversized submission costs nothing to refuse.
+        """
+        content_type = environ.get("CONTENT_TYPE", "").split(";")[0].strip()
+        if content_type != FORM_CONTENT_TYPE:
+            return "415 Unsupported Media Type", f"Expected {FORM_CONTENT_TYPE}"
+
+        declared = environ.get("CONTENT_LENGTH", "")
+        if declared in ("", None):
+            return "411 Length Required", "Content-Length required"
+        try:
+            length = int(declared)
+        except ValueError:
+            return "400 Bad Request", "Malformed Content-Length"
+        if length < 0:
+            return "400 Bad Request", "Malformed Content-Length"
+        if length > MAX_BODY_BYTES:
+            return "413 Payload Too Large", (
+                f"Request body over {MAX_BODY_BYTES} bytes"
+            )
+        return None
+
     def _read_form(self, environ: Mapping[str, Any]) -> Dict[str, str]:
-        """Read and decode the submitted form body."""
-        length = int(environ.get("CONTENT_LENGTH") or 0)
+        """Read and decode the submitted form body, capped at MAX_BODY_BYTES."""
+        length = min(int(environ.get("CONTENT_LENGTH") or 0), MAX_BODY_BYTES)
         raw = environ["wsgi.input"].read(length).decode("utf-8", "replace")
         return {k: v[0] for k, v in parse_qs(raw, keep_blank_values=True).items()}
 

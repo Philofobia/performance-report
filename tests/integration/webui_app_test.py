@@ -200,3 +200,81 @@ def test_the_output_directory_is_created_on_demand(tmp_path):
     status, _, _ = call(app, method="POST", path="/runs", body=submission())
     assert status.startswith("303")
     assert (tmp_path / "deep" / "processed").is_dir()
+
+
+# --- POST /runs, refusals ---------------------------------------------------
+
+
+def test_an_out_of_range_value_is_rejected_by_the_schema_not_the_ui(app, tmp_path):
+    status, _, body = call(app, method="POST", path="/runs",
+                           body=submission(cls="1.5"))
+    assert status.startswith("400")
+    assert "cls" in body
+    assert not list((tmp_path / "processed").glob("*.json"))
+
+
+def test_a_rejected_submission_keeps_every_value_the_user_typed(app):
+    _, _, body = call(app, method="POST", path="/runs",
+                      body=submission(cls="1.5", lcp_ms="6200"))
+    assert 'value="6200"' in body
+    assert 'value="1.5"' in body
+    assert "Homepage LCP spikes to 6s on 3G" in body
+
+
+def test_a_missing_page_url_names_the_field_it_is_missing_from(app):
+    status, _, body = call(app, method="POST", path="/runs",
+                           body=submission(page_url=""))
+    assert status.startswith("400")
+    assert "page url" in body.lower()
+
+
+def test_a_non_https_url_is_refused_by_the_ssrf_gate(app, tmp_path):
+    status, _, body = call(app, method="POST", path="/runs",
+                           body=submission(page_url="http://169.254.169.254/"))
+    assert status.startswith("400")
+    assert not list((tmp_path / "processed").glob("*.json"))
+
+
+def test_a_non_numeric_metric_is_a_field_error_not_a_traceback(app):
+    status, _, body = call(app, method="POST", path="/runs",
+                           body=submission(lcp_ms="soon"))
+    assert status.startswith("400")
+    assert "must be a number" in body
+
+
+def test_an_oversized_body_is_refused_unread(app, tmp_path):
+    status, _, _ = call(app, method="POST", path="/runs",
+                        body="problem=" + "x" * MAX_BODY_BYTES)
+    assert status.startswith("413")
+    assert not list((tmp_path / "processed").glob("*.json"))
+
+
+def test_a_json_content_type_is_refused(app):
+    status, _, _ = call(app, method="POST", path="/runs",
+                        body=submission(), content_type="application/json")
+    assert status.startswith("415")
+
+
+def test_a_missing_content_length_is_refused(app):
+    status, _, _ = call(app, method="POST", path="/runs", body=submission(),
+                        content_length="")
+    assert status.startswith("411")
+
+
+def test_a_malformed_content_length_is_refused(app):
+    status, _, _ = call(app, method="POST", path="/runs", body=submission(),
+                        content_length="not-a-number")
+    assert status.startswith("400")
+
+
+def test_submitted_prose_is_escaped_on_the_way_back_out(app):
+    """The error path echoes user text into HTML; it must not echo markup."""
+    _, _, body = call(app, method="POST", path="/runs",
+                      body=submission(cls="1.5", problem="<script>alert(1)</script>"))
+    assert "<script>alert(1)</script>" not in body
+    assert "&lt;script&gt;" in body
+
+
+def test_the_success_banner_escapes_what_it_reflects(app):
+    _, _, body = call(app, query=urlencode({"saved": "<script>alert(1)</script>"}))
+    assert "<script>alert(1)</script>" not in body
