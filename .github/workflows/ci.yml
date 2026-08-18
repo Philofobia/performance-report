@@ -68,6 +68,7 @@ jobs:
     # Everything else in CI proves the parts; this proves the sequence.
     runs-on: ubuntu-latest
     needs: security-and-tests   # no browser minutes while the suite is red
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -107,6 +108,25 @@ jobs:
         if: steps.campaign.outputs.skipped != 'true'
         run: python -m cli report --skeleton-check
 
+      - name: The appendix embedded real captures
+        # `skeleton ok` is invariant to an EMPTY appendix: the fingerprint
+        # collapses repeating blocks, and the template renders the same section
+        # sequence for zero entries as for two. Without this, the job would go
+        # green while the screenshots and HAR rows it exists to prove had
+        # silently stopped resolving. Two entries is the campaign's own
+        # arithmetic: one page x two conditions.
+        if: steps.campaign.outputs.skipped != 'true'
+        run: |
+          python - <<'PY'
+          import glob, json, sys
+          path = sorted(glob.glob("data/reports/*/report.json"))[-1]
+          report = json.load(open(path, encoding="utf-8"))
+          degraded = report["meta"].get("degraded_appendix_entries", 0)
+          entries = len(report["appendix"])
+          print(f"{path}: {entries} appendix entries, {degraded} degraded")
+          sys.exit(0 if entries == 2 and degraded == 0 else 1)
+          PY
+
       - name: Upload the regenerated report
         # always(): a drifted report is exactly the artifact needed to diagnose
         # the drift, and --skeleton-check writes it before exiting non-zero.
@@ -121,4 +141,9 @@ jobs:
             data/reports/**/report.html
             data/reports/**/report.md
             data/reports/**/report.pdf
-          if-no-files-found: error
+          # warn, not error: by the time this step runs, "report" has either
+          # succeeded (all four files provably written) or the job is already
+          # red from an earlier step. "error" here can never catch a real
+          # defect — it can only stack a confusing "no files found" failure on
+          # top of one that already explains itself.
+          if-no-files-found: warn
