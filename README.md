@@ -12,7 +12,7 @@ comparable, automatable artifact instead of a bespoke write-up.
 **The pipeline is end to end and driven from one command: measurements go in, a
 fixed-skeleton PDF comes out.**
 
-**Working today (phases 0–6, plus 7a–7b):** config and test-matrix resolution · canonical
+**Working today (phases 0–7):** config and test-matrix resolution · canonical
 Pydantic schema · manual ingestion CLI · automated multi-page browser campaigns with
 device and network emulation · SSRF-gated navigation · SQLite run store with scrubbed
 artifacts · RAG over the knowledge base (embeddings, chunking, symptom detection,
@@ -174,12 +174,17 @@ python -m cli ingest auto --pages homepage,plp      # only named pages
 python -m cli ingest auto --device desktop --runs 5
 python -m cli ingest auto --dry-run                 # print the resolved matrix, no browser
 python -m cli ingest auto --no-headers              # ignore configured request headers
+python -m cli ingest auto --targets config/ci-targets.yaml   # a different campaign file
 ```
 
 `--device`, `--network`, and `--runs` override every condition for that invocation,
 so you can explore without editing YAML. One normalized run JSON is written per
 (page × condition) to `--output-dir` (default `data/processed`), with HAR, trace, and
 screenshot artifacts under `--artifacts-root` (default `data/raw`).
+
+`ingest auto` exits `3` when the target does not answer — DNS, TLS, connection
+refused, or a navigation timeout — distinct from exit `1` for a failed run, so
+anyone scripting the CLI can tell an outage from a defect.
 
 ### Manual ingestion
 
@@ -442,7 +447,7 @@ offline suite stays browser-free; only the real PDF run is `e2e`-marked.
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 820 offline tests, no browser, no network
+pytest -m "not e2e"      # 824 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 ```
 
