@@ -14,8 +14,9 @@ fixed-skeleton PDF comes out.**
 
 **Working today (phases 0–7):** config and test-matrix resolution · canonical
 Pydantic schema · manual ingestion CLI · automated multi-page browser campaigns with
-device and network emulation · SSRF-gated navigation · SQLite run store with scrubbed
-artifacts · RAG over the knowledge base (embeddings, chunking, symptom detection,
+device and network emulation · SSRF-gated navigation, checked again against where
+each navigation actually ended · a SQLite run store every campaign writes to, with
+scrubbed artifacts · RAG over the knowledge base (embeddings, chunking, symptom detection,
 grounded prompts) · optional per-target request headers for bot-protected sites ·
 grounded per-page analysis with rule-based improvement projections · a fixed-skeleton
 PDF, HTML and Markdown mirror rendered from the Report JSON · a unified `python -m cli`
@@ -25,8 +26,19 @@ embedding each screenshot and its heaviest HAR requests** · **a loopback-only w
 for manual entry** · **a CI job that regenerates a real campaign report and gates its
 skeleton**.
 
-**Missing:** nothing — every phase in the [Roadmap](#roadmap) is built. Anything
-this README does not describe as working is not there.
+**Missing:** no phase in the [Roadmap](#roadmap) is unbuilt. Two limitations are
+known and accepted rather than fixed, both written up where the code lives:
+
+- **Redirect SSRF is detected, not prevented.** A navigation that ends somewhere
+  the guard rejects is refused, so nothing derived from it reaches the report or
+  the store — but the request was already made by the time Playwright reports the
+  hop. Preventing it means intercepting every request, which would add latency to
+  the numbers this tool exists to measure ([SECURITY_PLAN §2.2](docs/SECURITY_PLAN.md)).
+- **Campaigns are sequential.** Pages × conditions × runs, one navigation at a
+  time. Parallelising would cut wall-clock time on large matrices and skew the
+  measurements, since CPU throttling is per-session emulation.
+
+Anything this README does not describe as working is not there.
 
 ---
 
@@ -174,13 +186,25 @@ python -m cli ingest auto --pages homepage,plp      # only named pages
 python -m cli ingest auto --device desktop --runs 5
 python -m cli ingest auto --dry-run                 # print the resolved matrix, no browser
 python -m cli ingest auto --no-headers              # ignore configured request headers
+python -m cli ingest auto --no-store                # do not record this campaign as history
 python -m cli ingest auto --targets config/ci-targets.yaml   # a different campaign file
 ```
 
 `--device`, `--network`, and `--runs` override every condition for that invocation,
-so you can explore without editing YAML. One normalized run JSON is written per
-(page × condition) to `--output-dir` (default `data/processed`), with HAR, trace, and
-screenshot artifacts under `--artifacts-root` (default `data/raw`).
+so you can explore without editing YAML.
+
+**Each (page × condition) is persisted the moment it finishes**, three ways: the
+normalized run JSON to `--output-dir` (default `data/processed`), the captures into
+the run-scoped artifact store under `settings.storage.raw_dir`, and a row in the
+SQLite run store — which is what `list-runs` reads and what trends accumulate from.
+Persisting per condition rather than at the end is deliberate: a campaign that dies
+on its last page keeps every page before it, and says which ones it kept. Use
+`--no-store` to measure without contributing history.
+
+The HAR is **scrubbed on the way into the store** — `Cookie`, `Authorization`, and
+every header name configured in `targets.yaml` — and moved rather than copied, so no
+unredacted copy survives. `--artifacts-root` (default `data/raw`) is where the browser
+writes captures before that move.
 
 `ingest auto` exits `3` when the target does not answer — DNS, TLS, connection
 refused, or a navigation timeout — distinct from exit `1` for a failed run, so
@@ -270,7 +294,12 @@ The details that make the numbers trustworthy:
   the page's CDP websocket. CDP already yields the same main-thread breakdown natively,
   so Lighthouse category scores are populated only if you inject `run_lighthouse_fn`.
 - **Median of N.** Default 3 runs per condition; every run's raw artifacts are kept so
-  results stay auditable.
+  results stay auditable. The run whose LCP sits closest to the median donates the
+  screenshot and HAR — and a run that reported no LCP is never that run, since it
+  cannot represent a condition it did not measure.
+- **CLS has no upper bound.** It is the *sum* of layout-shift scores over the page's
+  lifetime, so a carousel plus a late-injected banner clears 1.0 without difficulty.
+  The schema bounds it below only; a 1.5 is a bad page, not a bad measurement.
 
 ---
 
@@ -319,6 +348,8 @@ python -m cli analyze --use-priors                   # ground in earlier campaig
 
 Output lands in `data/reports/<campaign-id>/report.json`. The campaign id is derived
 from the run ids, not the clock, so re-analysing the same runs writes the same file.
+A `--from-store` path that does not exist is an error, not an empty result — SQLite
+would otherwise create the file and the typo would read as "no runs yet".
 
 **One call per page, plus one for the summary.** Each page is analysed at its worst
 condition — a recommendation derived from the easy desktop run is the wrong
@@ -393,6 +424,11 @@ slower reports `regressed` and still passes. Folding trend into verdict would tu
 green page red without any threshold being crossed. The first campaign you ever run
 reports every series as `new` and produces a complete report; a missing or unreadable
 store degrades the same way, because analysis never fails over unavailable history.
+
+History comes from the SQLite run store, so trends need campaigns that wrote to it —
+`ingest auto` does by default, and `--no-store` opts out. A directory of run JSON
+cannot stand in: `page__device__network.json` is overwritten by the next campaign, so
+only the store remembers more than one.
 
 **The appendix carries the evidence.** Each capture gets its screenshot embedded
 as a data URI — the PDF is printed via `set_content` with no origin, so a

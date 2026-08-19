@@ -69,7 +69,12 @@ def test_a_browser_can_fill_and_submit_the_form(server):
 
 
 def test_the_browser_blocks_an_out_of_range_value_before_it_is_sent(server):
-    """`max` came from the schema; this proves the browser honours it."""
+    """`max` came from the schema; this proves the browser honours it.
+
+    A Lighthouse score, because it is bounded at both ends. CLS is not: it is a
+    sum of layout-shift scores and carries a `min` only, which the companion
+    test below relies on.
+    """
     from playwright.sync_api import sync_playwright
 
     url, output_dir = server
@@ -79,10 +84,32 @@ def test_the_browser_blocks_an_out_of_range_value_before_it_is_sent(server):
         page = browser.new_page()
         page.goto(url)
         page.fill("#f-page_url", "https://example.com/")
-        page.fill("#f-cls", "1.5")
+        page.fill("#f-performance", "150")
         page.click("button[type=submit]")
-        valid = page.eval_on_selector("#f-cls", "el => el.checkValidity()")
+        valid = page.eval_on_selector("#f-performance", "el => el.checkValidity()")
         browser.close()
 
     assert valid is False
     assert not list(output_dir.glob("*.json"))
+
+
+def test_the_browser_does_not_block_a_cls_above_one(server):
+    """CLS has no ceiling, so the markup must not invent one.
+
+    The counterpart to the schema change: a `max="1"` left in the template
+    would stop a real measurement from ever being entered by hand, and the
+    person typing it has no way to tell that from a validation bug.
+    """
+    from playwright.sync_api import sync_playwright
+
+    url, _output_dir = server
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(url)
+        page.fill("#f-cls", "1.5")
+        valid = page.eval_on_selector("#f-cls", "el => el.checkValidity()")
+        browser.close()
+
+    assert valid is True

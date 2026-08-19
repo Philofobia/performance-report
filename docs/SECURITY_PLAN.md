@@ -33,6 +33,20 @@ optionally enforce a target allow-list from `config/targets.yaml`.
 Implement in `normalize/url_safety.py`; unit-test all ranges.
 **Verify:** `url_safety` unit tests green covering each blocked category.
 
+- **Where navigation ends is checked too.** `validate_url` runs before `goto`
+  and can only judge the URL we asked for. A public page answering
+  `302 -> https://192.168.1.1/` puts an internal response in front of the
+  collectors, and the block-page guard does not catch it — an internal host can
+  answer a healthy 200. `runner.assert_safe_chain` walks Playwright's
+  `redirected_from` links after navigation and re-runs the guard on every hop.
+- **The redirect half is detection, not prevention** — accepted limitation.
+  The hop is already fetched by the time Playwright reports it; the run is
+  refused so nothing derived from it reaches the report or the store, but the
+  request did happen. Preventing it means intercepting every request with
+  `page.route`, which adds interception latency to the very numbers this tool
+  exists to measure. Same reasoning covers DNS rebinding between our lookup and
+  the browser's.
+
 ### 2.3 Prompt-injection defense
 Retrieved web/KB content is **untrusted reference material**; system prompt
 instructs the model to ignore instructions in it; context delimited from
@@ -50,6 +64,15 @@ untrusted data); test asserts no unescaped `<script>` survives malicious input.
 ### 2.6 Artifact/secret hygiene
 HAR/screenshots may contain cookies/tokens — scrub `Cookie`/`Authorization` from
 stored HAR or keep artifacts in gitignored `data/`; document in README.
+
+- **The scrub is on the campaign's path.** `store.artifacts.store_artifacts`
+  runs per completed (page × condition), from `ingest/persist.py`, and moves
+  rather than copies — a copy leaves the unredacted original on disk, which is
+  the whole thing the scrub exists to prevent. Every header name configured in
+  `targets.yaml` is passed as `extra_headers`, so a bot-allowlist token is
+  redacted alongside the built-in credential headers. Until this was wired,
+  the scrubber was reached only by its own tests and `data/raw` kept live
+  session cookies indefinitely.
 
 - **Appendix path confinement.** `report/images.py:embed_png` resolves every
   screenshot path and refuses anything outside `settings.storage.raw_dir`. The
