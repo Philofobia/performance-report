@@ -28,9 +28,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from config.load import PageTarget, PageTest, ProjectConfig
+from ingest.browser.runner import TargetUnreachableError
 from normalize.schema import Run
 
 DEFAULT_RUNNER_NAME = "automated-campaign-1.0"
+
+#: Exit code for "the target did not answer", as distinct from a failure of
+#: this pipeline. 3 rather than 2, which argparse owns for usage errors.
+EXIT_TARGET_UNREACHABLE = 3
 
 Numeric = Optional[float]
 
@@ -245,6 +250,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--network", help="Override network for every condition.")
     p.add_argument("--runs", type=int, help="Override per-condition run count (>=1).")
     p.add_argument("--pages", help="Comma-separated page names to test.")
+    p.add_argument("--targets", default=None,
+                   help="Targets file to run (default: config/targets.yaml). "
+                        "Lets one checkout hold more than one campaign — CI "
+                        "runs config/ci-targets.yaml.")
     p.add_argument("--artifacts-root", default="data/raw",
                    help="Root dir for HAR/trace/screenshot artifacts.")
     p.add_argument("--output-dir", default="data/processed",
@@ -298,7 +307,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         pages = [p.strip() for p in args.pages.split(",") if p.strip()]
 
     try:
-        cfg = load_config()
+        # Passed only when given: omitting the key lets load_config's own
+        # default apply, so the default campaign has exactly one definition.
+        targets_kwarg = {"targets": Path(args.targets)} if args.targets else {}
+        cfg = load_config(**targets_kwarg)
     except Exception as exc:  # ConfigError
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -336,6 +348,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             artifacts_root=args.artifacts_root,
             no_headers=args.no_headers,
         )
+    except TargetUnreachableError as exc:
+        print(f"error: target unreachable: {exc}", file=sys.stderr)
+        return EXIT_TARGET_UNREACHABLE
     except Exception as exc:
         print(f"error: campaign failed: {exc}", file=sys.stderr)
         return 1

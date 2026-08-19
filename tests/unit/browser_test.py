@@ -8,6 +8,7 @@ marked @pytest.mark.e2e.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -18,6 +19,7 @@ from ingest.browser import cdp_metrics, lighthouse, webser
 from ingest.browser.runner import (
     BlockedResponseError,
     BrowserRunner,
+    TargetUnreachableError,
     apply_cpu_throttle,
     apply_network_throttle,
     device_context_kwargs,
@@ -391,12 +393,27 @@ def test_network_idle_timeout_is_configurable(public_dns):
     assert kwargs["timeout"] == 20_000
 
 
-def test_navigation_timeout_still_propagates(public_dns):
-    """Unlike networkidle, failing to load at all is a real failure."""
+def test_navigation_failure_raises_target_unreachable(public_dns):
+    """Unlike networkidle, failing to load at all is a real failure — and a
+    *distinguishable* one, so CI can tell an outage from a broken pipeline."""
     browser = FakeBrowser(
         page_kwargs={"goto_error": FakeTimeout("Page.goto: Timeout 30000ms exceeded.")}
     )
-    with pytest.raises(FakeTimeout):
+    with pytest.raises(TargetUnreachableError) as excinfo:
+        make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+
+    # The original diagnosis must survive: "unreachable" without the reason
+    # sends whoever reads the CI log to reproduce it by hand.
+    assert "Timeout 30000ms exceeded" in str(excinfo.value)
+    assert "https://example.com/" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, FakeTimeout)
+
+
+def test_navigation_type_error_propagates_not_reclassified(public_dns):
+    """A programming error is not an outage — reclassifying it as
+    TargetUnreachableError would hand CI a green skip for a broken pipeline."""
+    browser = FakeBrowser(page_kwargs={"goto_error": TypeError("bad kwarg")})
+    with pytest.raises(TypeError):
         make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
 
 
@@ -1334,6 +1351,41 @@ def test_cli_config_error_returns_nonzero(monkeypatch, capsys):
     assert "error" in capsys.readouterr().err.lower()
 
 
+def test_cli_targets_flag_is_forwarded_to_the_loader(monkeypatch, capsys):
+    """--targets must reach load_config; nothing else selects the campaign."""
+    seen = {}
+
+    def recording_load_config(*args, **kwargs):
+        seen.update(kwargs)
+        return make_cfg()
+
+    monkeypatch.setattr("config.load.load_config", recording_load_config)
+    assert automated.main(["--dry-run", "--targets", "config/ci-targets.yaml"]) == 0
+    assert str(seen["targets"]) == str(Path("config/ci-targets.yaml"))
+
+
+def test_cli_without_targets_keeps_the_default(monkeypatch):
+    """Omitting the flag must not pass a path at all, so the loader default wins."""
+    seen = {}
+
+    def recording_load_config(*args, **kwargs):
+        seen["kwargs"] = kwargs
+        return make_cfg()
+
+    monkeypatch.setattr("config.load.load_config", recording_load_config)
+    assert automated.main(["--dry-run"]) == 0
+    assert "targets" not in seen["kwargs"]
+
+
+def test_cli_missing_targets_file_exits_one_naming_the_file(capsys):
+    """A bad path is a clean config error, not a traceback."""
+    code = automated.main(["--dry-run", "--targets", "config/nope.yaml"])
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "nope.yaml" in err
+    assert "Traceback" not in err
+
+
 def test_cli_sends_configured_headers_by_default(monkeypatch, tmp_path):
     cfg = make_cfg()
     cfg.headers = {"X-Akamai-Bot": "${AKAMAI_BOT_TOKEN}"}
@@ -1393,3 +1445,45 @@ def test_cli_writes_one_json_per_run(monkeypatch, tmp_path, capsys):
     assert data["page"]["name"] == "pdp"
     assert data["meta"]["source"] == "automated"
     assert data["metrics"]["cwp"]["inp_ms"] == 100
+
+
+def test_blocked_response_is_not_treated_as_unreachable(public_dns):
+    """A 403 is a measurement of a block page — a real result, not an outage."""
+    browser = FakeBrowser(page_kwargs={"main_status": 403})
+    with pytest.raises(BlockedResponseError) as excinfo:
+        make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    assert not isinstance(excinfo.value, TargetUnreachableError)
+
+
+def test_cli_returns_three_when_the_target_is_unreachable(monkeypatch, tmp_path, capsys):
+    """Exit 3, so CI can skip on someone else's outage without going red."""
+    class UnreachableRunner:
+        def run_condition(self, *args, **kwargs):
+            raise TargetUnreachableError(
+                "Navigation to https://www.wikipedia.org/ failed: net::ERR_NAME_NOT_RESOLVED"
+            )
+
+    monkeypatch.setattr("config.load.load_config", lambda *a, **k: make_cfg())
+    monkeypatch.setattr(
+        automated, "_real_runner", lambda cfg=None: (None, None, UnreachableRunner())
+    )
+
+    code = automated.main(["--pages", "pdp", "--output-dir", str(tmp_path)])
+    assert code == automated.EXIT_TARGET_UNREACHABLE == 3
+    assert "unreachable" in capsys.readouterr().err.lower()
+
+
+def test_cli_still_returns_one_for_every_other_failure(monkeypatch, tmp_path, capsys):
+    """Only navigation is environmental; a broken pipeline must stay red."""
+    class BrokenRunner:
+        def run_condition(self, *args, **kwargs):
+            raise RuntimeError("collector exploded")
+
+    monkeypatch.setattr("config.load.load_config", lambda *a, **k: make_cfg())
+    monkeypatch.setattr(
+        automated, "_real_runner", lambda cfg=None: (None, None, BrokenRunner())
+    )
+
+    code = automated.main(["--pages", "pdp", "--output-dir", str(tmp_path)])
+    assert code == 1
+    assert "collector exploded" in capsys.readouterr().err

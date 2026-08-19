@@ -69,11 +69,16 @@ malicious LLM strings in report template · missing config files.
    The data-free half of the drift guard runs in step 3: a unit test asserts the
    committed `report/skeleton.baseline.json` still matches a rendered synthetic
    report, so a template change with a forgotten `--update-baseline` fails CI
-   without any campaign being present.
+   as a unit test, with no campaign or network involved.
+6. `live-campaign-report` job: a real campaign against `config/ci-targets.yaml`
+   → `analyze --no-llm` → `report --skeleton-check` → an appendix assertion
+   that the two captures the campaign produced actually embedded (the skeleton
+   fingerprint alone is invariant to an empty appendix). A target that does
+   not answer exits 3 and the job skips with a warning rather than going red.
 
 ## 7. Definition of done (tests)
 - [ ] Full unit+integration suite green offline with ≥80% coverage.
 - [ ] E2E browser suite green on a public demo site.
 - [ ] Determinism test green (identical structure across identical inputs).
 - [ ] Security paths covered: URL safety, template escaping, quota/key-missing.
-- [ ] CI gate runs all five steps and fails on regressions.
+- [ ] CI gate runs all six steps and fails on regressions.

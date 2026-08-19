@@ -62,6 +62,113 @@ jobs:
           python -m playwright install --with-deps chromium
           pytest -m e2e -v
 
-      - name: Determinism / skeleton check
+  live-campaign-report:
+    # Regenerates a REAL report: real Chromium, real network, real page, then
+    # holds the rendered document against the committed skeleton baseline.
+    # Everything else in CI proves the parts; this proves the sequence.
+    runs-on: ubuntu-latest
+    needs: security-and-tests   # no browser minutes while the suite is red
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
         run: |
-          python -m src.cli --skeleton-check || echo "skeleton-check not yet wired (Phase 6)"
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Campaign against the live CI target
+        id: campaign
+        run: |
+          set +e
+          python -m cli ingest auto --targets config/ci-targets.yaml
+          code=$?
+          set -e
+          # 3 = the target did not answer (ingest/automated.py). The page
+          # belongs to someone else; their outage is not this repo's failure.
+          if [ "$code" -eq 3 ]; then
+            echo "::warning::CI target unreachable — report regeneration skipped"
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          exit $code
+
+      - name: Analyze the campaign
+        if: steps.campaign.outputs.skipped != 'true'
+        # --no-llm: no API key in CI, no quota spent, no dependency on a model
+        # being up. The skeleton is identical either way — that is the point.
+        run: python -m cli analyze --no-llm
+
+      - name: Render the report and check the skeleton
+        if: steps.campaign.outputs.skipped != 'true'
+        run: python -m cli report --skeleton-check
+
+      - name: The appendix embedded real captures
+        # `skeleton ok` is invariant to an EMPTY appendix: the fingerprint
+        # collapses repeating blocks, and the template renders the same section
+        # sequence for zero entries as for two. Without this, the job would go
+        # green while the screenshots and HAR rows it exists to prove had
+        # silently stopped resolving. Two entries is the campaign's own
+        # arithmetic: one page x two conditions.
+        #
+        # Both artifacts are checked, because they fail differently.
+        # report.json catches captures that never reached the appendix. But a
+        # capture can reach it and still fail to EMBED: report/images.py's
+        # embed_png() returns None for an undecodable or out-of-root PNG, the
+        # template quietly renders a path-only row, and nothing writes that
+        # back into report.json — analysis/appendix.py says so in as many
+        # words ("discoverable only by decoding it, which happens in the
+        # report layer at render time"). Only the rendered document knows, so
+        # report.html is where that half of the check has to live.
+        if: steps.campaign.outputs.skipped != 'true'
+        run: |
+          python - <<'PY'
+          import json, sys
+
+          from report.__main__ import find_report
+
+          # find_report() is the renderer's own selection rule, so this reads
+          # the exact document the previous step rendered and fingerprinted.
+          path = find_report()
+          report = json.loads(path.read_text(encoding="utf-8"))
+          entries = len(report["appendix"])
+          degraded = report["meta"].get("degraded_appendix_entries", 0)
+
+          html = (path.parent / "report.html").read_text(encoding="utf-8")
+          embedded = html.count('src="data:image/png;base64,')
+          # The template's empty state, pinned by a unit test so a reworded
+          # string cannot silently retire this check.
+          empty = html.count("No screenshot was embedded")
+
+          print(f"{path}: {entries} appendix entries, {degraded} degraded, "
+                f"{embedded} screenshots embedded, {empty} empty")
+          ok = (entries == 2 and degraded == 0
+                and embedded >= entries and empty == 0)
+          sys.exit(0 if ok else 1)
+          PY
+
+      - name: Upload the regenerated report
+        # always(): a drifted report is exactly the artifact needed to diagnose
+        # the drift, and --skeleton-check writes it before exiting non-zero.
+        # HAR and trace files under data/raw are NOT uploaded — SECURITY_PLAN
+        # §2.6 treats them as sensitive and a build artifact is downloadable.
+        if: always() && steps.campaign.outputs.skipped != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: campaign-report
+          path: |
+            data/reports/**/report.json
+            data/reports/**/report.html
+            data/reports/**/report.md
+            data/reports/**/report.pdf
+          # warn, not error: by the time this step runs, "report" has either
+          # succeeded (all four files provably written) or the job is already
+          # red from an earlier step. "error" here can never catch a real
+          # defect — it can only stack a confusing "no files found" failure on
+          # top of one that already explains itself.
+          if-no-files-found: warn

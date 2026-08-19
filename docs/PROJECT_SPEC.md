@@ -542,9 +542,12 @@ subsystems, and one of them (prior-run memory) had already shipped in Phase 4.
       `ingest.manual.build_manual_run`, bound to loopback by refusal, with the
       form's range hints generated from the Pydantic model. Design:
       `docs/superpowers/specs/2026-08-18-phase-7c-web-ui-design.md`.
-- [ ] 7d — CI to auto-regenerate a real campaign report and catch skeleton drift.
-      The data-free half already runs: a unit test asserts the committed
-      `report/skeleton.baseline.json` matches a rendered synthetic report.
+- [x] **7d — CI regeneration of a real campaign report.** `config/ci-targets.yaml`
+      plus the `--targets` flag give CI its own campaign; `TargetUnreachableError`
+      and exit code 3 let a third party's outage skip rather than fail the build.
+      The `live-campaign-report` job runs the real sequence and diffs the
+      rendered document against `report/skeleton.baseline.json`. Design:
+      `docs/superpowers/specs/2026-08-18-phase-7d-ci-report-regeneration-design.md`.
 
 ## 11. Risks & open questions
 
