@@ -1,7 +1,7 @@
 """Pydantic canonical run object (PROJECT_SPEC §4.2/§4.3).
 
 Every run — manual or automated — converges to :class:`Run`. Validation enforces
-metric units/ranges (e.g. ``lcp_ms >= 0``, ``cls`` in 0..1, Lighthouse 0..100)
+metric units/ranges (e.g. ``lcp_ms >= 0``, ``cls >= 0``, Lighthouse 0..100)
 and, for ``automated`` runs, requires the CWV trio (LCP, CLS, INP).
 """
 from __future__ import annotations
@@ -45,7 +45,12 @@ class Problem(BaseModel):
 
 class CwpMetrics(BaseModel):
     lcp_ms: Optional[float] = Field(default=None, ge=0)
-    cls: Optional[float] = Field(default=None, ge=0, le=1)
+    #: No upper bound. CLS is the *sum* of layout-shift scores over the page's
+    #: lifetime, so it is unbounded above — a carousel plus a late-injected
+    #: banner clears 1.0 without difficulty. Capping it at 1 made a legitimate
+    #: measurement fail validation inside ``make_automated_run``, which aborts
+    #: the campaign and discards every page and condition already measured.
+    cls: Optional[float] = Field(default=None, ge=0)
     inp_ms: Optional[float] = Field(default=None, ge=0)
     fcp_ms: Optional[float] = Field(default=None, ge=0)
     ttfb_ms: Optional[float] = Field(default=None, ge=0)
@@ -59,7 +64,7 @@ class CwpMetrics(BaseModel):
     #: before this qualifier existed still validate.
     lcp_underestimated: bool = False
     target_lcp_ms: Optional[float] = Field(default=None, ge=0)
-    target_cls: Optional[float] = Field(default=None, ge=0, le=1)
+    target_cls: Optional[float] = Field(default=None, ge=0)
     target_inp_ms: Optional[float] = Field(default=None, ge=0)
 
 

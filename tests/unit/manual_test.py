@@ -51,9 +51,15 @@ def test_run_id_and_required_fields_filled():
     assert run.condition.device == "mid-mobile"
 
 
-def test_out_of_range_cls_rejected():
+def test_negative_cls_rejected():
+    # Only the floor: CLS is a sum of shift scores and has no upper bound.
     with pytest.raises(ValidationError):
-        build_manual_run(page_url="https://example.com/", cwp={"cls": 1.5})
+        build_manual_run(page_url="https://example.com/", cwp={"cls": -0.1})
+
+
+def test_cls_above_one_accepted():
+    run = build_manual_run(page_url="https://example.com/", cwp={"cls": 1.5})
+    assert run.metrics.cwp.cls == 1.5
 
 
 def test_negative_lcp_rejected():
@@ -108,7 +114,7 @@ def test_cli_success_writes_output(tmp_path, capsys):
 
 def test_cli_invalid_metric_returns_nonzero(capsys):
     code = main([
-        "--cls", "1.9",  # out of 0..1
+        "--cls", "-0.5",  # below the floor; CLS has no ceiling
         "--page-url", "https://example.com/",
     ])
     assert code == 1

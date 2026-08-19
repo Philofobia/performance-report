@@ -76,11 +76,24 @@ def test_negative_lcp_rejected():
         Run.model_validate(payload)
 
 
-def test_cls_out_of_range_rejected():
+def test_cls_above_one_is_accepted():
+    """CLS is unbounded above; a 1.5 is a bad page, not a bad measurement.
+
+    CLS is the *sum* of layout-shift scores over the page's lifetime, so it has
+    no upper bound — a carousel plus a late-injected banner clears 1.0 easily.
+    Rejecting it here failed the whole campaign at `make_automated_run`, taking
+    every already-measured page and condition with it.
+    """
     payload = valid_run_payload()
     payload["metrics"]["cwp"]["cls"] = 1.5
-    with pytest.raises(ValidationError):
-        Run.model_validate(payload)
+    run = Run.model_validate(payload)
+    assert run.metrics.cwp.cls == 1.5
+
+
+def test_target_cls_above_one_is_accepted():
+    payload = valid_run_payload()
+    payload["metrics"]["cwp"]["target_cls"] = 1.2
+    assert Run.model_validate(payload).metrics.cwp.target_cls == 1.2
 
 
 def test_cls_negative_rejected():

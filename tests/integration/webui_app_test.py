@@ -74,10 +74,15 @@ def test_get_renders_an_input_for_every_declared_field(app):
 
 
 def test_range_hints_come_from_the_schema(app):
-    """`max="1"` on CLS must be the schema's number, not the template's."""
+    """Range hints are the schema's numbers, not the template's.
+
+    CLS carries `min="0"` and *no* max, because the schema bounds it below
+    only; Lighthouse carries the schema's 0..100. A template with its own
+    numbers would still have claimed `max="1"` for CLS after the schema
+    stopped saying so.
+    """
     _, _, body = call(app)
     assert 'name="cls"' in body
-    assert 'max="1"' in body
     assert 'max="100"' in body          # Lighthouse scores
 
 
@@ -238,7 +243,7 @@ def test_the_output_directory_is_created_on_demand(tmp_path):
 
 def test_an_out_of_range_value_is_rejected_by_the_schema_not_the_ui(app, tmp_path):
     status, _, body = call(app, method="POST", path="/runs",
-                           body=submission(cls="1.5"))
+                           body=submission(cls="-0.1"))
     assert status.startswith("400")
     assert "cls" in body
     assert not list((tmp_path / "processed").glob("*.json"))
@@ -246,9 +251,9 @@ def test_an_out_of_range_value_is_rejected_by_the_schema_not_the_ui(app, tmp_pat
 
 def test_a_rejected_submission_keeps_every_value_the_user_typed(app):
     _, _, body = call(app, method="POST", path="/runs",
-                      body=submission(cls="1.5", lcp_ms="6200"))
+                      body=submission(cls="-0.1", lcp_ms="6200"))
     assert 'value="6200"' in body
-    assert 'value="1.5"' in body
+    assert 'value="-0.1"' in body
     assert "Homepage LCP spikes to 6s on 3G" in body
 
 
@@ -301,7 +306,7 @@ def test_a_malformed_content_length_is_refused(app):
 def test_submitted_prose_is_escaped_on_the_way_back_out(app):
     """The error path echoes user text into HTML; it must not echo markup."""
     _, _, body = call(app, method="POST", path="/runs",
-                      body=submission(cls="1.5", problem="<script>alert(1)</script>"))
+                      body=submission(cls="-0.1", problem="<script>alert(1)</script>"))
     assert "<script>alert(1)</script>" not in body
     assert "&lt;script&gt;" in body
 
