@@ -610,8 +610,8 @@ Expected: `['live-campaign-report', 'security-and-tests']` then `security-and-te
 
 - [ ] **Step 4: Confirm the dead step is gone**
 
-Run: `grep -c "src.cli" .github/workflows/ci.yml || echo "absent"`
-Expected: `absent` (grep finds nothing and exits 1).
+Run: `grep -n "src\.cli" .github/workflows/ci.yml; echo "exit=$?"`
+Expected: no matching lines, then `exit=1` — grep exits 1 when it finds nothing.
 
 - [ ] **Step 5: Commit**
 

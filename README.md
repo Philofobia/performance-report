@@ -447,7 +447,7 @@ offline suite stays browser-free; only the real PDF run is `e2e`-marked.
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 824 offline tests, no browser, no network
+pytest -m "not e2e"      # 825 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 ```
 
@@ -462,6 +462,13 @@ a headless Chromium campaign against `config/ci-targets.yaml`, analysed
 `report.json`/`.html`/`.md`/`.pdf` uploaded as a build artifact. Everything
 else in CI proves the parts against fakes; this is the only thing that proves
 the sequence.
+
+The skeleton fingerprint alone cannot police that, because it is invariant to
+an empty appendix — zero captures render the same section sequence as two. So
+the job also asserts the appendix arrived: two entries and no degraded ones in
+`report.json`, and in the rendered `report.html` one embedded screenshot per
+entry with no empty-state row. Both halves are needed; a capture that fails to
+embed does so at render time, which `report.json` never learns about.
 
 It gates *structure and execution*, never magnitude: the page belongs to
 someone else and its numbers move for reasons that have nothing to do with this

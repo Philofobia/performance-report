@@ -89,3 +89,27 @@ def test_live_campaign_report_job_needs_security_and_tests():
         f"{job.get('needs')!r} — browser minutes would be spent even when "
         "the offline suite is red"
     )
+
+
+def test_appendix_check_greps_a_string_the_template_actually_renders():
+    """The appendix step detects a failed embed by counting the template's
+    empty-state text in report.html. Rewording that text in the template
+    would leave the check counting a string nothing renders — green forever,
+    which is the exact dead-gate failure phase 7d exists to remove."""
+    job = _load_live_campaign_job()
+    script = _find_step(job, "The appendix embedded real captures").get("run", "")
+
+    match = re.search(r'html\.count\("([^"]+)"\)', script)
+    assert match, (
+        "could not find an `html.count(\"...\")` empty-state probe in the "
+        f"appendix step's script:\n{script}"
+    )
+    probe = match.group(1)
+    template = (REPO_ROOT / "report" / "template" / "report.html.j2").read_text(
+        encoding="utf-8"
+    )
+    assert probe in template, (
+        f"the appendix step counts {probe!r} in report.html, but "
+        "report/template/report.html.j2 no longer contains that string — the "
+        "check can never fire again"
+    )

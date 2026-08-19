@@ -115,16 +115,41 @@ jobs:
         # green while the screenshots and HAR rows it exists to prove had
         # silently stopped resolving. Two entries is the campaign's own
         # arithmetic: one page x two conditions.
+        #
+        # Both artifacts are checked, because they fail differently.
+        # report.json catches captures that never reached the appendix. But a
+        # capture can reach it and still fail to EMBED: report/images.py's
+        # embed_png() returns None for an undecodable or out-of-root PNG, the
+        # template quietly renders a path-only row, and nothing writes that
+        # back into report.json — analysis/appendix.py says so in as many
+        # words ("discoverable only by decoding it, which happens in the
+        # report layer at render time"). Only the rendered document knows, so
+        # report.html is where that half of the check has to live.
         if: steps.campaign.outputs.skipped != 'true'
         run: |
           python - <<'PY'
-          import glob, json, sys
-          path = sorted(glob.glob("data/reports/*/report.json"))[-1]
-          report = json.load(open(path, encoding="utf-8"))
-          degraded = report["meta"].get("degraded_appendix_entries", 0)
+          import json, sys
+
+          from report.__main__ import find_report
+
+          # find_report() is the renderer's own selection rule, so this reads
+          # the exact document the previous step rendered and fingerprinted.
+          path = find_report()
+          report = json.loads(path.read_text(encoding="utf-8"))
           entries = len(report["appendix"])
-          print(f"{path}: {entries} appendix entries, {degraded} degraded")
-          sys.exit(0 if entries == 2 and degraded == 0 else 1)
+          degraded = report["meta"].get("degraded_appendix_entries", 0)
+
+          html = (path.parent / "report.html").read_text(encoding="utf-8")
+          embedded = html.count('src="data:image/png;base64,')
+          # The template's empty state, pinned by a unit test so a reworded
+          # string cannot silently retire this check.
+          empty = html.count("No screenshot was embedded")
+
+          print(f"{path}: {entries} appendix entries, {degraded} degraded, "
+                f"{embedded} screenshots embedded, {empty} empty")
+          ok = (entries == 2 and degraded == 0
+                and embedded >= entries and empty == 0)
+          sys.exit(0 if ok else 1)
           PY
 
       - name: Upload the regenerated report
