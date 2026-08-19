@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from config.load import Device, Network, PageTarget, PageTest, ProjectConfig, Settings
 from ingest import automated
 from ingest.browser import cdp_metrics, lighthouse, webser
+from ingest.browser import runner as runner_mod
 from ingest.browser.runner import (
     BlockedResponseError,
     BrowserRunner,
@@ -79,11 +80,20 @@ class FakeMouse:
         self._log.append("click")
 
 
+class FakeRequest:
+    """Stand-in for a Playwright Request, including its redirect ancestry."""
+
+    def __init__(self, url, redirected_from=None):
+        self.url = url
+        self.redirected_from = redirected_from
+
+
 class FakeResponse:
     """Minimal stand-in for a Playwright Response."""
 
-    def __init__(self, status):
+    def __init__(self, status, request=None):
         self.status = status
+        self.request = request
 
 
 class FakePage:
@@ -102,7 +112,11 @@ class FakePage:
         goto_error=None,
         main_status=200,
         sub_statuses=(),
+        redirects=(),
     ):
+        #: URLs the document passed through *before* the one goto() settles on,
+        #: oldest first — Playwright exposes these via Request.redirected_from.
+        self._redirects = list(redirects)
         self.log = log
         self.gotos = []
         self.screenshots = []
@@ -136,7 +150,12 @@ class FakePage:
         for status in self._sub_statuses:
             for handler in self.listeners.get("response", []):
                 handler(FakeResponse(status))
-        return FakeResponse(self._main_status)
+        request = None
+        # You ask for `url` and the server sends you onward: the requested URL
+        # is the OLDEST hop and `redirects` are where it took you.
+        for hop in [url, *self._redirects]:
+            request = FakeRequest(hop, redirected_from=request)
+        return FakeResponse(self._main_status, request=request)
 
     def wait_for_load_state(self, *args, **kwargs):
         self.log.append(f"wait_for_load_state:{args[0] if args else ''}")
@@ -1608,6 +1627,72 @@ def test_cli_scrubs_captures_into_the_store(monkeypatch, tmp_path):
     stored_har = _json.loads(written.read_text(encoding="utf-8"))["captures"]["har"]
     assert "session=abc123" not in open(stored_har, encoding="utf-8").read()
     assert not raw.exists()
+
+
+# --------------------------------------------------------------------------- #
+# Redirect safety — the SSRF gate covers where navigation ENDED, not just
+# where it was pointed
+# --------------------------------------------------------------------------- #
+def test_redirect_chain_is_read_oldest_first():
+    chain = FakeRequest(
+        "https://example.com/final",
+        redirected_from=FakeRequest("https://example.com/start"),
+    )
+    assert runner_mod.redirect_chain(FakeResponse(200, request=chain)) == [
+        "https://example.com/start",
+        "https://example.com/final",
+    ]
+
+
+def test_a_response_without_request_metadata_yields_no_chain():
+    """Nothing to check is not the same as something unsafe."""
+    assert runner_mod.redirect_chain(FakeResponse(200)) == []
+    assert runner_mod.redirect_chain(None) == []
+
+
+def test_a_redirect_onto_a_private_host_fails_the_run(monkeypatch):
+    """The gate validated the URL we asked for; this is where we arrived.
+
+    A public page that 30x-es onto an internal address is the SSRF the
+    pre-navigation check cannot see, and the block-page guard does not catch
+    it either — the internal host can answer a perfectly healthy 200.
+    """
+    def lookup(host):
+        return {"127.0.0.1"} if host == "internal.local" else {"8.8.8.8"}
+
+    monkeypatch.setattr(url_safety, "_lookup", lookup)
+    browser = FakeBrowser(
+        page_kwargs={"redirects": ["https://internal.local/admin"]}
+    )
+
+    with pytest.raises(runner_mod.UnsafeRedirectError) as excinfo:
+        make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    assert "internal.local" in str(excinfo.value)
+
+
+def test_a_redirect_downgrading_to_http_fails_the_run(public_dns):
+    browser = FakeBrowser(page_kwargs={"redirects": ["http://example.com/"]})
+    with pytest.raises(runner_mod.UnsafeRedirectError):
+        make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+
+
+def test_a_safe_redirect_chain_measures_normally(public_dns):
+    browser = FakeBrowser(
+        page_kwargs={"redirects": ["https://example.com/en", "https://example.com/en-us"]}
+    )
+    result = make_runner(browser).run_condition(
+        "https://example.com/", DEVICE, NETWORK
+    )
+    assert result["cwp"]["lcp_ms"] == 6200
+
+
+def test_an_unsafe_redirect_still_closes_the_context(public_dns):
+    """A refused measurement must not leak a browser context."""
+    browser = FakeBrowser(page_kwargs={"redirects": ["http://example.com/"]})
+    with pytest.raises(runner_mod.UnsafeRedirectError):
+        make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    _, ctx = browser.contexts[0]
+    assert ctx.closed is True
 
 
 def test_blocked_response_is_not_treated_as_unreachable(public_dns):

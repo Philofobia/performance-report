@@ -7,7 +7,12 @@ raw measurement dict consumed by ``ingest.automated``.
 
 SECURITY (SECURITY_PLAN.md §2.2 / `security` skill): every user-supplied URL is
 passed through ``normalize.url_safety.validate_url(url, resolve=True)`` BEFORE
-any navigation — rejecting non-https, private/internal/IP ranges (SSRF).
+any navigation — rejecting non-https, private/internal/IP ranges (SSRF) — and
+every hop the navigation *actually* took is re-checked afterwards by
+``assert_safe_chain``, because the pre-flight check can only judge the URL we
+asked for. See :class:`UnsafeRedirectError` for what that catches and
+``assert_safe_chain`` for why the redirect half is detection rather than
+prevention.
 
 **Optional custom request headers.** ``extra_http_headers`` (e.g. a bot-allowlist
 token for a site behind Akamai) is applied at *context* level, so it covers the
@@ -43,6 +48,21 @@ class BlockedResponseError(RuntimeError):
     """
 
 
+class UnsafeRedirectError(RuntimeError):
+    """Navigation ended somewhere ``url_safety`` would never have allowed.
+
+    ``validate_url`` runs before ``goto`` and can only judge the URL we asked
+    for. A public page that answers ``302 -> https://192.168.1.1/`` (or one
+    whose hostname is re-pointed between our DNS lookup and the browser's) puts
+    an internal response in front of the collectors, and the block-page guard
+    does not catch it: the internal host can answer a healthy 200.
+
+    Raised rather than returned, for the same reason as
+    :class:`BlockedResponseError` — this is not a measurement of the target,
+    and storing it would poison the report and the accumulated findings.
+    """
+
+
 class TargetUnreachableError(RuntimeError):
     """Navigation itself failed — DNS, TLS, connection refused, or timeout.
 
@@ -54,6 +74,49 @@ class TargetUnreachableError(RuntimeError):
     Deliberately *not* raised for a non-2xx document: that is a real
     measurement of a block page, and `BlockedResponseError` already says so.
     """
+
+
+def redirect_chain(response) -> list:
+    """Every URL the main document passed through, oldest first.
+
+    Playwright links each redirect hop backwards through
+    ``Request.redirected_from``; this walks that chain and reverses it. A
+    response with no request metadata yields ``[]`` — nothing to check is not
+    the same as something unsafe.
+    """
+    urls: list = []
+    request = getattr(response, "request", None)
+    seen = set()
+    while request is not None:
+        url = getattr(request, "url", None)
+        if url is None or id(request) in seen:  # defensive: no infinite walk
+            break
+        seen.add(id(request))
+        urls.append(url)
+        request = getattr(request, "redirected_from", None)
+    return list(reversed(urls))
+
+
+def assert_safe_chain(response, *, requested: str) -> None:
+    """Re-run the SSRF guard over every hop the navigation actually took.
+
+    The pre-navigation check judged ``requested``; this judges where we ended
+    up. Note this is *detection*, not prevention: the hop has already been
+    fetched by the time Playwright reports it. Intercepting every request with
+    ``page.route`` would prevent it, at the cost of adding interception latency
+    to the very numbers this tool exists to measure — so the trade made here is
+    to let the request happen and refuse to report anything derived from it.
+    """
+    for url in redirect_chain(response):
+        if url == requested:
+            continue  # already validated before navigation
+        try:
+            url_safety.validate_url(url, resolve=True)
+        except url_safety.UnSafeURLError as exc:
+            raise UnsafeRedirectError(
+                f"Navigation from {requested} was redirected to {url}, which "
+                f"the SSRF guard rejects: {exc}"
+            ) from exc
 
 
 def _no_lighthouse(url: str, cdp: object) -> dict:
@@ -246,6 +309,11 @@ class BrowserRunner:
                 raise TargetUnreachableError(
                     f"Navigation to {url} failed: {exc}"
                 ) from exc
+            # Where we ARRIVED, not just where we were pointed. Checked before
+            # the status guard: a redirect onto an internal host that answers
+            # 200 would otherwise sail straight past it.
+            assert_safe_chain(response, requested=url)
+
             main_status = getattr(response, "status", None) if response else None
             # Fail fast, before spending the LCP/INP settle time on a block page.
             if main_status is not None and not 200 <= main_status < 300:
