@@ -17,6 +17,12 @@ of knowledge-base playbook chunks plus prior findings. At 768 dimensions,
 Vectors are L2-normalised on write, so cosine similarity *is* the dot product
 and the query is a single ``matrix @ vector``.
 
+**Why the corpus is cached per store instance.** Analysis retrieves once per
+page — twice with ``--use-priors`` — and each query used to re-read every row
+and rebuild the whole matrix, so a ten-page campaign loaded the corpus twenty
+times. The cache is keyed by query scope and dropped by every write, and it
+cannot go stale between queries because every write goes through this object.
+
 If the corpus ever outgrows this, :class:`VectorStore` is the seam: implement
 it over LanceDB (embedded, ANN) without touching the ``rag/`` layer.
 """
@@ -162,7 +168,17 @@ class SqliteVectorStore:
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
+        #: ``(kind, sources) -> (rows, matrix)``. Analysis queries the same
+        #: corpus once per page — twice with ``--use-priors`` — and each query
+        #: re-read every row and rebuilt the whole matrix. The corpus cannot
+        #: change under us between those queries: every write goes through
+        #: ``add``/``delete`` on this instance, and both drop the cache.
+        self._corpus: Dict[tuple, tuple] = {}
         init_vector_schema(conn)
+
+    def _invalidate(self) -> None:
+        """Drop the cached corpus. Called by every write path."""
+        self._corpus.clear()
 
     # -- writes ------------------------------------------------------------ #
     def add(
@@ -206,6 +222,7 @@ class SqliteVectorStore:
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
+        self._invalidate()
         return len(rows)
 
     def _assert_dim_consistent(self, dim: int) -> None:
@@ -245,6 +262,7 @@ class SqliteVectorStore:
             cur = self._conn.execute(
                 f"DELETE FROM embeddings WHERE {' AND '.join(clauses)}", params
             )
+        self._invalidate()
         return cur.rowcount
 
     # -- reads ------------------------------------------------------------- #
@@ -272,6 +290,28 @@ class SqliteVectorStore:
         sql += " ORDER BY doc_id ASC"
         return self._conn.execute(sql, params).fetchall()
 
+    def _corpus_matrix(self, kind, sources):
+        """The rows and stacked matrix for one scope, built at most once.
+
+        Keyed by the scope because ``kind="knowledge"`` and ``kind="finding"``
+        are different corpora; a shared entry would answer a playbook query
+        with prior findings.
+        """
+        key = (kind, tuple(sources) if sources else None)
+        cached = self._corpus.get(key)
+        if cached is not None:
+            return cached
+
+        rows = self._load(kind, sources)
+        if not rows:
+            # Not cached: an empty corpus is usually a corpus not yet embedded,
+            # and the next call is the one that fills it.
+            return rows, None
+        dim = int(rows[0]["dim"])
+        matrix = np.vstack([from_blob(r["vector"], dim) for r in rows])
+        self._corpus[key] = (rows, matrix)
+        return rows, matrix
+
     def query(
         self,
         vector: Any,
@@ -288,12 +328,11 @@ class SqliteVectorStore:
         """
         if k <= 0:
             return []
-        rows = self._load(kind, sources)
+        rows, matrix = self._corpus_matrix(kind, sources)
         if not rows:
             return []
 
         dim = int(rows[0]["dim"])
-        matrix = np.vstack([from_blob(r["vector"], dim) for r in rows])
         query_vec = normalize(vector)[0]
         if query_vec.shape[0] != dim:
             raise VectorStoreError(

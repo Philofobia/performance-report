@@ -26,8 +26,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from rag.embeddings import (
     QuotaExceededError,
-    _is_quota_error,
-    backoff_delays,
+    call_with_quota_backoff,
     resolve_api_key,
 )
 from rag.prompt import GroundedPrompt
@@ -222,24 +221,17 @@ class GoogleAnalysisClient:
         if self._transport is None:
             self._transport = self._build_default_transport()
 
-        delays = backoff_delays(self._max_retries, jitter=self._jitter)
-        last_exc: Optional[BaseException] = None
-        for attempt in range(self._max_retries + 1):
-            try:
-                return self._transport(messages, self.model)
-            except Exception as exc:
-                if not _is_quota_error(exc):
-                    raise
-                last_exc = exc
-                if attempt >= self._max_retries:
-                    break
-                self._sleep(delays[attempt])
-
-        raise QuotaExceededError(
-            f"Google AI quota exhausted after {self._max_retries} retries. "
-            "The free tier limits requests per minute; wait for the window to "
-            "reset or re-run with --no-llm."
-        ) from last_exc
+        return call_with_quota_backoff(
+            lambda: self._transport(messages, self.model),
+            max_retries=self._max_retries,
+            sleep=self._sleep,
+            jitter=self._jitter,
+            exhausted_message=(
+                f"Google AI quota exhausted after {self._max_retries} retries. "
+                "The free tier limits requests per minute; wait for the window "
+                "to reset or re-run with --no-llm."
+            ),
+        )
 
     # -- validated generation ---------------------------------------------- #
     def _generate_validated(self, messages: List[Dict[str, str]], model_cls):

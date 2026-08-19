@@ -109,6 +109,40 @@ def backoff_delays(
     return delays
 
 
+def call_with_quota_backoff(
+    call: Callable[[], Any],
+    *,
+    max_retries: int,
+    exhausted_message: str,
+    sleep: Callable[[float], None] = time.sleep,
+    jitter: Callable[[], float] = random.random,
+) -> Any:
+    """Run ``call``, retrying **only** quota rejections, then give up cleanly.
+
+    Both Google clients in this project need exactly this loop, and had it
+    twice, verbatim — including the rule that matters most: anything that is
+    not a quota error propagates immediately. Retrying a malformed request or a
+    bad key just spends the next window too.
+
+    ``QuotaExceededError`` is raised with ``exhausted_message`` because the
+    useful advice differs by caller ("reduce the corpus size" vs. "re-run with
+    --no-llm"), and a generic message would send people to the wrong fix.
+    """
+    delays = backoff_delays(max_retries, jitter=jitter)
+    last_exc: Optional[BaseException] = None
+    for attempt in range(max_retries + 1):
+        try:
+            return call()
+        except Exception as exc:
+            if not _is_quota_error(exc):
+                raise
+            last_exc = exc
+            if attempt >= max_retries:
+                break
+            sleep(delays[attempt])
+    raise QuotaExceededError(exhausted_message) from last_exc
+
+
 def resolve_api_key(explicit: Optional[str] = None, env: Optional[Dict[str, str]] = None) -> str:
     """Find the Google API key, or explain how to set one.
 
@@ -257,24 +291,17 @@ class GoogleEmbeddingClient:
         if self._transport is None:
             self._transport = self._build_default_transport()
 
-        delays = backoff_delays(self._max_retries, jitter=self._jitter)
-        last_exc: Optional[BaseException] = None
-        for attempt in range(self._max_retries + 1):
-            try:
-                return self._transport(texts, self.model, task_type)
-            except Exception as exc:
-                if not _is_quota_error(exc):
-                    raise
-                last_exc = exc
-                if attempt >= self._max_retries:
-                    break
-                self._sleep(delays[attempt])
-
-        raise QuotaExceededError(
-            f"Google AI quota exhausted after {self._max_retries} retries. "
-            "The free tier limits requests per minute; wait for the window to "
-            "reset or reduce the corpus size."
-        ) from last_exc
+        return call_with_quota_backoff(
+            lambda: self._transport(texts, self.model, task_type),
+            max_retries=self._max_retries,
+            sleep=self._sleep,
+            jitter=self._jitter,
+            exhausted_message=(
+                f"Google AI quota exhausted after {self._max_retries} retries. "
+                "The free tier limits requests per minute; wait for the window "
+                "to reset or reduce the corpus size."
+            ),
+        )
 
     # -- public API -------------------------------------------------------- #
     def embed(
