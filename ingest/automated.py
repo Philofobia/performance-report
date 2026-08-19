@@ -19,17 +19,20 @@ fakes — no real browser. ``main`` wires a real Playwright ``BrowserRunner``.
 from __future__ import annotations
 
 import argparse
-import json
+import sqlite3
 import statistics
 import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from config.load import PageTarget, PageTest, ProjectConfig
 from ingest.browser.runner import TargetUnreachableError
+from ingest.persist import RunPersister
 from normalize.schema import Run
+from store import sql
+from store.artifacts import safe_segment
 
 DEFAULT_RUNNER_NAME = "automated-campaign-1.0"
 
@@ -201,6 +204,7 @@ def run_campaign(
     artifacts_root: Optional[str] = None,
     no_headers: bool = False,
     env: Optional[Mapping[str, str]] = None,
+    on_run: Optional[Callable[[Run], Optional[Run]]] = None,
 ) -> List[Run]:
     """Run the full campaign; return one normalized Run per (page x condition).
 
@@ -208,6 +212,14 @@ def run_campaign(
     invocation — useful for measuring the same targets with and without a bot
     allowlist token. Headers are resolved per page only when they are actually
     wanted, so an unset token cannot break a campaign that does not use it.
+
+    ``on_run`` is called with each Run the moment its (page x condition)
+    completes, and may return a replacement Run — which is how
+    :class:`ingest.persist.RunPersister` repoints ``captures`` at the scrubbed
+    copies it just wrote. Persisting per condition rather than after the loop
+    is what stops one failed condition from discarding every measurement
+    already taken: a six-page campaign that dies on the last page keeps the
+    five that worked.
     """
     plan = plan_conditions(cfg, device=device, network=network, runs=runs, pages=pages)
     result: List[Run] = []
@@ -222,8 +234,8 @@ def run_campaign(
             if artifacts_root:
                 artifacts_dir = str(
                     Path(artifacts_root)
-                    / page.name
-                    / f"{condition.device}__{condition.network}"
+                    / safe_segment(page.name)
+                    / f"{safe_segment(condition.device)}__{safe_segment(condition.network)}"
                     / f"run_{i + 1}"
                 )
             token = f"run_{i + 1}"
@@ -237,7 +249,10 @@ def run_campaign(
                     extra_http_headers=headers,
                 )
             )
-        result.append(make_automated_run(cfg, page, condition, measurements))
+        run = make_automated_run(cfg, page, condition, measurements)
+        if on_run is not None:
+            run = on_run(run) or run
+        result.append(run)
     return result
 
 
@@ -263,6 +278,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-headers", action="store_true",
                    help="Ignore any request headers configured in targets.yaml "
                         "for this run (e.g. to measure without a bot-allowlist token).")
+    p.add_argument("--no-store", action="store_true",
+                   help="Do not record the campaign in the SQLite run store. "
+                        "Trends are built from that store, so a campaign run "
+                        "with this flag contributes no history.")
     return p
 
 
@@ -334,41 +353,88 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"{page.name}\t{cond.device}\t{cond.network}\t{cond.runs}")
         return 0
 
+    # Every configured header name is a candidate secret, so the scrubber is
+    # told about all of them — resolving the values here would be pointless
+    # (it only needs the names) and would fail a --no-headers campaign whose
+    # token is unset.
+    header_names = sorted(
+        {name for page in cfg.pages for name in (page.headers or {})}
+        | set(cfg.headers)
+    )
+
+    conn = None
+    if not args.no_store:
+        try:
+            conn = sql.connect(cfg.settings.storage.sqlite_path)
+        except (sqlite3.Error, OSError) as exc:
+            # A campaign is worth more than its history: measure anyway and
+            # say the store is unavailable.
+            print(f"warning: run store unavailable ({exc}); "
+                  f"this campaign will not contribute history", file=sys.stderr)
+
+    persist = RunPersister(
+        output_dir=args.output_dir,
+        store_root=cfg.settings.storage.raw_dir,
+        conn=conn,
+        extra_headers=header_names,
+    )
+
+    def sink(run: Run) -> Run:
+        stored = persist(run)
+        print(persist.written[-1])
+        return stored
+
     pw = browser = None
     runner = None
     try:
-        pw, browser, runner = _real_runner(cfg)
-        runs = run_campaign(
-            cfg,
-            runner,
-            device=args.device,
-            network=args.network,
-            runs=args.runs,
-            pages=pages,
-            artifacts_root=args.artifacts_root,
-            no_headers=args.no_headers,
-        )
-    except TargetUnreachableError as exc:
-        print(f"error: target unreachable: {exc}", file=sys.stderr)
-        return EXIT_TARGET_UNREACHABLE
-    except Exception as exc:
-        print(f"error: campaign failed: {exc}", file=sys.stderr)
-        return 1
-    finally:
         try:
-            if browser is not None:
-                browser.close()
+            pw, browser, runner = _real_runner(cfg)
+            run_campaign(
+                cfg,
+                runner,
+                device=args.device,
+                network=args.network,
+                runs=args.runs,
+                pages=pages,
+                artifacts_root=args.artifacts_root,
+                no_headers=args.no_headers,
+                on_run=sink,
+            )
+        except TargetUnreachableError as exc:
+            print(f"error: target unreachable: {exc}", file=sys.stderr)
+            return _report_kept(persist, EXIT_TARGET_UNREACHABLE)
+        except Exception as exc:
+            print(f"error: campaign failed: {exc}", file=sys.stderr)
+            return _report_kept(persist, 1)
         finally:
-            if pw is not None:
-                pw.stop()
+            try:
+                if browser is not None:
+                    browser.close()
+            finally:
+                if pw is not None:
+                    pw.stop()
+    finally:
+        if conn is not None:
+            conn.close()
 
-    out_dir = Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for run in runs:
-        target = out_dir / f"{run.page.name}__{run.condition.device}__{run.condition.network}.json"
-        target.write_text(json.dumps(run.model_dump(mode="json"), indent=2), encoding="utf-8")
-        print(target)
     return 0
+
+
+def _report_kept(persist: "RunPersister", code: int) -> int:
+    """Say which conditions survived a failed campaign, then return ``code``.
+
+    A campaign that dies on its last page has still measured everything before
+    it, and those runs are already on disk — but a bare "campaign failed" reads
+    as though nothing was kept, and the next thing anyone does is re-run the
+    whole matrix.
+    """
+    if persist.written:
+        print(
+            f"kept {len(persist.written)} completed run(s): "
+            + ", ".join(p.name for p in persist.written),
+            file=sys.stderr,
+        )
+    return code
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry

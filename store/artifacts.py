@@ -59,11 +59,16 @@ class ArtifactError(Exception):
 
 def run_dir(root: str | Path, project: str, page: str, run_id: str) -> Path:
     """Deterministic per-run artifact directory."""
-    return Path(root) / _safe_segment(project) / _safe_segment(page) / _safe_segment(run_id)
+    return Path(root) / safe_segment(project) / safe_segment(page) / safe_segment(run_id)
 
 
-def _safe_segment(value: str) -> str:
-    """Make a path segment safe: no separators, no traversal, never empty."""
+def safe_segment(value: str) -> str:
+    """Make a path segment safe: no separators, no traversal, never empty.
+
+    Public because the ingestion layer needs the same rule: a page named
+    ``checkout/step-2`` in ``targets.yaml`` would otherwise escape the
+    artifacts root, and one containing ``:`` is simply unwritable on Windows.
+    """
     cleaned = "".join(
         ch if (ch.isalnum() or ch in "-_.") else "_" for ch in (value or "")
     ).strip("._")

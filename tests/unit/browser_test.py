@@ -1307,6 +1307,55 @@ def test_run_campaign_runs_are_schema_valid_and_distinct():
     cfg = make_cfg()
     runs = automated.run_campaign(cfg, RecordingRunner())
     assert len({r.run_id for r in runs}) == len(runs)
+
+
+# --------------------------------------------------------------------------- #
+# on_run — incremental persistence
+# --------------------------------------------------------------------------- #
+class FailingRunner(RecordingRunner):
+    """Measures normally until the Nth condition, then raises."""
+
+    def __init__(self, fail_on_call: int):
+        super().__init__()
+        self._fail_on_call = fail_on_call
+
+    def run_condition(self, *args, **kwargs):
+        if len(self.calls) + 1 == self._fail_on_call:
+            raise RuntimeError("the browser fell over")
+        return super().run_condition(*args, **kwargs)
+
+
+def test_on_run_receives_each_run_as_its_condition_completes():
+    """Not once at the end: the sink is what makes a run durable."""
+    seen = []
+    runs = automated.run_campaign(make_cfg(), RecordingRunner(), on_run=seen.append)
+    assert [r.run_id for r in seen] == [r.run_id for r in runs]
+
+
+def test_on_run_keeps_the_runs_measured_before_a_later_condition_failed():
+    """A campaign that dies on its last page keeps the pages that worked.
+
+    `make_cfg` is 3 conditions over 6 navigations; failing on the 6th kills the
+    final (pdp) condition after the two homepage conditions are complete.
+    Without a per-condition sink those five successful navigations are lost.
+    """
+    seen = []
+    with pytest.raises(RuntimeError):
+        automated.run_campaign(
+            make_cfg(), FailingRunner(fail_on_call=6), on_run=seen.append
+        )
+    assert [r.page.name for r in seen] == ["homepage", "homepage"]
+
+
+def test_run_campaign_returns_what_the_sink_gives_back():
+    """The sink repoints captures at the stored copies; the campaign keeps those."""
+    def relabel(run):
+        return run.model_copy(update={"run_id": f"stored_{run.run_id}"})
+
+    runs = automated.run_campaign(
+        make_cfg(), RecordingRunner(), pages=["pdp"], on_run=relabel
+    )
+    assert runs[0].run_id.startswith("stored_run_")
     for run in runs:
         assert run.metrics.cwp.lcp_ms is not None
         assert run.meta.source == "automated"
@@ -1445,6 +1494,120 @@ def test_cli_writes_one_json_per_run(monkeypatch, tmp_path, capsys):
     assert data["page"]["name"] == "pdp"
     assert data["meta"]["source"] == "automated"
     assert data["metrics"]["cwp"]["inp_ms"] == 100
+
+
+def _cfg_with_store(tmp_path, monkeypatch):
+    """A config whose run store lives in the test's own tmp dir."""
+    cfg = make_cfg()
+    cfg.settings.storage.sqlite_path = str(tmp_path / "runs.sqlite")
+    monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
+    return cfg
+
+
+def test_cli_records_the_campaign_in_the_run_store(monkeypatch, tmp_path):
+    """Without this, `list-runs` is empty and trends never accumulate."""
+    from store import sql
+
+    _cfg_with_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        automated, "_real_runner", lambda cfg=None: (None, None, RecordingRunner())
+    )
+
+    code = automated.main([
+        "--pages", "pdp", "--output-dir", str(tmp_path / "processed"),
+    ])
+    assert code == 0
+
+    conn = sql.connect(tmp_path / "runs.sqlite")
+    try:
+        assert [r.page.name for r in sql.list_runs(conn)] == ["pdp"]
+    finally:
+        conn.close()
+
+
+def test_cli_no_store_flag_skips_the_run_store(monkeypatch, tmp_path):
+    _cfg_with_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        automated, "_real_runner", lambda cfg=None: (None, None, RecordingRunner())
+    )
+
+    code = automated.main([
+        "--pages", "pdp", "--no-store", "--output-dir", str(tmp_path / "processed"),
+    ])
+    assert code == 0
+    assert not (tmp_path / "runs.sqlite").exists()
+
+
+def test_cli_keeps_the_runs_it_completed_before_a_failure(monkeypatch, tmp_path):
+    """A campaign that dies on its last condition keeps the earlier ones.
+
+    `make_cfg` is 6 navigations across 3 conditions; failing on the 6th leaves
+    the two homepage conditions complete. Before the per-condition sink, `main`
+    wrote nothing at all in this case.
+    """
+    _cfg_with_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        automated,
+        "_real_runner",
+        lambda cfg=None: (None, None, FailingRunner(fail_on_call=6)),
+    )
+
+    out = tmp_path / "processed"
+    code = automated.main(["--output-dir", str(out)])
+    assert code == 1
+    assert sorted(p.name for p in out.glob("*.json")) == [
+        "homepage__desktop__fast-3g.json",
+        "homepage__mid-mobile__slow-4g.json",
+    ]
+
+
+def test_cli_says_what_it_kept_when_a_campaign_fails(monkeypatch, tmp_path, capsys):
+    _cfg_with_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        automated,
+        "_real_runner",
+        lambda cfg=None: (None, None, FailingRunner(fail_on_call=6)),
+    )
+
+    automated.main(["--output-dir", str(tmp_path / "processed")])
+    err = capsys.readouterr().err
+    assert "2" in err and "kept" in err.lower()
+
+
+def test_cli_scrubs_captures_into_the_store(monkeypatch, tmp_path):
+    """The HAR the appendix later reads must be the redacted one."""
+    import json as _json
+
+    cfg = _cfg_with_store(tmp_path, monkeypatch)
+    cfg.settings.storage.raw_dir = str(tmp_path / "store")
+
+    raw = tmp_path / "raw" / "capture.har"
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text(_json.dumps({"log": {"version": "1.2", "entries": [{
+        "request": {"url": "https://example.com/",
+                    "headers": [{"name": "Cookie", "value": "session=abc123"}]},
+        "response": {"headers": [], "content": {"size": 10}},
+    }]}}), encoding="utf-8")
+
+    class HarRunner(RecordingRunner):
+        def run_condition(self, *args, **kwargs):
+            measured = super().run_condition(*args, **kwargs)
+            measured["captures"] = {"har": str(raw)}
+            return measured
+
+    monkeypatch.setattr(
+        automated, "_real_runner", lambda cfg=None: (None, None, HarRunner())
+    )
+
+    code = automated.main([
+        "--pages", "pdp", "--output-dir", str(tmp_path / "processed"),
+    ])
+    assert code == 0
+
+    written = next((tmp_path / "processed").glob("*.json"))
+    stored_har = _json.loads(written.read_text(encoding="utf-8"))["captures"]["har"]
+    assert "session=abc123" not in open(stored_har, encoding="utf-8").read()
+    assert not raw.exists()
 
 
 def test_blocked_response_is_not_treated_as_unreachable(public_dns):
