@@ -25,6 +25,7 @@ import os
 import random
 import sqlite3
 import time
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
 
 CACHE_SCHEMA = """
@@ -160,11 +161,23 @@ class EmbeddingCache:
         return out
 
     def put_many(self, model: str, pairs: Sequence[tuple], *, created_at: Optional[str] = None) -> int:
-        """Store ``[(text, vector), ...]``."""
+        """Store ``[(text, vector), ...]``, stamped with the write time.
+
+        No caller ever passed ``created_at``, so every row carried NULL and the
+        cache could not be aged out — the one thing the column is for. It
+        defaults to now rather than being dropped because a content-addressed
+        cache with no write time can only be cleared wholesale.
+        """
         import numpy as np
 
         if not pairs:
             return 0
+        if created_at is None:
+            created_at = (
+                datetime.now(timezone.utc)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z")
+            )
         rows = [
             (
                 cache_key(model, text), model, len(vector),

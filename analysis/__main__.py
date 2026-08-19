@@ -50,6 +50,13 @@ def load_runs(
     if from_store is not None:
         from store import sql
 
+        # `sql.connect` creates what it opens, so a mistyped path would leave a
+        # stray empty database behind and report "no runs found" — indis-
+        # tinguishable from a store that is genuinely empty. `store/listing.py`
+        # already refuses this; analysis has to as well.
+        if not Path(from_store).is_file():
+            raise FileNotFoundError(f"No run store at {from_store}")
+
         conn = sql.connect(from_store)
         sql.init_schema(conn)
         try:

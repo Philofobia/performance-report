@@ -990,6 +990,28 @@ def test_median_measurement_picks_run_closest_to_median_lcp():
     assert automated.median_measurement(measurements)["captures"]["screenshot"] == "c.png"
 
 
+def test_median_measurement_treats_a_zero_lcp_as_a_real_value():
+    """`or target` read 0.0 as "no LCP" and scored it as a perfect match."""
+    measurements = [
+        {"cwp": {"lcp_ms": 0.0}, "captures": {"screenshot": "zero.png"}},
+        {"cwp": {"lcp_ms": 1000}, "captures": {"screenshot": "a.png"}},
+        {"cwp": {"lcp_ms": 1100}, "captures": {"screenshot": "b.png"}},
+    ]
+    picked = automated.median_measurement(measurements)
+    assert picked["captures"]["screenshot"] == "a.png"   # median is 1000
+
+
+def test_median_measurement_never_picks_an_unmeasured_run_as_representative():
+    """A run with no LCP scored as an exact match and donated the artifacts."""
+    measurements = [
+        {"cwp": {}, "captures": {"screenshot": "nothing.png"}},
+        {"cwp": {"lcp_ms": 1000}, "captures": {"screenshot": "a.png"}},
+        {"cwp": {"lcp_ms": 1100}, "captures": {"screenshot": "b.png"}},
+    ]
+    picked = automated.median_measurement(measurements)
+    assert picked["captures"]["screenshot"] == "a.png"
+
+
 def test_median_measurement_handles_empty_and_missing_lcp():
     assert automated.median_measurement([]) == {}
     measurements = [{"cwp": {}}, {"cwp": {}}]
@@ -1627,6 +1649,35 @@ def test_cli_scrubs_captures_into_the_store(monkeypatch, tmp_path):
     stored_har = _json.loads(written.read_text(encoding="utf-8"))["captures"]["har"]
     assert "session=abc123" not in open(stored_har, encoding="utf-8").read()
     assert not raw.exists()
+
+
+def test_a_failed_measurement_still_writes_its_trace(public_dns, tmp_path):
+    """The run you most want a trace of is the one that fell over.
+
+    Tracing was stopped on the success path only, so an exception anywhere in
+    collection took the trace down with it at `context.close()`.
+    """
+    def exploding_collect(page):
+        raise RuntimeError("collector exploded")
+
+    browser = FakeBrowser()
+    with pytest.raises(RuntimeError, match="collector exploded"):
+        make_runner(browser, collect=exploding_collect).run_condition(
+            "https://example.com/", DEVICE, NETWORK,
+            artifacts_dir=str(tmp_path), run_id="run_1",
+        )
+
+    _, ctx = browser.contexts[0]
+    assert ctx.tracing.stops, "trace was never stopped, so it was discarded"
+    assert ctx.closed is True
+
+
+def test_a_run_without_artifacts_stops_no_trace(public_dns):
+    """Nothing was started, so there is nothing to stop."""
+    browser = FakeBrowser()
+    make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    _, ctx = browser.contexts[0]
+    assert ctx.tracing.stops == []
 
 
 # --------------------------------------------------------------------------- #

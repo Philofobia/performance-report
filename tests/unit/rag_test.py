@@ -247,6 +247,30 @@ def test_cache_avoids_repeat_api_calls():
     conn.close()
 
 
+def test_cached_vectors_record_when_they_were_written():
+    """Every row had a NULL created_at, so the cache could never be pruned."""
+    conn = sql.connect(":memory:")
+    cache = EmbeddingCache(conn)
+    make_client(transport=FakeTransport(), cache=cache).embed(["playbook chunk"])
+
+    stamped = conn.execute(
+        "SELECT created_at FROM embedding_cache"
+    ).fetchone()["created_at"]
+    assert stamped and stamped.endswith("Z")
+    conn.close()
+
+
+def test_an_explicit_created_at_still_wins():
+    conn = sql.connect(":memory:")
+    cache = EmbeddingCache(conn)
+    cache.put_many("m", [("a", [1.0, 0.0])], created_at="2026-01-08T14:30:00Z")
+
+    assert conn.execute(
+        "SELECT created_at FROM embedding_cache"
+    ).fetchone()["created_at"] == "2026-01-08T14:30:00Z"
+    conn.close()
+
+
 def test_cache_only_requests_the_uncached_texts():
     conn = sql.connect(":memory:")
     cache = EmbeddingCache(conn)

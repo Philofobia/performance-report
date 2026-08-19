@@ -109,10 +109,19 @@ def median_measurement(measurements: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not lcps:
         return measurements[0]
     target = statistics.median(lcps)
-    return min(
-        measurements,
-        key=lambda m: abs((m.get("cwp", {}).get("lcp_ms") or target) - target),
-    )
+
+    def distance(measurement: Dict[str, Any]) -> Tuple[bool, float]:
+        """How far this run sits from the median LCP; unmeasured runs last.
+
+        The old key was ``abs((lcp or target) - target)``, which read a real
+        ``0.0`` as "no LCP" *and* scored every unmeasured run as an exact
+        match — so the run least able to represent the condition was the one
+        that donated the screenshot and HAR. Absent is absent; zero is a value.
+        """
+        lcp = measurement.get("cwp", {}).get("lcp_ms")
+        return (True, 0.0) if lcp is None else (False, abs(lcp - target))
+
+    return min(measurements, key=distance)
 
 
 def plan_conditions(

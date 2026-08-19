@@ -251,6 +251,12 @@ class BrowserRunner:
             # only need sizes + timings. Header scrubbing happens in store/.
             ctx_kwargs["record_har_content"] = "omit"
 
+        # Bound before the try: the `finally` reads `trace_path`, and a failure
+        # earlier than its assignment would otherwise raise NameError from the
+        # cleanup and mask the real error.
+        trace_path: Optional[str] = None
+        screenshot_path: Optional[str] = None
+
         context = self._browser.new_context(**ctx_kwargs)
         try:
             page = context.new_page()
@@ -285,8 +291,6 @@ class BrowserRunner:
             # buffered observer entries and are lost if we attach after load.
             self._install_collector(page)
 
-            trace_path: Optional[str] = None
-            screenshot_path: Optional[str] = None
             if artifacts_dir:
                 out = Path(artifacts_dir)
                 trace_path = str(out / f"{run_token}.trace.zip")
@@ -356,8 +360,17 @@ class BrowserRunner:
                 out = Path(artifacts_dir)
                 screenshot_path = str(out / f"{run_token}.png")
                 page.screenshot(path=screenshot_path, full_page=False)
-                context.tracing.stop(path=trace_path)
         finally:
+            # Stop tracing whatever happened. Stopping it only on the success
+            # path meant an exception anywhere in collection took the trace
+            # down with it at `context.close()` — discarding the diagnostic for
+            # precisely the run someone needs to diagnose.
+            if trace_path is not None:
+                try:
+                    context.tracing.stop(path=trace_path)
+                except Exception:  # pragma: no cover - defensive
+                    # A trace we cannot save must not mask the real failure.
+                    pass
             context.close()
 
         return {
