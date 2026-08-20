@@ -44,12 +44,17 @@ no code fence. Shape:
 {
   "summary": "one paragraph on what is wrong with this page",
   "findings": [
-    {"title": "...", "detail": "...", "evidence": ["metric=value"],
+    {"title": "...", "detail": "...",
+     "consequence": "one plain sentence on what a visitor to this page
+      actually experiences - no numbers, no metric names",
+     "evidence": ["metric=value"],
      "symptom_codes": ["lcp_fail"]}
   ],
   "impacts": [{"audience": "ux|seo|business", "text": "..."}],
   "recommendations": [
     {"title": "...", "rationale": "...",
+     "why_it_matters": "one plain sentence for whoever decides whether to fund
+      this work - no numbers",
      "playbook_source": "<the source name of a playbook shown above>",
      "playbook_section": "<the heading you used>"}
   ]
@@ -88,6 +93,9 @@ class InvalidModelOutputError(AnalysisError):
 class LlmFinding(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     detail: str = Field(default="", max_length=2000)
+    #: What a visitor to this page actually experiences. Plain language, no
+    #: numbers: the reader of this line is not a performance engineer.
+    consequence: str = Field(default="", max_length=500)
     evidence: List[str] = Field(default_factory=list, max_length=20)
     symptom_codes: List[str] = Field(default_factory=list, max_length=20)
 
@@ -100,6 +108,8 @@ class LlmImpact(BaseModel):
 class LlmRecommendation(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     rationale: str = Field(default="", max_length=2000)
+    #: Why this is worth doing, for whoever decides whether to fund it.
+    why_it_matters: str = Field(default="", max_length=500)
     playbook_source: str = Field(min_length=1, max_length=200)
     playbook_section: str = Field(default="", max_length=200)
 

@@ -388,7 +388,9 @@ def _page_block(
         resource_type_totals={k: totals[k] for k in sorted(totals)},
         summary=page.summary,
         findings=[
-            FindingModel(title=f.title, detail=f.detail, evidence=list(f.evidence),
+            FindingModel(title=f.title, detail=f.detail,
+                         consequence=getattr(f, "consequence", "") or "",
+                         evidence=list(f.evidence),
                          symptom_codes=list(f.symptom_codes))
             for f in page.findings
         ],
@@ -396,6 +398,7 @@ def _page_block(
         recommendations=[
             RecommendationModel(
                 title=r.title, rationale=r.rationale,
+                why_it_matters=getattr(r, "why_it_matters", "") or "",
                 playbook_source=r.playbook_source,
                 playbook_section=r.playbook_section, effort=r.effort,
                 magnitude="estimated" if r.projections else "unknown",

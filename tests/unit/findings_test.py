@@ -361,3 +361,25 @@ def test_an_unavailable_model_degrades_with_its_own_reason():
     assert result.mode == "rule_based"
     assert result.degradation_reason == "model_unavailable"
     assert result.recommendations
+
+
+def test_plain_language_fields_reach_the_page_analysis():
+    run, symptoms, chunks = _setup()
+    result_model = LlmPageAnalysis.model_validate({
+        "summary": "s",
+        "findings": [{"title": "t", "detail": "d",
+                      "consequence": "Taps do nothing for two seconds."}],
+        "impacts": [],
+        "recommendations": [
+            {"title": "Real", "rationale": "r", "playbook_source": "images.md",
+             "playbook_section": "Serve modern formats",
+             "why_it_matters": "The page reacts to taps sooner."},
+        ],
+    })
+
+    result = analyze_page([run], hits=[a_hit("images.md")], symptoms=symptoms,
+                          client=FakeClient(result_model), chunks=chunks)
+
+    assert result.findings[0].consequence == "Taps do nothing for two seconds."
+    assert result.recommendations[0].why_it_matters == (
+        "The page reacts to taps sooner.")
