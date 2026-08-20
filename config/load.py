@@ -264,8 +264,8 @@ class AppendixConfig(BaseModel):
     """
 
     top_requests: int = Field(default=15, ge=1)
-    screenshot_width_px: int = Field(default=720, ge=64)
-    screenshot_max_height_px: int = Field(default=1600, ge=64)
+    screenshot_width_px: int = Field(default=480, ge=64)
+    screenshot_max_height_px: int = Field(default=400, ge=64)
 
 
 class ReportConfig(BaseModel):

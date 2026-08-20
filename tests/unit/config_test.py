@@ -215,8 +215,8 @@ def test_unknown_network_raises(files):
 def test_appendix_settings_have_working_defaults():
     settings = cl.Settings()
     assert settings.report.appendix.top_requests == 15
-    assert settings.report.appendix.screenshot_width_px == 720
-    assert settings.report.appendix.screenshot_max_height_px == 1600
+    assert settings.report.appendix.screenshot_width_px == 480
+    assert settings.report.appendix.screenshot_max_height_px == 400
 
 
 def test_a_zero_top_requests_is_rejected_at_load_time():
@@ -335,3 +335,11 @@ def test_budget_rejects_negative_limits():
 def test_budget_zero_is_allowed_and_means_no_budget():
     """Zero is a configuration, not a mistake: spend nothing on this service."""
     assert cl.ServiceBudget(daily_requests=0).daily_requests == 0
+
+
+def test_appendix_captures_are_sized_to_share_a_page():
+    """Six full-page captures turned a three-page campaign into 40 PDF pages."""
+    appendix = cl.load_settings().report.appendix
+
+    assert appendix.screenshot_width_px == 480
+    assert appendix.screenshot_max_height_px == 400

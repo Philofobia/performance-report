@@ -63,11 +63,14 @@ report:
     # listing without ever misrepresenting the capture.
     top_requests: 15
     # Screenshots are downscaled before embedding; a full-page mobile capture
-    # is otherwise several MB of base64 per entry.
-    screenshot_width_px: 720
+    # is otherwise several MB of base64 per entry. They are sized to share a
+    # page with their request table rather than own one — six full-page
+    # captures made a three-page campaign a forty-page PDF. The
+    # full-resolution PNG stays under data/raw and is linked beneath each.
+    screenshot_width_px: 480
     # Beyond this height the image is cropped from the top, and the caption
     # says so.
-    screenshot_max_height_px: 1600
+    screenshot_max_height_px: 400
 
 trends:
   # Campaign-over-campaign comparison. A change smaller than this reads as
