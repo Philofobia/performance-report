@@ -449,3 +449,77 @@ def test_a_spent_embedding_budget_does_not_lose_the_report(input_dir, vector_sto
     assert report.meta.degradation_reason == "budget_exhausted"
     assert llm.page_calls == 0
     assert report.pages[0].recommendations
+
+
+def test_budget_status_prints_the_ledger_without_calling_anything(tmp_path, capsys):
+    """--budget-status must be answerable with no key and no network."""
+    from analysis.__main__ import main
+
+    assert main(["--budget-status", "--from-store", str(tmp_path / "x.sqlite")]) == 0
+    out = capsys.readouterr().out
+    assert "budget:" in out and "llm" in out and "embeddings" in out
+
+
+def test_budget_status_says_so_when_budgeting_is_off(capsys):
+    from analysis.__main__ import main
+
+    assert main(["--budget-status", "--no-budget"]) == 0
+    assert "budget: disabled" in capsys.readouterr().out
+
+
+def test_cli_overrides_reach_the_budget():
+    from analysis.__main__ import _budget_from_args, _build_parser
+    from config.load import load_settings
+
+    args = _build_parser().parse_args([
+        "--daily-requests", "7", "--daily-input-tokens", "8",
+        "--daily-output-tokens", "9", "--max-output-tokens", "10",
+    ])
+    limits = _budget_from_args(args, load_settings()).limits_for("llm")
+
+    assert (limits.daily_requests, limits.daily_input_tokens,
+            limits.daily_output_tokens, limits.max_output_tokens_per_call) == (7, 8, 9, 10)
+
+
+def test_cli_overrides_do_not_mutate_the_loaded_settings():
+    from analysis.__main__ import _budget_from_args, _build_parser
+    from config.load import load_settings
+
+    settings = load_settings()
+    args = _build_parser().parse_args(["--daily-requests", "1"])
+    _budget_from_args(args, settings)
+
+    assert settings.budget.llm.daily_requests == 60
+
+
+def test_no_budget_builds_no_budget():
+    from analysis.__main__ import _budget_from_args, _build_parser
+    from config.load import load_settings
+
+    args = _build_parser().parse_args(["--no-budget"])
+
+    assert _budget_from_args(args, load_settings()) is None
+
+
+def test_budget_status_does_not_create_a_run_store(tmp_path):
+    """Reading the ledger must not leave a database behind that never existed."""
+    from analysis.__main__ import _budget_from_args, _build_parser
+    from config.load import load_settings
+
+    settings = load_settings().model_copy(deep=True)
+    settings.storage.sqlite_path = str(tmp_path / "runs.sqlite")
+    args = _build_parser().parse_args(["--budget-status"])
+
+    assert _budget_from_args(args, settings) is not None
+    assert not (tmp_path / "runs.sqlite").exists()
+
+
+def test_a_budgeted_run_does_open_the_ledger(tmp_path):
+    from analysis.__main__ import _budget_from_args, _build_parser
+    from config.load import load_settings
+
+    settings = load_settings().model_copy(deep=True)
+    settings.storage.sqlite_path = str(tmp_path / "runs.sqlite")
+    _budget_from_args(_build_parser().parse_args([]), settings)
+
+    assert (tmp_path / "runs.sqlite").exists()

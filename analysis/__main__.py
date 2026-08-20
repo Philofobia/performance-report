@@ -285,7 +285,7 @@ def persist_findings(
     return len(documents)
 
 
-def _build_live_clients(settings) -> tuple:
+def _build_live_clients(settings, budget=None) -> tuple:
     """Build the real store and clients, or fall back to the rule-based path.
 
     A missing key is not an error here: it means this campaign is analysed by
@@ -305,9 +305,51 @@ def _build_live_clients(settings) -> tuple:
 
     conn = sql.connect(settings.storage.sqlite_path)
     store = SqliteVectorStore(conn)
-    embed_client = GoogleEmbeddingClient(model=settings.models.embeddings)
-    llm_client = GoogleAnalysisClient(model=settings.models.llm)
+    embed_client = GoogleEmbeddingClient(
+        model=settings.models.embeddings, budget=budget)
+    llm_client = GoogleAnalysisClient(model=settings.models.llm, budget=budget)
     return store, embed_client, llm_client
+
+
+def _budget_from_args(args, settings) -> Optional[Any]:
+    """Build this run's budget from settings plus command-line overrides.
+
+    Overrides are applied to a copy: a flag that changes one run must not
+    change the settings object every later stage reads.
+    """
+    from rag.budget import build_budget
+
+    if getattr(args, "no_budget", False):
+        return None
+
+    supplied = {
+        key: value
+        for key, value in (
+            ("daily_requests", args.daily_requests),
+            ("daily_input_tokens", args.daily_input_tokens),
+            ("daily_output_tokens", args.daily_output_tokens),
+            ("max_output_tokens_per_call", args.max_output_tokens),
+        )
+        if value is not None
+    }
+    if supplied:
+        settings = settings.model_copy(deep=True)
+        settings.budget.llm = settings.budget.llm.model_copy(update=supplied)
+
+    # A run that will not spend anything has no business creating the store:
+    # `sql.connect` creates what it opens, and `--budget-status` on a fresh
+    # checkout would otherwise leave an empty database behind.
+    spends = not (getattr(args, "budget_status", False) or getattr(args, "no_llm", False))
+    conn = None
+    if spends or Path(settings.storage.sqlite_path).is_file():
+        try:
+            from store import sql
+
+            conn = sql.connect(settings.storage.sqlite_path)
+        except Exception as exc:  # bookkeeping must never cost a report
+            print(f"Token ledger unavailable, counting in memory only: {exc}",
+                  file=sys.stderr)
+    return build_budget(settings, conn=conn)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -329,6 +371,19 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Ground analysis in findings from previous campaigns.")
     p.add_argument("--top-k", type=int, default=None,
                    help="Playbook chunks to retrieve per page.")
+    p.add_argument("--no-budget", action="store_true",
+                   help="Spend freely: make no daily token or request checks.")
+    p.add_argument("--budget-status", action="store_true",
+                   help="Print today's spend against the budget and exit, "
+                        "making no API calls.")
+    p.add_argument("--daily-requests", type=int, default=None,
+                   help="Override budget.llm.daily_requests for this run.")
+    p.add_argument("--daily-input-tokens", type=int, default=None,
+                   help="Override budget.llm.daily_input_tokens for this run.")
+    p.add_argument("--daily-output-tokens", type=int, default=None,
+                   help="Override budget.llm.daily_output_tokens for this run.")
+    p.add_argument("--max-output-tokens", type=int, default=None,
+                   help="Override budget.llm.max_output_tokens_per_call.")
     return p
 
 
@@ -351,6 +406,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     settings = load_settings()
+    budget = _budget_from_args(args, settings)
+
+    if args.budget_status:
+        # Answerable from the ledger alone: no key, no network, no run needed.
+        print("budget: disabled" if budget is None else budget.summary_line())
+        return 0
+
     output_dir = Path(args.output_dir or settings.report.output_dir)
     pages = args.pages.split(",") if args.pages else None
 
@@ -372,7 +434,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     store = embed_client = llm_client = None
     if not args.no_llm:
-        store, embed_client, llm_client = _build_live_clients(settings)
+        store, embed_client, llm_client = _build_live_clients(settings, budget)
 
     collected: List[PageAnalysis] = []
     report = run_analysis(
@@ -405,6 +467,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"{len(report.pages)} page(s), verdict={report.cover.verdict}, "
         f"mode={report.meta.analysis_mode}"
     )
+    if budget is not None and llm_client is not None:
+        print(budget.summary_line(), file=sys.stderr)
     return 0
 
 
