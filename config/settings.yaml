@@ -73,3 +73,26 @@ trends:
   dead_band_pct: 5.0
   # How many campaigns a trend series shows, newest last. Minimum 2.
   window: 5
+
+budget:
+  # Free-tier spend control. Google no longer publishes free-tier rate limits
+  # in the API docs — https://ai.google.dev/gemini-api/docs/rate-limits says
+  # only that they are counted as requests/minute, input tokens/minute and
+  # requests/day, and points at https://aistudio.google.com/rate-limit for the
+  # live values on your own key. These numbers are therefore conservative
+  # estimates, sized at roughly four times one six-page report, so the day's
+  # first report always fits and a runaway loop cannot eat tomorrow's
+  # allowance. Raise them once you have read your own limits in AI Studio.
+  enabled: true
+  llm:
+    daily_requests: 60
+    daily_input_tokens: 250000
+    daily_output_tokens: 60000
+    # Sent to the API as max_output_tokens, and used as the worst-case output
+    # cost when deciding whether a call can be afforded at all.
+    max_output_tokens_per_call: 2048
+  embeddings:
+    daily_requests: 100
+    daily_input_tokens: 100000
+    # Embeddings generate no tokens.
+    daily_output_tokens: 0
