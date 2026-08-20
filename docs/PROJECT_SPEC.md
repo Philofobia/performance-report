@@ -549,6 +549,31 @@ subsystems, and one of them (prior-run memory) had already shipped in Phase 4.
       The `live-campaign-report` job runs the real sequence and diffs the
       rendered document against `report/skeleton.baseline.json`. Design:
       `docs/superpowers/specs/2026-08-18-phase-7d-ci-report-regeneration-design.md`.
+- [x] **7e — Free-tier token budget.** `rag/budget.py` — a `token_ledger` table in
+      the run store, keyed by UTC day and service, and a policy that reserves a
+      call's worst case before it is made and records its actual usage after.
+      Google no longer publishes free-tier limits, so the shipped numbers are
+      conservative estimates and every one is overridable from
+      `config/settings.yaml` or the `analyze` flags (`--no-budget`,
+      `--budget-status`, `--daily-input-tokens`, `--daily-output-tokens`,
+      `--daily-requests`, `--max-output-tokens`). An exhausted budget degrades a
+      page to rules with `degradation_reason="budget_exhausted"`; it never fails a
+      run. Settings:
+
+      ```yaml
+      budget:
+        enabled: true
+        llm:
+          daily_requests: 60
+          daily_input_tokens: 250000
+          daily_output_tokens: 60000
+          max_output_tokens_per_call: 2048
+        embeddings:
+          daily_requests: 100
+          daily_input_tokens: 100000
+      ```
+
+      Design: `docs/superpowers/specs/2026-08-20-token-budget-design.md`.
 
 ## 11. Risks & open questions
 
