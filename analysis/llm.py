@@ -26,6 +26,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from rag.embeddings import (
+    EmbeddingError,
     QuotaExceededError,
     call_with_quota_backoff,
     resolve_api_key,
@@ -162,6 +163,50 @@ def extract_json(text: str) -> str:
     raise InvalidModelOutputError("Model response had an unterminated JSON object.")
 
 
+def _is_api_error(exc: BaseException) -> bool:
+    """Whether an exception is Google rejecting the request, not us mis-making it.
+
+    Matched by HTTP status the way ``_is_quota_error`` matches 429: an SDK
+    error carries ``status_code``/``code`` in the 4xx-5xx range, and a
+    ``ValueError`` from a mis-built request carries neither. The distinction
+    matters because the first is worth degrading over and the second is a bug
+    that must stay loud.
+    """
+    for attr in ("status_code", "code", "status"):
+        value = getattr(exc, attr, None)
+        try:
+            status = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 400 <= status <= 599:
+            return True
+    return False
+
+
+def usage_from_metadata(meta: Any) -> Optional["Usage"]:
+    """Read one call's token cost from the SDK's ``usage_metadata``.
+
+    ``thoughts_token_count`` is added to the reply's tokens rather than
+    ignored: Gemini 3.x models spend thinking tokens out of the *same*
+    ``max_output_tokens`` budget, so a ledger that counts only the visible
+    reply under-reports what the call cost — badly, since a short answer can
+    sit behind hundreds of thinking tokens.
+
+    ``None`` means "unknown", and is passed through as ``None`` so the caller
+    falls back to its estimate. Returning ``Usage(0, 0)`` would silently record
+    a free call.
+    """
+    if meta is None:
+        return None
+    from rag.budget import Usage
+
+    return Usage(
+        int(getattr(meta, "prompt_token_count", 0) or 0),
+        int(getattr(meta, "candidates_token_count", 0) or 0)
+        + int(getattr(meta, "thoughts_token_count", 0) or 0),
+    )
+
+
 class GoogleAnalysisClient:
     """Google generation with retry/backoff and a validated JSON contract.
 
@@ -208,7 +253,6 @@ class GoogleAnalysisClient:
         client = genai.Client(api_key=key)
 
         def transport(messages, model, *, max_output_tokens=None):
-            from rag.budget import Usage
 
             system = "\n".join(m["content"] for m in messages if m["role"] == "system")
             contents = [m["content"] for m in messages if m["role"] != "system"]
@@ -222,14 +266,9 @@ class GoogleAnalysisClient:
             response = client.models.generate_content(
                 model=model, contents=contents, config=config,
             )
-            meta = getattr(response, "usage_metadata", None)
             text = response.text or ""
-            if meta is None:
-                return text
-            return text, Usage(
-                int(getattr(meta, "prompt_token_count", 0) or 0),
-                int(getattr(meta, "candidates_token_count", 0) or 0),
-            )
+            usage = usage_from_metadata(getattr(response, "usage_metadata", None))
+            return (text, usage) if usage is not None else text
 
         return transport
 
@@ -315,17 +354,32 @@ class GoogleAnalysisClient:
                 )
             return result
 
-        result = call_with_quota_backoff(
-            invoke,
-            max_retries=self._max_retries,
-            sleep=self._sleep,
-            jitter=self._jitter,
-            exhausted_message=(
-                f"Google AI quota exhausted after {self._max_retries} retries. "
-                "The free tier limits requests per minute; wait for the window "
-                "to reset or re-run with --no-llm."
-            ),
-        )
+        try:
+            result = call_with_quota_backoff(
+                invoke,
+                max_retries=self._max_retries,
+                sleep=self._sleep,
+                jitter=self._jitter,
+                exhausted_message=(
+                    f"Google AI quota exhausted after {self._max_retries} retries. "
+                    "The free tier limits requests per minute; wait for the window "
+                    "to reset or re-run with --no-llm."
+                ),
+            )
+        except (AnalysisError, EmbeddingError):
+            # Quota and budget refusals already mean something specific.
+            raise
+        except Exception as exc:
+            if not _is_api_error(exc):
+                # A ValueError from a mis-built request is a bug in this code,
+                # and swallowing it would hide the bug behind a degraded
+                # report. Only the API's own rejections are recoverable.
+                raise
+            raise LlmUnavailableError(
+                f"Google generation is unavailable ({type(exc).__name__}: {exc}). "
+                "If the model was retired, update models.llm in "
+                "config/settings.yaml."
+            ) from exc
         return result[0] if isinstance(result, tuple) else result
 
     # -- validated generation ---------------------------------------------- #

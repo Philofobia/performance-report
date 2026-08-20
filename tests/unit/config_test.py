@@ -315,7 +315,7 @@ def test_budget_defaults_fit_one_report():
     assert budget.llm.daily_requests == 60
     assert budget.llm.daily_input_tokens == 250000
     assert budget.llm.daily_output_tokens == 60000
-    assert budget.llm.max_output_tokens_per_call == 2048
+    assert budget.llm.max_output_tokens_per_call == 8192
     assert budget.embeddings.daily_requests == 100
     assert budget.embeddings.daily_input_tokens == 100000
 

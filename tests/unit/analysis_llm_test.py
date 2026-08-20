@@ -304,8 +304,7 @@ def test_the_output_cap_reaches_the_transport():
 
     client.analyze_page(a_prompt())
 
-    assert transport.calls[0]["max_output_tokens"] == _llm_defaults(
-    ).max_output_tokens_per_call
+    assert transport.calls[0]["max_output_tokens"] == 8192
 
 
 def test_an_explicit_cap_beats_the_configured_one():
@@ -334,3 +333,60 @@ def test_a_transport_that_takes_no_cap_is_called_without_one():
 
 def test_generation_without_a_budget_is_unmetered():
     assert make_client([json.dumps(VALID_PAGE)]).analyze_page(a_prompt()).summary
+
+
+class FakeUsageMetadata:
+    """What the SDK hands back: reply tokens and thinking tokens, separately."""
+
+    def __init__(self, prompt, candidates, thoughts=None):
+        self.prompt_token_count = prompt
+        self.candidates_token_count = candidates
+        self.thoughts_token_count = thoughts
+
+
+def test_thinking_tokens_are_charged_as_output():
+    """Gemini 3.x spends thinking tokens from the same max_output_tokens
+    budget, and reports them in a separate field. Counting only the reply
+    under-reports what the call actually cost."""
+    from analysis.llm import usage_from_metadata
+
+    usage = usage_from_metadata(FakeUsageMetadata(1200, 17, 263))
+
+    assert (usage.input_tokens, usage.output_tokens) == (1200, 280)
+
+
+def test_usage_survives_a_model_that_does_not_think():
+    from analysis.llm import usage_from_metadata
+
+    usage = usage_from_metadata(FakeUsageMetadata(1200, 17))
+
+    assert (usage.input_tokens, usage.output_tokens) == (1200, 17)
+
+
+def test_absent_usage_metadata_is_not_a_zero_reading():
+    """None means "unknown", which must fall back to the estimate, not to 0."""
+    from analysis.llm import usage_from_metadata
+
+    assert usage_from_metadata(None) is None
+
+
+def test_a_dead_model_is_reported_as_unavailable_not_as_bad_json():
+    """A retired model 404s. That must not escape as an SDK traceback."""
+    from analysis.llm import LlmUnavailableError
+
+    class Gone(Exception):
+        status_code = 404
+
+    client = make_client([], error=Gone("404 NOT_FOUND"), fail_times=1)
+
+    with pytest.raises(LlmUnavailableError, match="404"):
+        client.analyze_page(a_prompt())
+
+
+def test_budget_refusals_are_not_disguised_as_unavailability():
+    from rag.budget import BudgetExhaustedError
+
+    client = make_client([json.dumps(VALID_PAGE)], budget=_budget(daily_requests=0))
+
+    with pytest.raises(BudgetExhaustedError):
+        client.analyze_page(a_prompt())

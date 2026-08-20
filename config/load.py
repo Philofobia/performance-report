@@ -226,7 +226,7 @@ class ServiceBudget(BaseModel):
     daily_requests: int = Field(default=60, ge=0)
     daily_input_tokens: int = Field(default=250_000, ge=0)
     daily_output_tokens: int = Field(default=60_000, ge=0)
-    max_output_tokens_per_call: int = Field(default=2048, ge=1)
+    max_output_tokens_per_call: int = Field(default=8192, ge=1)
 
 
 class BudgetConfig(BaseModel):

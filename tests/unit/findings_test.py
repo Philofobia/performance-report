@@ -347,3 +347,17 @@ def test_budget_exhaustion_falls_back_with_its_own_reason():
     assert result.mode == "rule_based"
     assert result.degradation_reason == "budget_exhausted"
     assert result.recommendations
+
+
+def test_an_unavailable_model_degrades_with_its_own_reason():
+    """"The model is gone" is not "the model answered badly"."""
+    from analysis.llm import LlmUnavailableError
+
+    run, symptoms, chunks = _setup()
+    result = analyze_page(
+        [run], hits=[a_hit()], symptoms=symptoms,
+        client=FakeClient(error=LlmUnavailableError("404 NOT_FOUND")), chunks=chunks
+    )
+    assert result.mode == "rule_based"
+    assert result.degradation_reason == "model_unavailable"
+    assert result.recommendations

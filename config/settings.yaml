@@ -41,7 +41,10 @@ models:
   # replacement. Changing this invalidates the embedding cache (it is keyed by
   # content, not by model), so re-index after switching.
   embeddings: gemini-embedding-001
-  llm: gemini-2.0-flash
+  # gemini-2.0-flash was retired the same way: generateContent now answers it
+  # with 404 NOT_FOUND, naming gemini-3.6-flash as the replacement. Verified
+  # against models.list() on 2026-08-20.
+  llm: gemini-3.6-flash
   embed_dimensions: 768
 
 rag:
@@ -89,8 +92,13 @@ budget:
     daily_input_tokens: 250000
     daily_output_tokens: 60000
     # Sent to the API as max_output_tokens, and used as the worst-case output
-    # cost when deciding whether a call can be afforded at all.
-    max_output_tokens_per_call: 2048
+    # cost when deciding whether a call can be afforded at all. It must leave
+    # room for *thinking*: Gemini 3.x spends reasoning tokens from this same
+    # budget, and a page analysis measured here needed ~1.5k of them before
+    # writing a word. At 2048 every reply truncated mid-JSON and every page
+    # degraded to rules — the cap has to clear thinking plus the answer, not
+    # just the answer.
+    max_output_tokens_per_call: 8192
   embeddings:
     daily_requests: 100
     daily_input_tokens: 100000
