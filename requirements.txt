@@ -3,10 +3,10 @@
 # Packages not yet installed are pinned to current stable releases (verify on install).
 pydantic==2.13.4          # verified in venv
 PyYAML==6.0.3             # verified in venv
-python-dotenv==1.2.2      # verified in venv
-numpy==2.5.1              # exact top-k cosine for RAG retrieval (store/vectordb.py);
+python-dotenv==1.2.3      # verified in venv
+numpy==2.5.2              # exact top-k cosine for RAG retrieval (store/vectordb.py);
                           # replaces chromadb - see PROJECT_SPEC.md 8, decision #6
-google-genai==2.16.0      # sole LLM + embeddings client (litellm dropped: 19 CVEs
+google-genai==2.18.1      # sole LLM + embeddings client (litellm dropped: 19 CVEs
                           # at the pinned version, unused, and spec-optional)
 jinja2==3.1.6             # verified in venv
 matplotlib==3.11.1        # 3.10.4 was never published; broke CI install
@@ -19,7 +19,7 @@ matplotlib==3.11.1        # 3.10.4 was never published; broke CI install
                           # (ingest.manual, ingest.automated, analysis, report)
                           # and nothing ever imported it. Do not re-add without
                           # a caller.
-playwright==1.48.0        # verified in venv (chromium installed)
+playwright==1.62.0        # verified in venv (chromium installed)
 pillow==12.3.0            # verified in venv (arrived with matplotlib); now a
                           # direct dependency — report/images.py downscales
                           # screenshots for the appendix. Pinned explicitly
