@@ -248,6 +248,7 @@ class GoogleEmbeddingClient:
         api_key: Optional[str] = None,
         transport: Optional[Callable[[Sequence[str], str, str], List[List[float]]]] = None,
         cache: Optional[EmbeddingCache] = None,
+        budget: Optional[Any] = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
         max_retries: int = DEFAULT_MAX_RETRIES,
         sleep: Callable[[float], None] = time.sleep,
@@ -257,6 +258,7 @@ class GoogleEmbeddingClient:
         self._explicit_key = api_key
         self._transport = transport
         self._cache = cache
+        self._budget = budget
         self._batch_size = max(1, batch_size)
         self._max_retries = max(0, max_retries)
         self._sleep = sleep
@@ -287,11 +289,25 @@ class GoogleEmbeddingClient:
         return transport
 
     def _call(self, texts: Sequence[str], task_type: str) -> List[List[float]]:
-        """One transport call wrapped in retry/backoff on quota errors."""
+        """One transport call: reserved, retried on quota errors, then recorded.
+
+        The budget is checked *before* the call and written after it, so a
+        refused batch costs nothing. Cached text never reaches here, so it is
+        never charged either.
+        """
         if self._transport is None:
             self._transport = self._build_default_transport()
 
-        return call_with_quota_backoff(
+        # Imported here, not at module scope: rag.budget imports this module.
+        from rag.budget import SERVICE_EMBEDDINGS, estimate_tokens
+
+        tokens = sum(estimate_tokens(text) for text in texts)
+        if self._budget is not None:
+            self._budget.reserve(
+                SERVICE_EMBEDDINGS, estimated_input=tokens, estimated_output=0
+            )
+
+        vectors = call_with_quota_backoff(
             lambda: self._transport(texts, self.model, task_type),
             max_retries=self._max_retries,
             sleep=self._sleep,
@@ -302,6 +318,15 @@ class GoogleEmbeddingClient:
                 "to reset or reduce the corpus size."
             ),
         )
+
+        if self._budget is not None:
+            # The embed endpoint reports no usage metadata, so the estimate is
+            # the only count available — said plainly so nobody later mistakes
+            # this figure for a measured one.
+            self._budget.record(
+                SERVICE_EMBEDDINGS, self.model, input_tokens=tokens, output_tokens=0
+            )
+        return vectors
 
     # -- public API -------------------------------------------------------- #
     def embed(
