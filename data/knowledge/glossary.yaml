@@ -1,0 +1,92 @@
+# Plain-language layer for the report (design spec 2026-08-20).
+#
+# These sentences are committed, not model-written, so the same metric reads
+# identically in every campaign — the comparability the fixed skeleton exists
+# for. `target_key` names a field on config.load.Thresholds so targets stay
+# configured in exactly one place; null means no threshold is configured and
+# the context column stays empty rather than inventing one.
+lcp_ms:
+  label: Largest contentful paint
+  unit: ms
+  round: integer
+  target_key: lcp_good_ms
+  plain: >-
+    How long until the main thing on the page — usually the big image or
+    headline — has finished drawing.
+cls:
+  label: Layout shift
+  unit: ""
+  round: two_decimals
+  target_key: cls_good
+  plain: >-
+    How much the page jumps around while it loads. Content moving under a
+    finger is how people tap the wrong thing.
+inp_ms:
+  label: Interaction response
+  unit: ms
+  round: integer
+  target_key: inp_good_ms
+  plain: >-
+    How long the page takes to visibly react after someone taps or clicks.
+fcp_ms:
+  label: First paint
+  unit: ms
+  round: integer
+  target_key: fcp_good_ms
+  plain: >-
+    How long the visitor stares at a blank screen before anything at all
+    appears.
+ttfb_ms:
+  label: Server response
+  unit: ms
+  round: integer
+  target_key: ttfb_good_ms
+  plain: >-
+    How long the server takes to send the first byte of the page. Everything
+    else waits on this.
+tbt_ms:
+  label: Total blocking time
+  unit: ms
+  round: integer
+  target_key: null
+  plain: >-
+    How long the page ignores taps and clicks after it first appears. The page
+    looks ready and does nothing.
+total_transfer_kb:
+  label: Page weight
+  unit: kB
+  round: integer
+  target_key: null
+  plain: >-
+    How much has to be downloaded to show the page. On a phone connection this
+    is time.
+request_count:
+  label: Requests
+  unit: ""
+  round: integer
+  target_key: null
+  plain: >-
+    How many separate files the page asks for. Each one costs a round trip.
+render_blocking_css:
+  label: Render-blocking stylesheets
+  unit: ""
+  round: integer
+  target_key: null
+  plain: >-
+    Stylesheets the browser must finish downloading before it will show
+    anything at all.
+script_ms:
+  label: Script execution
+  unit: ms
+  round: integer
+  target_key: null
+  plain: >-
+    How long the browser spends running JavaScript instead of drawing the page.
+dom_nodes:
+  label: Page elements
+  unit: ""
+  round: integer
+  target_key: null
+  plain: >-
+    How many elements the page builds. A very large number makes every style
+    change expensive.
