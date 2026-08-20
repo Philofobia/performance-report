@@ -164,6 +164,9 @@ class ConditionRow(BaseModel):
 class FindingModel(BaseModel):
     title: str
     detail: str = ""
+    #: What a visitor to this page actually experiences. Plain language, no
+    #: numbers: the reader of this line is not a performance engineer.
+    consequence: str = ""
     evidence: List[str] = Field(default_factory=list)
     symptom_codes: List[str] = Field(default_factory=list)
 
@@ -176,11 +179,31 @@ class ImpactModel(BaseModel):
 class RecommendationModel(BaseModel):
     title: str
     rationale: str = ""
+    #: Why this is worth doing, for someone deciding whether to fund it.
+    why_it_matters: str = ""
     playbook_source: str
     playbook_section: str = ""
     effort: str
     magnitude: str
     projections: List[ProjectionModel] = Field(default_factory=list)
+
+
+class PlannedAction(BaseModel):
+    """One entry in the campaign-wide plan, ordered by expected payoff.
+
+    A flattened, display-ready view of a recommendation, because the reader's
+    first question is "what do I do first", not "what did page three say".
+    """
+
+    rank: int
+    page: str
+    title: str
+    why_it_matters: str = ""
+    effort: str = ""
+    metric: Optional[str] = None
+    #: Pre-formatted ("2041 ms -> 1633 ms"); empty when nothing was projected.
+    projected: str = ""
+    playbook_source: str = ""
 
 
 class PageBlock(BaseModel):
@@ -293,6 +316,9 @@ class Report(BaseModel):
     schema_version: int = SCHEMA_VERSION
     cover: Cover
     summary: Summary
+    #: Every page's recommendations in one ranked order. Defaulted so a
+    #: report.json written before this existed still validates.
+    action_plan: List[PlannedAction] = Field(default_factory=list)
     pages: List[PageBlock]
     comparison: List[ComparisonRow]
     methodology: Methodology
