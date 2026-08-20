@@ -17,6 +17,7 @@ mostly buys latency. After that the caller degrades to the rule-based path.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import random
 import time
@@ -25,6 +26,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from rag.embeddings import (
+    EmbeddingError,
     QuotaExceededError,
     call_with_quota_backoff,
     resolve_api_key,
@@ -161,6 +163,50 @@ def extract_json(text: str) -> str:
     raise InvalidModelOutputError("Model response had an unterminated JSON object.")
 
 
+def _is_api_error(exc: BaseException) -> bool:
+    """Whether an exception is Google rejecting the request, not us mis-making it.
+
+    Matched by HTTP status the way ``_is_quota_error`` matches 429: an SDK
+    error carries ``status_code``/``code`` in the 4xx-5xx range, and a
+    ``ValueError`` from a mis-built request carries neither. The distinction
+    matters because the first is worth degrading over and the second is a bug
+    that must stay loud.
+    """
+    for attr in ("status_code", "code", "status"):
+        value = getattr(exc, attr, None)
+        try:
+            status = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 400 <= status <= 599:
+            return True
+    return False
+
+
+def usage_from_metadata(meta: Any) -> Optional["Usage"]:
+    """Read one call's token cost from the SDK's ``usage_metadata``.
+
+    ``thoughts_token_count`` is added to the reply's tokens rather than
+    ignored: Gemini 3.x models spend thinking tokens out of the *same*
+    ``max_output_tokens`` budget, so a ledger that counts only the visible
+    reply under-reports what the call cost — badly, since a short answer can
+    sit behind hundreds of thinking tokens.
+
+    ``None`` means "unknown", and is passed through as ``None`` so the caller
+    falls back to its estimate. Returning ``Usage(0, 0)`` would silently record
+    a free call.
+    """
+    if meta is None:
+        return None
+    from rag.budget import Usage
+
+    return Usage(
+        int(getattr(meta, "prompt_token_count", 0) or 0),
+        int(getattr(meta, "candidates_token_count", 0) or 0)
+        + int(getattr(meta, "thoughts_token_count", 0) or 0),
+    )
+
+
 class GoogleAnalysisClient:
     """Google generation with retry/backoff and a validated JSON contract.
 
@@ -174,7 +220,9 @@ class GoogleAnalysisClient:
         *,
         model: str = "gemini-2.0-flash",
         api_key: Optional[str] = None,
-        transport: Optional[Callable[[List[Dict[str, str]], str], str]] = None,
+        transport: Optional[Callable[..., Any]] = None,
+        budget: Optional[Any] = None,
+        max_output_tokens: Optional[int] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
         sleep: Callable[[float], None] = time.sleep,
         jitter: Callable[[], float] = random.random,
@@ -182,6 +230,10 @@ class GoogleAnalysisClient:
         self.model = model
         self._explicit_key = api_key
         self._transport = transport
+        self._budget = budget
+        self._max_output_tokens = max_output_tokens
+        #: Resolved once, on first use: whether the transport takes a cap.
+        self._takes_cap: Optional[bool] = None
         self._max_retries = max(0, max_retries)
         self._sleep = sleep
         self._jitter = jitter
@@ -200,38 +252,135 @@ class GoogleAnalysisClient:
 
         client = genai.Client(api_key=key)
 
-        def transport(messages, model):
+        def transport(messages, model, *, max_output_tokens=None):
+
             system = "\n".join(m["content"] for m in messages if m["role"] == "system")
             contents = [m["content"] for m in messages if m["role"] != "system"]
+            config: Dict[str, Any] = {
+                "system_instruction": system,
+                "temperature": 0,
+                "response_mime_type": "application/json",
+            }
+            if max_output_tokens:
+                config["max_output_tokens"] = max_output_tokens
             response = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config={
-                    "system_instruction": system,
-                    "temperature": 0,
-                    "response_mime_type": "application/json",
-                },
+                model=model, contents=contents, config=config,
             )
-            return response.text or ""
+            text = response.text or ""
+            usage = usage_from_metadata(getattr(response, "usage_metadata", None))
+            return (text, usage) if usage is not None else text
 
         return transport
 
+    def _output_cap(self) -> Optional[int]:
+        """The per-call output ceiling: explicit, else the budget's, else none."""
+        if self._max_output_tokens is not None:
+            return self._max_output_tokens
+        if self._budget is not None:
+            from rag.budget import SERVICE_LLM
+
+            return self._budget.limits_for(SERVICE_LLM).max_output_tokens_per_call
+        return None
+
+    def _transport_takes_cap(self) -> bool:
+        """Whether this transport accepts ``max_output_tokens``.
+
+        Asked once, by signature rather than by calling and catching TypeError:
+        a TypeError raised *inside* a transport would otherwise read as "it does
+        not take the argument", and the call would be made a second time —
+        double-charging the budget this exists to protect.
+        """
+        if self._takes_cap is None:
+            try:
+                parameters = inspect.signature(self._transport).parameters
+            except (TypeError, ValueError):  # builtins and C callables
+                self._takes_cap = False
+            else:
+                self._takes_cap = "max_output_tokens" in parameters or any(
+                    param.kind is inspect.Parameter.VAR_KEYWORD
+                    for param in parameters.values()
+                )
+        return self._takes_cap
+
     def _call(self, messages: List[Dict[str, str]]) -> str:
-        """One generation call, retried on quota errors only."""
+        """One generation call: reserved, retried on quota only, then recorded.
+
+        Metering here rather than in :meth:`analyze_page` is deliberate. This is
+        the one place every request passes through — including the corrective
+        JSON retry and each quota retry, all of which are real calls the free
+        tier charges for.
+        """
         if self._transport is None:
             self._transport = self._build_default_transport()
 
-        return call_with_quota_backoff(
-            lambda: self._transport(messages, self.model),
-            max_retries=self._max_retries,
-            sleep=self._sleep,
-            jitter=self._jitter,
-            exhausted_message=(
-                f"Google AI quota exhausted after {self._max_retries} retries. "
-                "The free tier limits requests per minute; wait for the window "
-                "to reset or re-run with --no-llm."
-            ),
-        )
+        from rag.budget import SERVICE_LLM, Usage, estimate_tokens
+
+        estimated_input = sum(estimate_tokens(m["content"]) for m in messages)
+        cap = self._output_cap()
+        if self._budget is not None:
+            self._budget.reserve(
+                SERVICE_LLM,
+                estimated_input=estimated_input,
+                # Worst case: a reply that runs all the way to the ceiling.
+                # Never start a call that could not be afforded at full length.
+                estimated_output=cap or 0,
+            )
+
+        def invoke():
+            try:
+                result = (
+                    self._transport(messages, self.model, max_output_tokens=cap)
+                    if cap is not None and self._transport_takes_cap()
+                    else self._transport(messages, self.model)
+                )
+            except Exception:
+                # A rejected request is still a request: it counts against the
+                # daily request limit even though it returned no tokens. Not
+                # counting it is how a retry storm quietly outspends its budget.
+                if self._budget is not None:
+                    self._budget.record(
+                        SERVICE_LLM, self.model, input_tokens=0, output_tokens=0
+                    )
+                raise
+            if self._budget is not None:
+                text, usage = result if isinstance(result, tuple) else (result, None)
+                if usage is None:
+                    # No usage metadata: the estimate is the only count there is.
+                    usage = Usage(estimated_input, estimate_tokens(text))
+                self._budget.record(
+                    SERVICE_LLM, self.model,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                )
+            return result
+
+        try:
+            result = call_with_quota_backoff(
+                invoke,
+                max_retries=self._max_retries,
+                sleep=self._sleep,
+                jitter=self._jitter,
+                exhausted_message=(
+                    f"Google AI quota exhausted after {self._max_retries} retries. "
+                    "The free tier limits requests per minute; wait for the window "
+                    "to reset or re-run with --no-llm."
+                ),
+            )
+        except (AnalysisError, EmbeddingError):
+            # Quota and budget refusals already mean something specific.
+            raise
+        except Exception as exc:
+            if not _is_api_error(exc):
+                # A ValueError from a mis-built request is a bug in this code,
+                # and swallowing it would hide the bug behind a degraded
+                # report. Only the API's own rejections are recoverable.
+                raise
+            raise LlmUnavailableError(
+                f"Google generation is unavailable ({type(exc).__name__}: {exc}). "
+                "If the model was retired, update models.llm in "
+                "config/settings.yaml."
+            ) from exc
+        return result[0] if isinstance(result, tuple) else result
 
     # -- validated generation ---------------------------------------------- #
     def _generate_validated(self, messages: List[Dict[str, str]], model_cls):

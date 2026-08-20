@@ -25,6 +25,8 @@ from analysis.reportmodel import Report, build_report, to_json
 from config.load import load_settings
 from normalize.schema import Run
 from rag import knowledge, retrieve
+from rag.budget import BudgetExhaustedError
+from rag.embeddings import EmbeddingError
 from store.vectordb import Document
 
 MAX_TOP_ACTIONS = 3
@@ -190,6 +192,20 @@ def run_analysis(
     chunks = knowledge.load_knowledge_dir(knowledge_dir)
     digest = knowledge.content_digest(chunks)
 
+    if store is not None and embed_client is not None:
+        # Nothing else ever called `index_knowledge`, so a real store shipped
+        # empty: retrieval found nothing, the model cited a playbook it had
+        # invented, and the citation guard dropped every recommendation. The
+        # pass is cheap to repeat — chunk ids are stable, so edited playbooks
+        # replace their old chunks, and the embedding cache means unchanged
+        # text costs no API calls.
+        try:
+            knowledge.index_knowledge(store, embed_client, chunks=chunks)
+        except EmbeddingError as exc:
+            # Includes BudgetExhaustedError. Retrieval will simply find
+            # nothing and the pages degrade; indexing must not lose a report.
+            print(f"Playbooks were not indexed: {exc}", file=sys.stderr)
+
     analyses: List[PageAnalysis] = []
     for _page_name, page_runs in group_by_page(runs).items():
         primary = select_primary(page_runs)
@@ -197,20 +213,30 @@ def run_analysis(
 
         hits: List[Any] = []
         priors: List[Any] = []
+        page_client = llm_client
+        page_reason = "llm_disabled" if llm_disabled else "no_api_key"
         if store is not None and embed_client is not None:
-            hits, _query = retrieve.retrieve_context(
-                primary, store, embed_client,
-                thresholds=settings.thresholds, top_k=k,
-            )
-            if use_priors:
-                priors = retrieve.retrieve_prior_findings(
-                    primary, store, embed_client, thresholds=settings.thresholds
+            try:
+                hits, _query = retrieve.retrieve_context(
+                    primary, store, embed_client,
+                    thresholds=settings.thresholds, top_k=k,
                 )
+                if use_priors:
+                    priors = retrieve.retrieve_prior_findings(
+                        primary, store, embed_client, thresholds=settings.thresholds
+                    )
+            except BudgetExhaustedError:
+                # Retrieval is what grounds the model, and this system does not
+                # ship ungrounded analysis — so a page that cannot afford its
+                # embeddings is analysed by rules rather than by a model
+                # working from nothing.
+                hits, priors, page_client = [], [], None
+                page_reason = "budget_exhausted"
 
         analyses.append(analyze_page(
-            page_runs, hits=hits, symptoms=symptoms, client=llm_client,
+            page_runs, hits=hits, symptoms=symptoms, client=page_client,
             prior_findings=priors, chunks=chunks,
-            no_client_reason="llm_disabled" if llm_disabled else "no_api_key",
+            no_client_reason=page_reason,
         ))
 
     summary: Any = rule_based_summary(analyses)
@@ -274,13 +300,17 @@ def persist_findings(
     return len(documents)
 
 
-def _build_live_clients(settings) -> tuple:
+def _build_live_clients(settings, budget=None) -> tuple:
     """Build the real store and clients, or fall back to the rule-based path.
 
     A missing key is not an error here: it means this campaign is analysed by
     rules, which is a supported outcome.
     """
-    from rag.embeddings import EmbeddingError, GoogleEmbeddingClient, resolve_api_key
+    from rag.embeddings import (
+        EmbeddingCache,
+        GoogleEmbeddingClient,
+        resolve_api_key,
+    )
     from store import sql
     from store.vectordb import SqliteVectorStore
 
@@ -294,9 +324,54 @@ def _build_live_clients(settings) -> tuple:
 
     conn = sql.connect(settings.storage.sqlite_path)
     store = SqliteVectorStore(conn)
-    embed_client = GoogleEmbeddingClient(model=settings.models.embeddings)
-    llm_client = GoogleAnalysisClient(model=settings.models.llm)
+    # The cache is what makes re-indexing the corpus every run free: it is
+    # keyed by content, so unchanged playbooks cost no API calls at all.
+    embed_client = GoogleEmbeddingClient(
+        model=settings.models.embeddings, budget=budget,
+        cache=EmbeddingCache(conn))
+    llm_client = GoogleAnalysisClient(model=settings.models.llm, budget=budget)
     return store, embed_client, llm_client
+
+
+def _budget_from_args(args, settings) -> Optional[Any]:
+    """Build this run's budget from settings plus command-line overrides.
+
+    Overrides are applied to a copy: a flag that changes one run must not
+    change the settings object every later stage reads.
+    """
+    from rag.budget import build_budget
+
+    if getattr(args, "no_budget", False):
+        return None
+
+    supplied = {
+        key: value
+        for key, value in (
+            ("daily_requests", args.daily_requests),
+            ("daily_input_tokens", args.daily_input_tokens),
+            ("daily_output_tokens", args.daily_output_tokens),
+            ("max_output_tokens_per_call", args.max_output_tokens),
+        )
+        if value is not None
+    }
+    if supplied:
+        settings = settings.model_copy(deep=True)
+        settings.budget.llm = settings.budget.llm.model_copy(update=supplied)
+
+    # A run that will not spend anything has no business creating the store:
+    # `sql.connect` creates what it opens, and `--budget-status` on a fresh
+    # checkout would otherwise leave an empty database behind.
+    spends = not (getattr(args, "budget_status", False) or getattr(args, "no_llm", False))
+    conn = None
+    if spends or Path(settings.storage.sqlite_path).is_file():
+        try:
+            from store import sql
+
+            conn = sql.connect(settings.storage.sqlite_path)
+        except Exception as exc:  # bookkeeping must never cost a report
+            print(f"Token ledger unavailable, counting in memory only: {exc}",
+                  file=sys.stderr)
+    return build_budget(settings, conn=conn)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -318,6 +393,19 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Ground analysis in findings from previous campaigns.")
     p.add_argument("--top-k", type=int, default=None,
                    help="Playbook chunks to retrieve per page.")
+    p.add_argument("--no-budget", action="store_true",
+                   help="Spend freely: make no daily token or request checks.")
+    p.add_argument("--budget-status", action="store_true",
+                   help="Print today's spend against the budget and exit, "
+                        "making no API calls.")
+    p.add_argument("--daily-requests", type=int, default=None,
+                   help="Override budget.llm.daily_requests for this run.")
+    p.add_argument("--daily-input-tokens", type=int, default=None,
+                   help="Override budget.llm.daily_input_tokens for this run.")
+    p.add_argument("--daily-output-tokens", type=int, default=None,
+                   help="Override budget.llm.daily_output_tokens for this run.")
+    p.add_argument("--max-output-tokens", type=int, default=None,
+                   help="Override budget.llm.max_output_tokens_per_call.")
     return p
 
 
@@ -340,6 +428,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     settings = load_settings()
+    budget = _budget_from_args(args, settings)
+
+    if args.budget_status:
+        # Answerable from the ledger alone: no key, no network, no run needed.
+        print("budget: disabled" if budget is None else budget.summary_line())
+        return 0
+
     output_dir = Path(args.output_dir or settings.report.output_dir)
     pages = args.pages.split(",") if args.pages else None
 
@@ -361,7 +456,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     store = embed_client = llm_client = None
     if not args.no_llm:
-        store, embed_client, llm_client = _build_live_clients(settings)
+        store, embed_client, llm_client = _build_live_clients(settings, budget)
 
     collected: List[PageAnalysis] = []
     report = run_analysis(
@@ -394,6 +489,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"{len(report.pages)} page(s), verdict={report.cover.verdict}, "
         f"mode={report.meta.analysis_mode}"
     )
+    if budget is not None and llm_client is not None:
+        print(budget.summary_line(), file=sys.stderr)
     return 0
 
 

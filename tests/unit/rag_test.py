@@ -592,7 +592,7 @@ def test_prior_findings_are_included_as_untrusted_context():
     finding = SearchHit(doc_id="run_1", text="hero video was 2MB", kind="finding",
                         source="run_1", metadata={}, score=0.8)
     built = prompt.build_analysis_prompt(make_run(), [], prior_findings=[finding])
-    assert "prior-finding:run_1" in built.user
+    assert 'kind="prior-finding" source="run_1"' in built.user
 
 
 def test_symptoms_rendered_when_supplied():
@@ -613,3 +613,108 @@ def test_prompt_is_deterministic_for_identical_input():
     hits = [hit("a"), hit("b", doc_id="fonts.md#a", source="fonts.md")]
     first = prompt.build_analysis_prompt(make_run(), hits).user
     assert prompt.build_analysis_prompt(make_run(), hits).user == first
+
+
+# --------------------------------------------------------------------------- #
+# Budget metering (design spec 2026-08-20)
+# --------------------------------------------------------------------------- #
+def _budget(**embeddings):
+    from config.load import BudgetConfig, ServiceBudget
+    from rag.budget import InMemoryLedger, TokenBudget
+
+    config = (
+        BudgetConfig(embeddings=ServiceBudget(**embeddings))
+        if embeddings else BudgetConfig()
+    )
+    return TokenBudget(config, ledger=InMemoryLedger())
+
+
+def test_embedding_batch_spends_one_request():
+    from config.load import BudgetConfig
+    from rag.budget import SERVICE_EMBEDDINGS
+
+    budget = _budget()
+    make_client(budget=budget).embed(["alpha", "beta"])
+
+    left = budget.remaining(SERVICE_EMBEDDINGS)
+    assert left.requests == BudgetConfig().embeddings.daily_requests - 1
+    assert left.input_tokens < BudgetConfig().embeddings.daily_input_tokens
+
+
+def test_cached_text_costs_no_budget():
+    """The cache already avoids the call; it must avoid the charge too."""
+    from rag.budget import SERVICE_EMBEDDINGS
+
+    conn = sql.connect(":memory:")
+    budget = _budget()
+    client = make_client(cache=EmbeddingCache(conn), budget=budget)
+    client.embed(["alpha"])
+    before = budget.remaining(SERVICE_EMBEDDINGS)
+
+    client.embed(["alpha"])
+
+    assert budget.remaining(SERVICE_EMBEDDINGS) == before
+    conn.close()
+
+
+def test_exhausted_embedding_budget_refuses_before_the_call():
+    from rag.budget import BudgetExhaustedError
+
+    transport = FakeTransport()
+    client = make_client(transport=transport, budget=_budget(daily_requests=0))
+
+    with pytest.raises(BudgetExhaustedError):
+        client.embed(["alpha"])
+
+    assert transport.calls == []
+
+
+def test_embedding_without_a_budget_is_unmetered():
+    """The budget is opt-in: no budget, no behaviour change."""
+    assert len(make_client().embed(["alpha"])) == 1
+
+
+def test_rejected_embedding_attempts_are_still_counted():
+    """A retry storm must not be free: each attempt is a request."""
+    from config.load import BudgetConfig
+    from rag.budget import SERVICE_EMBEDDINGS
+
+    budget = _budget()
+    client = make_client(
+        transport=FakeTransport(fail_times=2), budget=budget, max_retries=3)
+    client.embed(["alpha"])
+
+    assert budget.remaining(SERVICE_EMBEDDINGS).requests == (
+        BudgetConfig().embeddings.daily_requests - 3
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Citation contract: what the model is shown must be what the guard accepts
+# --------------------------------------------------------------------------- #
+def test_the_cited_name_is_shown_exactly_as_the_guard_expects():
+    """The model copies the label it sees, and findings.py accepts only
+    `hit.source`. Showing it `playbook:images.md` while requiring `images.md`
+    means every grounded recommendation is dropped."""
+    built = prompt.build_analysis_prompt(make_run(), [hit("compress images")])
+
+    assert 'source="images.md"' in built.user
+    assert "playbook:images.md" not in built.user
+
+
+def test_the_document_kind_is_still_stated():
+    """Dropping the prefix must not cost the model the playbook/finding
+    distinction — it just moves to its own attribute."""
+    built = prompt.build_analysis_prompt(make_run(), [hit("compress images")])
+
+    assert 'kind="playbook"' in built.user
+
+
+def test_prior_findings_are_labelled_by_kind_not_by_prefix():
+    prior = SearchHit(doc_id="run_1", text="hero video was 2MB", kind="finding",
+                      source="storefront/homepage", metadata={}, score=0.8)
+    built = prompt.build_analysis_prompt(make_run(), [hit("compress images")],
+                                         prior_findings=[prior])
+
+    assert 'kind="prior-finding" source="storefront/homepage"' in built.user
+    assert "prior-finding:storefront/homepage" not in built.user

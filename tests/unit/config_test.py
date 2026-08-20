@@ -305,3 +305,33 @@ def test_ci_target_url_passes_the_ssrf_gate():
     cfg = load_config(targets=CONFIG_DIR / "ci-targets.yaml")
     for page in cfg.pages:
         assert validate_url(page.url, resolve=False) == page.url
+
+
+def test_budget_defaults_fit_one_report():
+    """The shipped budget is sized so a day's first report always completes."""
+    budget = cl.load_settings().budget
+
+    assert budget.enabled is True
+    assert budget.llm.daily_requests == 60
+    assert budget.llm.daily_input_tokens == 250000
+    assert budget.llm.daily_output_tokens == 60000
+    assert budget.llm.max_output_tokens_per_call == 8192
+    assert budget.embeddings.daily_requests == 100
+    assert budget.embeddings.daily_input_tokens == 100000
+
+
+def test_budget_defaults_apply_when_the_block_is_absent(tmp_path):
+    path = tmp_path / "settings.yaml"
+    path.write_text("rag:\n  top_k: 2\n", encoding="utf-8")
+
+    assert cl.load_settings(path).budget.llm.daily_requests == 60
+
+
+def test_budget_rejects_negative_limits():
+    with pytest.raises(ValidationError):
+        cl.ServiceBudget(daily_requests=-1)
+
+
+def test_budget_zero_is_allowed_and_means_no_budget():
+    """Zero is a configuration, not a mistake: spend nothing on this service."""
+    assert cl.ServiceBudget(daily_requests=0).daily_requests == 0

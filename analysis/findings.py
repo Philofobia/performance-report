@@ -404,7 +404,12 @@ def analyze_page(
     path, but the report must not claim the first when the second happened.
     """
     from analysis.estimator import aggregate
-    from analysis.llm import AnalysisError, InvalidModelOutputError
+    from analysis.llm import (
+        AnalysisError,
+        InvalidModelOutputError,
+        LlmUnavailableError,
+    )
+    from rag.budget import BudgetExhaustedError
     from rag.embeddings import EmbeddingError, MissingApiKeyError, QuotaExceededError
     from rag.knowledge import load_knowledge_dir
     from rag.prompt import build_analysis_prompt
@@ -432,6 +437,18 @@ def analyze_page(
     except MissingApiKeyError:
         return _rule_based_page(
             ordered_runs, primary, list(symptoms), corpus, "no_api_key"
+        )
+    except BudgetExhaustedError:
+        # Ahead of the EmbeddingError clause on purpose: this subclasses it,
+        # and "we chose not to spend" must not be reported as a bad response.
+        return _rule_based_page(
+            ordered_runs, primary, list(symptoms), corpus, "budget_exhausted"
+        )
+    except LlmUnavailableError:
+        # A retired model or an unusable key is not a bad answer, and saying
+        # "invalid_model_output" would send the reader to the wrong fix.
+        return _rule_based_page(
+            ordered_runs, primary, list(symptoms), corpus, "model_unavailable"
         )
     except (InvalidModelOutputError, AnalysisError, EmbeddingError):
         return _rule_based_page(

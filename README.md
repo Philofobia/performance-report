@@ -24,7 +24,9 @@ entry point and a `--skeleton-check` drift guard enforced against a committed ba
 **campaign-over-campaign trends per page and condition** · **a per-capture appendix
 embedding each screenshot and its heaviest HAR requests** · **a loopback-only web form
 for manual entry** · **a CI job that regenerates a real campaign report and gates its
-skeleton**.
+skeleton** · **a per-UTC-day request and token budget over the Google free tier, which
+degrades the analysis to rules rather than overspending** · **playbook indexing
+wired into the analysis run, so retrieval has a corpus to retrieve from**.
 
 **Missing:** no phase in the [Roadmap](#roadmap) is unbuilt. Two limitations are
 known and accepted rather than fixed, both written up where the code lives:
@@ -136,6 +138,55 @@ timeouts:
 Only `navigation_ms` expiring fails a run. A page with continuous analytics beacons may
 never reach network idle, and aborting there would discard the whole campaign — every
 condition already measured included — over a wait that was only ever an optimisation.
+
+### Token budget
+
+The free tier is rationed, and Google no longer publishes the numbers: the
+[rate-limits page](https://ai.google.dev/gemini-api/docs/rate-limits) says only that
+limits are counted as requests/minute, input tokens/minute and requests/day, and points
+at [AI Studio](https://aistudio.google.com/rate-limit) for the values on your own key.
+There is no published tokens-*per-day* cap, so the daily wall is requests — which is why
+all three dimensions are counted rather than tokens alone.
+
+So the analysis stage keeps its own books. Every generation and embedding call is
+reserved against a per-UTC-day allowance before it is made, and recorded from the
+response's `usage_metadata` afterwards, in a `token_ledger` table in the run store.
+Rejected attempts are counted too: a 429 still spends a request. When the day's
+allowance is gone the remaining pages degrade to the rule-based path and the report says
+`budget_exhausted` — a report always comes out.
+
+The point of the defaults is that **the first report of a day always fits**, and a
+runaway loop cannot eat tomorrow's allowance:
+
+```yaml
+# config/settings.yaml
+budget:
+  enabled: true
+  llm:
+    daily_requests: 60
+    daily_input_tokens: 250000
+    daily_output_tokens: 60000
+    max_output_tokens_per_call: 2048   # also sent to the API, so output is bounded
+  embeddings:
+    daily_requests: 100
+    daily_input_tokens: 100000
+```
+
+Those numbers are conservative estimates, not quoted figures — raise them once you have
+read your own limits in AI Studio. Per run:
+
+```bash
+python -m cli analyze --budget-status              # today's spend and what is left
+python -m cli analyze --daily-input-tokens 500000  # override one limit for this run
+python -m cli analyze --max-output-tokens 1024     # shorter replies, cheaper pages
+python -m cli analyze --no-budget                  # spend freely
+```
+
+A budgeted run ends with one line on stderr:
+
+```
+budget: llm 38.2k/250.0k in, 7.1k/60.0k out, 9/60 req | embeddings 2.1k/100.0k in, 7/100 req  (2026-08-20, UTC)
+```
 
 ### Targets behind bot protection (optional)
 
@@ -344,6 +395,7 @@ python -m cli analyze --pages homepage,plp
 python -m cli analyze --from-store data/processed/runs.sqlite
 python -m cli analyze --no-llm                       # rule-based only, no model calls
 python -m cli analyze --use-priors                   # ground in earlier campaigns' findings
+python -m cli analyze --budget-status                # today's spend; makes no API call
 ```
 
 Output lands in `data/reports/<campaign-id>/report.json`. The campaign id is derived
@@ -367,8 +419,9 @@ effect) and capped at 70% total, because the second image fix cannot re-win byte
 first already removed. Reports show the conservative low bound alongside the playbook's
 full band.
 
-**It always produces a report.** No API key, an exhausted free-tier quota, or a model
-that returns unusable JSON twice all degrade to a rule-based path: symptoms become
+**It always produces a report.** No API key, a spent [token budget](#token-budget), an
+exhausted free-tier quota, or a model that returns unusable JSON twice all degrade to a
+rule-based path: symptoms become
 findings, and playbooks are matched by their front-matter `symptoms:` instead of by
 embedding. `meta.analysis_mode` and `meta.degradation_reason` state exactly what
 produced the document, so a degraded report is never mistaken for a reasoned one.

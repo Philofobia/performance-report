@@ -216,6 +216,38 @@ class RagConfig(BaseModel):
     top_k: int = Field(default=5, ge=1)
 
 
+class ServiceBudget(BaseModel):
+    """Per-UTC-day allowance for one Google service.
+
+    Zero is a legal limit and means "spend nothing on this service" — the same
+    outcome as an exhausted budget, which is why it is not a validation error.
+    """
+
+    daily_requests: int = Field(default=60, ge=0)
+    daily_input_tokens: int = Field(default=250_000, ge=0)
+    daily_output_tokens: int = Field(default=60_000, ge=0)
+    max_output_tokens_per_call: int = Field(default=8192, ge=1)
+
+
+class BudgetConfig(BaseModel):
+    """Free-tier spend control (design spec 2026-08-20).
+
+    Google no longer publishes free-tier rate limits in the API docs, so these
+    defaults are conservative estimates rather than quoted figures — sized so
+    the first report of a day always fits, and overridable everywhere.
+    """
+
+    enabled: bool = True
+    llm: ServiceBudget = Field(default_factory=ServiceBudget)
+    embeddings: ServiceBudget = Field(
+        default_factory=lambda: ServiceBudget(
+            daily_requests=100,
+            daily_input_tokens=100_000,
+            daily_output_tokens=0,
+        )
+    )
+
+
 class StorageConfig(BaseModel):
     sqlite_path: str = "data/processed/runs.sqlite"
     vector_dir: str = "data/vector"
@@ -284,6 +316,7 @@ class Settings(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
     trends: TrendsConfig = Field(default_factory=TrendsConfig)
+    budget: BudgetConfig = Field(default_factory=BudgetConfig)
 
 
 # --------------------------------------------------------------------------- #

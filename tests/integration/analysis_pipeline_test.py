@@ -399,3 +399,172 @@ def test_the_trend_never_changes_the_verdict(tmp_path):
     # The same runs, judged identically, whatever history says about them.
     assert with_history.pages[0].verdict == without.pages[0].verdict
     assert with_history.cover.verdict == without.cover.verdict
+
+
+# --------------------------------------------------------------------------- #
+# token budget (design spec 2026-08-20)
+# --------------------------------------------------------------------------- #
+class BudgetedLlm(FakeLlm):
+    """A model that stops answering once the day's allowance is gone."""
+
+    def __init__(self, allowed_pages):
+        super().__init__()
+        self._allowed = allowed_pages
+
+    def analyze_page(self, prompt):
+        from rag.budget import BudgetExhaustedError
+
+        if self.page_calls >= self._allowed:
+            raise BudgetExhaustedError("llm budget spent")
+        return super().analyze_page(prompt)
+
+
+class BrokeEmbeddings(FakeEmbeddings):
+    """Embeddings whose budget is already spent."""
+
+    def embed_query(self, text):
+        from rag.budget import BudgetExhaustedError
+
+        raise BudgetExhaustedError("embedding budget spent")
+
+
+def test_a_spent_budget_still_produces_a_report(input_dir, vector_store):
+    """One page's worth of budget: page one keeps its prose, the rest degrade."""
+    report = run_analysis(load_runs(input_dir=input_dir), store=vector_store,
+                          embed_client=FakeEmbeddings(),
+                          llm_client=BudgetedLlm(allowed_pages=1))
+
+    assert [p.name for p in report.pages] == ["homepage", "plp"]
+    assert report.meta.degradation_reason == "budget_exhausted"
+    assert report.pages[1].recommendations   # rule-based, but not empty
+
+
+def test_a_spent_embedding_budget_does_not_lose_the_report(input_dir, vector_store):
+    """Retrieval refused means no grounding, and this system ships none ungrounded."""
+    llm = FakeLlm()
+    report = run_analysis(load_runs(input_dir=input_dir), store=vector_store,
+                          embed_client=BrokeEmbeddings(), llm_client=llm)
+
+    assert report.meta.analysis_mode == "rule_based"
+    assert report.meta.degradation_reason == "budget_exhausted"
+    assert llm.page_calls == 0
+    assert report.pages[0].recommendations
+
+
+def test_budget_status_prints_the_ledger_without_calling_anything(tmp_path, capsys):
+    """--budget-status must be answerable with no key and no network."""
+    from analysis.__main__ import main
+
+    assert main(["--budget-status", "--from-store", str(tmp_path / "x.sqlite")]) == 0
+    out = capsys.readouterr().out
+    assert "budget:" in out and "llm" in out and "embeddings" in out
+
+
+def test_budget_status_says_so_when_budgeting_is_off(capsys):
+    from analysis.__main__ import main
+
+    assert main(["--budget-status", "--no-budget"]) == 0
+    assert "budget: disabled" in capsys.readouterr().out
+
+
+def test_cli_overrides_reach_the_budget():
+    from analysis.__main__ import _budget_from_args, _build_parser
+    from config.load import load_settings
+
+    args = _build_parser().parse_args([
+        "--daily-requests", "7", "--daily-input-tokens", "8",
+        "--daily-output-tokens", "9", "--max-output-tokens", "10",
+    ])
+    limits = _budget_from_args(args, load_settings()).limits_for("llm")
+
+    assert (limits.daily_requests, limits.daily_input_tokens,
+            limits.daily_output_tokens, limits.max_output_tokens_per_call) == (7, 8, 9, 10)
+
+
+def test_cli_overrides_do_not_mutate_the_loaded_settings():
+    from analysis.__main__ import _budget_from_args, _build_parser
+    from config.load import load_settings
+
+    settings = load_settings()
+    args = _build_parser().parse_args(["--daily-requests", "1"])
+    _budget_from_args(args, settings)
+
+    assert settings.budget.llm.daily_requests == 60
+
+
+def test_no_budget_builds_no_budget():
+    from analysis.__main__ import _budget_from_args, _build_parser
+    from config.load import load_settings
+
+    args = _build_parser().parse_args(["--no-budget"])
+
+    assert _budget_from_args(args, load_settings()) is None
+
+
+def test_budget_status_does_not_create_a_run_store(tmp_path):
+    """Reading the ledger must not leave a database behind that never existed."""
+    from analysis.__main__ import _budget_from_args, _build_parser
+    from config.load import load_settings
+
+    settings = load_settings().model_copy(deep=True)
+    settings.storage.sqlite_path = str(tmp_path / "runs.sqlite")
+    args = _build_parser().parse_args(["--budget-status"])
+
+    assert _budget_from_args(args, settings) is not None
+    assert not (tmp_path / "runs.sqlite").exists()
+
+
+def test_a_budgeted_run_does_open_the_ledger(tmp_path):
+    from analysis.__main__ import _budget_from_args, _build_parser
+    from config.load import load_settings
+
+    settings = load_settings().model_copy(deep=True)
+    settings.storage.sqlite_path = str(tmp_path / "runs.sqlite")
+    _budget_from_args(_build_parser().parse_args([]), settings)
+
+    assert (tmp_path / "runs.sqlite").exists()
+
+
+# --------------------------------------------------------------------------- #
+# The knowledge base has to actually be in the store
+# --------------------------------------------------------------------------- #
+def test_run_analysis_indexes_the_playbooks_it_retrieves_from():
+    """`index_knowledge` had no production caller, so a real store shipped
+    empty: retrieval found nothing, the model cited something it invented, and
+    every recommendation was dropped."""
+    conn = sql.connect(":memory:")
+    bare_store = SqliteVectorStore(conn)
+    assert conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0] == 0
+
+    runs = [Run.model_validate(run_payload("run_h1", "homepage"))]
+    run_analysis(runs, store=bare_store, embed_client=FakeEmbeddings(),
+                 llm_client=FakeLlm())
+
+    assert conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0] > 0
+    conn.close()
+
+
+def test_a_failed_indexing_pass_does_not_lose_the_report():
+    conn = sql.connect(":memory:")
+    runs = [Run.model_validate(run_payload("run_h1", "homepage"))]
+
+    report = run_analysis(runs, store=SqliteVectorStore(conn),
+                          embed_client=BrokeEmbeddings(), llm_client=FakeLlm())
+
+    assert report.pages[0].recommendations
+    assert report.meta.degradation_reason == "budget_exhausted"
+    conn.close()
+
+
+def test_live_clients_share_the_embedding_cache(monkeypatch, tmp_path):
+    """Without a cache, re-indexing the corpus costs tokens every single run."""
+    from analysis.__main__ import _build_live_clients
+    from config.load import load_settings
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key-not-used")
+    settings = load_settings().model_copy(deep=True)
+    settings.storage.sqlite_path = str(tmp_path / "runs.sqlite")
+
+    _store, embed_client, _llm = _build_live_clients(settings)
+
+    assert embed_client._cache is not None
