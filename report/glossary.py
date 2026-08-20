@@ -133,6 +133,23 @@ def load_glossary(path: Optional[Path] = None) -> Glossary:
     return Glossary(entries)
 
 
+def _measured(metrics: Any, metric: str) -> Optional[float]:
+    """Find a metric in the page's grouped measurements.
+
+    ``PageBlock.metrics`` is the run's payload, grouped as the schema stores it
+    (``cwp``, ``network``, ``main_thread``). Readers of this module should not
+    have to know which group a metric lives in.
+    """
+    if not isinstance(metrics, dict):
+        return None
+    if metric in metrics and not isinstance(metrics[metric], dict):
+        return metrics[metric]
+    for group in metrics.values():
+        if isinstance(group, dict) and group.get(metric) is not None:
+            return group[metric]
+    return None
+
+
 def glance_rows(page: Any, glossary: Glossary,
                 thresholds: Any) -> List[Dict[str, str]]:
     """The at-a-glance rows: measurement, target, verdict, plain meaning.
@@ -143,7 +160,7 @@ def glance_rows(page: Any, glossary: Glossary,
     """
     rows: List[Dict[str, str]] = []
     for metric in GLANCE_METRICS:
-        value = page.metrics.get(metric)
+        value = _measured(page.metrics, metric)
         target = page.targets.get(metric)
         if target is None:
             target = glossary.target_for(metric, thresholds)

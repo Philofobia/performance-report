@@ -111,6 +111,24 @@ def build_charts(report: Report) -> Dict[str, Any]:
     }
 
 
+def glance_by_page(report) -> Dict[str, list]:
+    """At-a-glance rows keyed by page name, computed once per render.
+
+    Jinja is deliberately kept free of arithmetic: the same rows have to appear
+    in the Markdown mirror, and two templates computing them separately is how
+    the two documents drift apart.
+    """
+    from config.load import load_settings
+    from report.glossary import glance_rows, load_glossary
+
+    glossary = load_glossary()
+    thresholds = load_settings().thresholds
+    return {
+        page.name: glance_rows(page, glossary, thresholds)
+        for page in report.pages
+    }
+
+
 def render_html(
     report: Report, *, images: Optional[Mapping[str, "EmbeddedImage"]] = None
 ) -> str:
@@ -130,4 +148,5 @@ def render_html(
         charts=build_charts(report),
         images=images or {},
         stylesheet=stylesheet,
+        glance=glance_by_page(report),
     )

@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from config.load import Thresholds
-from report.glossary import GlossaryError, load_glossary
+from report.glossary import GlossaryError, glance_rows, load_glossary
 
 
 @pytest.fixture(scope="module")
@@ -81,3 +81,45 @@ def test_a_malformed_glossary_is_a_clean_error(tmp_path):
 def test_a_missing_glossary_names_the_file(tmp_path):
     with pytest.raises(GlossaryError, match="glossary"):
         load_glossary(tmp_path / "absent.yaml")
+
+
+# --------------------------------------------------------------------------- #
+# glance_rows
+# --------------------------------------------------------------------------- #
+class _Page:
+    """The two attributes glance_rows reads off a PageBlock."""
+
+    def __init__(self, metrics, targets):
+        self.metrics = metrics
+        self.targets = targets
+
+
+def test_glance_rows_find_metrics_inside_their_groups(gl):
+    """PageBlock.metrics is grouped as the run schema stores it."""
+    page = _Page({"cwp": {"lcp_ms": 6200.0, "cls": 0.42, "inp_ms": 480.0,
+                          "tbt_ms": 620.0, "ttfb_ms": 1800.0}},
+                 {"lcp_ms": 2500.0})
+
+    rows = {row["label"]: row for row in glance_rows(page, gl, Thresholds())}
+
+    assert rows["Largest contentful paint"]["value"] == "6200 ms"
+    assert rows["Largest contentful paint"]["target"] == "2500 ms"
+    assert rows["Largest contentful paint"]["verdict"] == "2.5× over"
+    assert rows["Layout shift"]["value"] == "0.42"
+
+
+def test_glance_rows_fall_back_to_configured_targets(gl):
+    page = _Page({"cwp": {"lcp_ms": 6200.0}}, {})
+
+    rows = {row["label"]: row for row in glance_rows(page, gl, Thresholds())}
+
+    assert rows["Largest contentful paint"]["target"] == "2500 ms"
+
+
+def test_an_unmeasured_metric_renders_a_dash_not_a_verdict(gl):
+    page = _Page({"cwp": {}}, {})
+
+    rows = {row["label"]: row for row in glance_rows(page, gl, Thresholds())}
+
+    assert rows["Interaction response"]["value"] == "—"
+    assert rows["Interaction response"]["verdict"] == ""
