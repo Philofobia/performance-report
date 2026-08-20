@@ -25,6 +25,10 @@ from normalize.schema import Run
 
 SCHEMA_VERSION = 2  # 2: adds Report.appendix (Phase 7B)
 
+#: Defined here rather than imported from analysis/__main__: importing the
+#: CLI module from the model layer would invert the dependency.
+MAX_TOP_ACTIONS = 3
+
 _SEVERITY_RANK = {"pass": 0, "warn": 1, "fail": 2}
 
 
@@ -519,6 +523,18 @@ def build_report(
 
     degraded = [p for p in ordered if p.mode != "llm"]
     appendix = _appendix(ordered, settings)
+    page_blocks = [
+        _page_block(p, settings, trends.get(p.page_name, ())) for p in ordered
+    ]
+
+    # One ranked plan over every page, so "what do I fix first" is answered by
+    # expected payoff rather than by which page sorted first.
+    from analysis.priority import rank_actions
+    from report.glossary import load_glossary
+
+    plan = rank_actions(page_blocks, glossary=load_glossary(),
+                        thresholds=settings.thresholds)
+
     return Report(
         schema_version=SCHEMA_VERSION,
         cover=Cover(
@@ -535,12 +551,15 @@ def build_report(
         summary=Summary(
             problem=summary.problem,
             key_finding=summary.key_finding,
-            top_actions=list(summary.top_actions),
+            # The plan already knows what matters most; the model's own three
+            # only stand in when nothing could be ranked.
+            top_actions=(
+                [f"{a.title} ({a.page})" for a in plan[:MAX_TOP_ACTIONS]]
+                if plan else list(summary.top_actions)
+            ),
         ),
-        pages=[
-            _page_block(p, settings, trends.get(p.page_name, ()))
-            for p in ordered
-        ],
+        action_plan=plan,
+        pages=page_blocks,
         comparison=_comparison(ordered, settings),
         methodology=_methodology(ordered, settings),
         appendix=appendix,

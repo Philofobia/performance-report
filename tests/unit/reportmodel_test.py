@@ -423,3 +423,38 @@ def test_condition_row_carries_the_lcp_lower_bound_qualifier():
 
 def test_condition_row_qualifier_defaults_false():
     assert reportmodel._condition_row(make_run()).lcp_underestimated is False
+
+
+# --------------------------------------------------------------------------- #
+# The ranked plan (design spec 2026-08-20)
+# --------------------------------------------------------------------------- #
+def test_the_report_carries_a_ranked_plan():
+    report = build()
+
+    assert report.action_plan
+    assert [a.rank for a in report.action_plan] == list(
+        range(1, len(report.action_plan) + 1))
+
+
+def test_top_actions_come_from_the_plan_not_from_page_order():
+    report = build()
+
+    assert report.summary.top_actions == [
+        f"{a.title} ({a.page})" for a in report.action_plan[:3]
+    ]
+
+
+def test_the_summary_keeps_its_own_actions_when_nothing_can_be_ranked():
+    """A campaign with no recommendations still has an executive summary."""
+    report = build([a_page(recommendations=[])])
+
+    assert report.action_plan == []
+    assert report.summary.top_actions == ["Compress the hero", "Preload fonts"]
+
+
+def test_a_report_json_without_a_plan_still_validates():
+    """report.json files written before the plan existed must still render."""
+    payload = json.loads(to_json(build()))
+    del payload["action_plan"]
+
+    assert Report.model_validate(payload).action_plan == []
