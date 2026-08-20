@@ -25,6 +25,7 @@ from analysis.reportmodel import Report, build_report, to_json
 from config.load import load_settings
 from normalize.schema import Run
 from rag import knowledge, retrieve
+from rag.budget import BudgetExhaustedError
 from store.vectordb import Document
 
 MAX_TOP_ACTIONS = 3
@@ -197,20 +198,30 @@ def run_analysis(
 
         hits: List[Any] = []
         priors: List[Any] = []
+        page_client = llm_client
+        page_reason = "llm_disabled" if llm_disabled else "no_api_key"
         if store is not None and embed_client is not None:
-            hits, _query = retrieve.retrieve_context(
-                primary, store, embed_client,
-                thresholds=settings.thresholds, top_k=k,
-            )
-            if use_priors:
-                priors = retrieve.retrieve_prior_findings(
-                    primary, store, embed_client, thresholds=settings.thresholds
+            try:
+                hits, _query = retrieve.retrieve_context(
+                    primary, store, embed_client,
+                    thresholds=settings.thresholds, top_k=k,
                 )
+                if use_priors:
+                    priors = retrieve.retrieve_prior_findings(
+                        primary, store, embed_client, thresholds=settings.thresholds
+                    )
+            except BudgetExhaustedError:
+                # Retrieval is what grounds the model, and this system does not
+                # ship ungrounded analysis — so a page that cannot afford its
+                # embeddings is analysed by rules rather than by a model
+                # working from nothing.
+                hits, priors, page_client = [], [], None
+                page_reason = "budget_exhausted"
 
         analyses.append(analyze_page(
-            page_runs, hits=hits, symptoms=symptoms, client=llm_client,
+            page_runs, hits=hits, symptoms=symptoms, client=page_client,
             prior_findings=priors, chunks=chunks,
-            no_client_reason="llm_disabled" if llm_disabled else "no_api_key",
+            no_client_reason=page_reason,
         ))
 
     summary: Any = rule_based_summary(analyses)

@@ -333,3 +333,17 @@ def test_all_runs_for_the_page_are_retained_for_comparison():
                           client=FakeClient(an_llm_result()), chunks=chunks)
     assert result.primary_run.run_id == "run_m"
     assert [r.run_id for r in result.runs] == ["run_d", "run_m"]
+
+
+def test_budget_exhaustion_falls_back_with_its_own_reason():
+    """"We chose not to spend" must not be reported as a bad model response."""
+    from rag.budget import BudgetExhaustedError
+
+    run, symptoms, chunks = _setup()
+    result = analyze_page(
+        [run], hits=[a_hit()], symptoms=symptoms,
+        client=FakeClient(error=BudgetExhaustedError("spent")), chunks=chunks
+    )
+    assert result.mode == "rule_based"
+    assert result.degradation_reason == "budget_exhausted"
+    assert result.recommendations

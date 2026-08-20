@@ -399,3 +399,53 @@ def test_the_trend_never_changes_the_verdict(tmp_path):
     # The same runs, judged identically, whatever history says about them.
     assert with_history.pages[0].verdict == without.pages[0].verdict
     assert with_history.cover.verdict == without.cover.verdict
+
+
+# --------------------------------------------------------------------------- #
+# token budget (design spec 2026-08-20)
+# --------------------------------------------------------------------------- #
+class BudgetedLlm(FakeLlm):
+    """A model that stops answering once the day's allowance is gone."""
+
+    def __init__(self, allowed_pages):
+        super().__init__()
+        self._allowed = allowed_pages
+
+    def analyze_page(self, prompt):
+        from rag.budget import BudgetExhaustedError
+
+        if self.page_calls >= self._allowed:
+            raise BudgetExhaustedError("llm budget spent")
+        return super().analyze_page(prompt)
+
+
+class BrokeEmbeddings(FakeEmbeddings):
+    """Embeddings whose budget is already spent."""
+
+    def embed_query(self, text):
+        from rag.budget import BudgetExhaustedError
+
+        raise BudgetExhaustedError("embedding budget spent")
+
+
+def test_a_spent_budget_still_produces_a_report(input_dir, vector_store):
+    """One page's worth of budget: page one keeps its prose, the rest degrade."""
+    report = run_analysis(load_runs(input_dir=input_dir), store=vector_store,
+                          embed_client=FakeEmbeddings(),
+                          llm_client=BudgetedLlm(allowed_pages=1))
+
+    assert [p.name for p in report.pages] == ["homepage", "plp"]
+    assert report.meta.degradation_reason == "budget_exhausted"
+    assert report.pages[1].recommendations   # rule-based, but not empty
+
+
+def test_a_spent_embedding_budget_does_not_lose_the_report(input_dir, vector_store):
+    """Retrieval refused means no grounding, and this system ships none ungrounded."""
+    llm = FakeLlm()
+    report = run_analysis(load_runs(input_dir=input_dir), store=vector_store,
+                          embed_client=BrokeEmbeddings(), llm_client=llm)
+
+    assert report.meta.analysis_mode == "rule_based"
+    assert report.meta.degradation_reason == "budget_exhausted"
+    assert llm.page_calls == 0
+    assert report.pages[0].recommendations

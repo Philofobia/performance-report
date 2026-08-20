@@ -405,6 +405,7 @@ def analyze_page(
     """
     from analysis.estimator import aggregate
     from analysis.llm import AnalysisError, InvalidModelOutputError
+    from rag.budget import BudgetExhaustedError
     from rag.embeddings import EmbeddingError, MissingApiKeyError, QuotaExceededError
     from rag.knowledge import load_knowledge_dir
     from rag.prompt import build_analysis_prompt
@@ -432,6 +433,12 @@ def analyze_page(
     except MissingApiKeyError:
         return _rule_based_page(
             ordered_runs, primary, list(symptoms), corpus, "no_api_key"
+        )
+    except BudgetExhaustedError:
+        # Ahead of the EmbeddingError clause on purpose: this subclasses it,
+        # and "we chose not to spend" must not be reported as a bad response.
+        return _rule_based_page(
+            ordered_runs, primary, list(symptoms), corpus, "budget_exhausted"
         )
     except (InvalidModelOutputError, AnalysisError, EmbeddingError):
         return _rule_based_page(
