@@ -9,9 +9,9 @@ jobs:
   security-and-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           # requirements.txt is fully pinned, so the cache key is exact: a hit
@@ -68,7 +68,7 @@ jobs:
       # OS packages `--with-deps` installs are not in this path and are needed
       # either way.
       - name: Cache the Chromium build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
@@ -86,16 +86,16 @@ jobs:
     needs: security-and-tests   # no browser minutes while the suite is red
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
           cache-dependency-path: requirements.txt
 
       - name: Cache the Chromium build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
@@ -182,7 +182,7 @@ jobs:
         # HAR and trace files under data/raw are NOT uploaded — SECURITY_PLAN
         # §2.6 treats them as sensitive and a build artifact is downloadable.
         if: always() && steps.campaign.outputs.skipped != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: campaign-report
           path: |
