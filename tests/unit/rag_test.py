@@ -592,7 +592,7 @@ def test_prior_findings_are_included_as_untrusted_context():
     finding = SearchHit(doc_id="run_1", text="hero video was 2MB", kind="finding",
                         source="run_1", metadata={}, score=0.8)
     built = prompt.build_analysis_prompt(make_run(), [], prior_findings=[finding])
-    assert "prior-finding:run_1" in built.user
+    assert 'kind="prior-finding" source="run_1"' in built.user
 
 
 def test_symptoms_rendered_when_supplied():
@@ -687,3 +687,34 @@ def test_rejected_embedding_attempts_are_still_counted():
     assert budget.remaining(SERVICE_EMBEDDINGS).requests == (
         BudgetConfig().embeddings.daily_requests - 3
     )
+
+
+# --------------------------------------------------------------------------- #
+# Citation contract: what the model is shown must be what the guard accepts
+# --------------------------------------------------------------------------- #
+def test_the_cited_name_is_shown_exactly_as_the_guard_expects():
+    """The model copies the label it sees, and findings.py accepts only
+    `hit.source`. Showing it `playbook:images.md` while requiring `images.md`
+    means every grounded recommendation is dropped."""
+    built = prompt.build_analysis_prompt(make_run(), [hit("compress images")])
+
+    assert 'source="images.md"' in built.user
+    assert "playbook:images.md" not in built.user
+
+
+def test_the_document_kind_is_still_stated():
+    """Dropping the prefix must not cost the model the playbook/finding
+    distinction — it just moves to its own attribute."""
+    built = prompt.build_analysis_prompt(make_run(), [hit("compress images")])
+
+    assert 'kind="playbook"' in built.user
+
+
+def test_prior_findings_are_labelled_by_kind_not_by_prefix():
+    prior = SearchHit(doc_id="run_1", text="hero video was 2MB", kind="finding",
+                      source="storefront/homepage", metadata={}, score=0.8)
+    built = prompt.build_analysis_prompt(make_run(), [hit("compress images")],
+                                         prior_findings=[prior])
+
+    assert 'kind="prior-finding" source="storefront/homepage"' in built.user
+    assert "prior-finding:storefront/homepage" not in built.user

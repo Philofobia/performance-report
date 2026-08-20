@@ -105,13 +105,24 @@ def truncate(text: str, limit: int) -> str:
 
 
 def render_document(
-    index: int, *, title: str, body: str, limit: int = MAX_DOC_CHARS
+    index: int, *, title: str, body: str, kind: str = "",
+    limit: int = MAX_DOC_CHARS
 ) -> str:
-    """Wrap one untrusted document in an explicit, forge-resistant boundary."""
+    """Wrap one untrusted document in an explicit, forge-resistant boundary.
+
+    ``kind`` is its own attribute rather than a prefix on ``source`` because
+    ``source`` is the exact string the model is asked to cite, and
+    ``analysis/findings.py`` keeps a recommendation only when its citation
+    matches ``hit.source`` exactly. Folding the kind into that name
+    (``playbook:images.md``) had the model dutifully copying a label the guard
+    could never accept, so every grounded recommendation was dropped.
+    """
     safe_title = neutralize(title)[:200]
     safe_body = truncate(neutralize(body), limit)
+    safe_kind = neutralize(kind)[:40]
+    attributes = f' kind="{safe_kind}"' if safe_kind else ""
     return (
-        f"{CONTEXT_OPEN} id={index} source=\"{safe_title}\">\n"
+        f"{CONTEXT_OPEN} id={index}{attributes} source=\"{safe_title}\">\n"
         f"{safe_body}\n"
         f"<{CONTEXT_CLOSE}"
     )
@@ -208,7 +219,7 @@ def build_analysis_prompt(
         title = hit.source or hit.doc_id
         sources.append(title)
         sections.append(
-            render_document(index, title=f"playbook:{title}", body=hit.text)
+            render_document(index, title=title, kind="playbook", body=hit.text)
         )
 
     for hit in prior_findings:
@@ -216,7 +227,8 @@ def build_analysis_prompt(
         title = hit.source or hit.doc_id
         sources.append(title)
         sections.append(
-            render_document(index, title=f"prior-finding:{title}", body=hit.text)
+            render_document(index, title=title, kind="prior-finding",
+                            body=hit.text)
         )
 
     if run.problem.description:

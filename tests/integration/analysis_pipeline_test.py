@@ -523,3 +523,48 @@ def test_a_budgeted_run_does_open_the_ledger(tmp_path):
     _budget_from_args(_build_parser().parse_args([]), settings)
 
     assert (tmp_path / "runs.sqlite").exists()
+
+
+# --------------------------------------------------------------------------- #
+# The knowledge base has to actually be in the store
+# --------------------------------------------------------------------------- #
+def test_run_analysis_indexes_the_playbooks_it_retrieves_from():
+    """`index_knowledge` had no production caller, so a real store shipped
+    empty: retrieval found nothing, the model cited something it invented, and
+    every recommendation was dropped."""
+    conn = sql.connect(":memory:")
+    bare_store = SqliteVectorStore(conn)
+    assert conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0] == 0
+
+    runs = [Run.model_validate(run_payload("run_h1", "homepage"))]
+    run_analysis(runs, store=bare_store, embed_client=FakeEmbeddings(),
+                 llm_client=FakeLlm())
+
+    assert conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0] > 0
+    conn.close()
+
+
+def test_a_failed_indexing_pass_does_not_lose_the_report():
+    conn = sql.connect(":memory:")
+    runs = [Run.model_validate(run_payload("run_h1", "homepage"))]
+
+    report = run_analysis(runs, store=SqliteVectorStore(conn),
+                          embed_client=BrokeEmbeddings(), llm_client=FakeLlm())
+
+    assert report.pages[0].recommendations
+    assert report.meta.degradation_reason == "budget_exhausted"
+    conn.close()
+
+
+def test_live_clients_share_the_embedding_cache(monkeypatch, tmp_path):
+    """Without a cache, re-indexing the corpus costs tokens every single run."""
+    from analysis.__main__ import _build_live_clients
+    from config.load import load_settings
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key-not-used")
+    settings = load_settings().model_copy(deep=True)
+    settings.storage.sqlite_path = str(tmp_path / "runs.sqlite")
+
+    _store, embed_client, _llm = _build_live_clients(settings)
+
+    assert embed_client._cache is not None

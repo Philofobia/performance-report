@@ -25,7 +25,8 @@ entry point and a `--skeleton-check` drift guard enforced against a committed ba
 embedding each screenshot and its heaviest HAR requests** · **a loopback-only web form
 for manual entry** · **a CI job that regenerates a real campaign report and gates its
 skeleton** · **a per-UTC-day request and token budget over the Google free tier, which
-degrades the analysis to rules rather than overspending**.
+degrades the analysis to rules rather than overspending** · **playbook indexing
+wired into the analysis run, so retrieval has a corpus to retrieve from**.
 
 **Missing:** no phase in the [Roadmap](#roadmap) is unbuilt. Two limitations are
 known and accepted rather than fixed, both written up where the code lives:

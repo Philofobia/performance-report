@@ -26,6 +26,7 @@ from config.load import load_settings
 from normalize.schema import Run
 from rag import knowledge, retrieve
 from rag.budget import BudgetExhaustedError
+from rag.embeddings import EmbeddingError
 from store.vectordb import Document
 
 MAX_TOP_ACTIONS = 3
@@ -191,6 +192,20 @@ def run_analysis(
     chunks = knowledge.load_knowledge_dir(knowledge_dir)
     digest = knowledge.content_digest(chunks)
 
+    if store is not None and embed_client is not None:
+        # Nothing else ever called `index_knowledge`, so a real store shipped
+        # empty: retrieval found nothing, the model cited a playbook it had
+        # invented, and the citation guard dropped every recommendation. The
+        # pass is cheap to repeat — chunk ids are stable, so edited playbooks
+        # replace their old chunks, and the embedding cache means unchanged
+        # text costs no API calls.
+        try:
+            knowledge.index_knowledge(store, embed_client, chunks=chunks)
+        except EmbeddingError as exc:
+            # Includes BudgetExhaustedError. Retrieval will simply find
+            # nothing and the pages degrade; indexing must not lose a report.
+            print(f"Playbooks were not indexed: {exc}", file=sys.stderr)
+
     analyses: List[PageAnalysis] = []
     for _page_name, page_runs in group_by_page(runs).items():
         primary = select_primary(page_runs)
@@ -291,7 +306,11 @@ def _build_live_clients(settings, budget=None) -> tuple:
     A missing key is not an error here: it means this campaign is analysed by
     rules, which is a supported outcome.
     """
-    from rag.embeddings import EmbeddingError, GoogleEmbeddingClient, resolve_api_key
+    from rag.embeddings import (
+        EmbeddingCache,
+        GoogleEmbeddingClient,
+        resolve_api_key,
+    )
     from store import sql
     from store.vectordb import SqliteVectorStore
 
@@ -305,8 +324,11 @@ def _build_live_clients(settings, budget=None) -> tuple:
 
     conn = sql.connect(settings.storage.sqlite_path)
     store = SqliteVectorStore(conn)
+    # The cache is what makes re-indexing the corpus every run free: it is
+    # keyed by content, so unchanged playbooks cost no API calls at all.
     embed_client = GoogleEmbeddingClient(
-        model=settings.models.embeddings, budget=budget)
+        model=settings.models.embeddings, budget=budget,
+        cache=EmbeddingCache(conn))
     llm_client = GoogleAnalysisClient(model=settings.models.llm, budget=budget)
     return store, embed_client, llm_client
 
