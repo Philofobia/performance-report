@@ -50,8 +50,11 @@ class FakeTransport:
         self._fail_times = fail_times
         self.calls = []
 
-    def __call__(self, messages, model):
-        self.calls.append({"messages": messages, "model": model})
+    def __call__(self, messages, model, *, max_output_tokens=None):
+        self.calls.append({
+            "messages": messages, "model": model,
+            "max_output_tokens": max_output_tokens,
+        })
         if self._fail_times > 0:
             self._fail_times -= 1
             raise self._error
@@ -197,3 +200,137 @@ def test_no_api_key_and_no_transport_is_reported_clearly(monkeypatch):
     from rag.embeddings import MissingApiKeyError
     with pytest.raises(MissingApiKeyError):
         client.analyze_page(a_prompt())
+
+
+# --------------------------------------------------------------------------- #
+# Budget metering (design spec 2026-08-20)
+# --------------------------------------------------------------------------- #
+def _budget(**llm):
+    from config.load import BudgetConfig, ServiceBudget
+    from rag.budget import InMemoryLedger, TokenBudget
+
+    config = BudgetConfig(llm=ServiceBudget(**llm)) if llm else BudgetConfig()
+    return TokenBudget(config, ledger=InMemoryLedger())
+
+
+def _llm_defaults():
+    from config.load import BudgetConfig
+
+    return BudgetConfig().llm
+
+
+def test_generation_records_the_usage_the_api_reports():
+    from rag.budget import SERVICE_LLM, Usage
+
+    budget = _budget()
+    client = make_client([(json.dumps(VALID_PAGE), Usage(1234, 56))], budget=budget)
+
+    client.analyze_page(a_prompt())
+
+    left = budget.remaining(SERVICE_LLM)
+    assert left.input_tokens == _llm_defaults().daily_input_tokens - 1234
+    assert left.output_tokens == _llm_defaults().daily_output_tokens - 56
+
+
+def test_generation_falls_back_to_the_estimate_without_usage():
+    """A transport that returns a bare string is still charged for."""
+    from rag.budget import SERVICE_LLM
+
+    budget = _budget()
+    client = make_client([json.dumps(VALID_PAGE)], budget=budget)
+
+    client.analyze_page(a_prompt())
+
+    left = budget.remaining(SERVICE_LLM)
+    assert 0 < left.input_tokens < _llm_defaults().daily_input_tokens
+    assert 0 < left.output_tokens < _llm_defaults().daily_output_tokens
+
+
+def test_the_corrective_retry_costs_a_second_request():
+    """The JSON retry is a real call, so it must be a counted one."""
+    from rag.budget import SERVICE_LLM
+
+    budget = _budget()
+    client = make_client(["not json at all", json.dumps(VALID_PAGE)], budget=budget)
+
+    client.analyze_page(a_prompt())
+
+    assert budget.remaining(SERVICE_LLM).requests == _llm_defaults().daily_requests - 2
+
+
+def test_quota_retries_are_each_counted():
+    from rag.budget import SERVICE_LLM
+
+    budget = _budget()
+    client = make_client(
+        [json.dumps(VALID_PAGE)], budget=budget,
+        error=RuntimeError("429 RESOURCE_EXHAUSTED"), fail_times=2,
+    )
+
+    client.analyze_page(a_prompt())
+
+    assert budget.remaining(SERVICE_LLM).requests == _llm_defaults().daily_requests - 3
+
+
+def test_exhausted_budget_refuses_before_the_transport_runs():
+    from rag.budget import BudgetExhaustedError
+
+    transport = FakeTransport([json.dumps(VALID_PAGE)])
+    client = make_client([], transport=transport, budget=_budget(daily_requests=0))
+
+    with pytest.raises(BudgetExhaustedError):
+        client.analyze_page(a_prompt())
+
+    assert transport.calls == []
+
+
+def test_the_reservation_assumes_the_worst_case_output():
+    """A call that could not be afforded at full length is never started."""
+    from rag.budget import BudgetExhaustedError
+
+    transport = FakeTransport([json.dumps(VALID_PAGE)])
+    client = make_client(
+        [], transport=transport,
+        budget=_budget(daily_output_tokens=100, max_output_tokens_per_call=2048),
+    )
+
+    with pytest.raises(BudgetExhaustedError, match="output tokens"):
+        client.analyze_page(a_prompt())
+
+
+def test_the_output_cap_reaches_the_transport():
+    transport = FakeTransport([json.dumps(VALID_PAGE)])
+    client = make_client([], transport=transport, budget=_budget())
+
+    client.analyze_page(a_prompt())
+
+    assert transport.calls[0]["max_output_tokens"] == _llm_defaults(
+    ).max_output_tokens_per_call
+
+
+def test_an_explicit_cap_beats_the_configured_one():
+    transport = FakeTransport([json.dumps(VALID_PAGE)])
+    client = make_client([], transport=transport, budget=_budget(),
+                         max_output_tokens=64)
+
+    client.analyze_page(a_prompt())
+
+    assert transport.calls[0]["max_output_tokens"] == 64
+
+
+def test_a_transport_that_takes_no_cap_is_called_without_one():
+    """Injected two-argument transports keep working unchanged."""
+    seen = []
+
+    def transport(messages, model):
+        seen.append(model)
+        return json.dumps(VALID_PAGE)
+
+    client = make_client([], transport=transport, budget=_budget())
+
+    assert client.analyze_page(a_prompt()).summary
+    assert seen == ["test-llm"]
+
+
+def test_generation_without_a_budget_is_unmetered():
+    assert make_client([json.dumps(VALID_PAGE)]).analyze_page(a_prompt()).summary

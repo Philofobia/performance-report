@@ -307,8 +307,21 @@ class GoogleEmbeddingClient:
                 SERVICE_EMBEDDINGS, estimated_input=tokens, estimated_output=0
             )
 
+        def invoke():
+            try:
+                return self._transport(texts, self.model, task_type)
+            except Exception:
+                # A rejected request is still a request against the daily
+                # limit, so a retry storm must not be free in the ledger.
+                if self._budget is not None:
+                    self._budget.record(
+                        SERVICE_EMBEDDINGS, self.model, input_tokens=0,
+                        output_tokens=0,
+                    )
+                raise
+
         vectors = call_with_quota_backoff(
-            lambda: self._transport(texts, self.model, task_type),
+            invoke,
             max_retries=self._max_retries,
             sleep=self._sleep,
             jitter=self._jitter,

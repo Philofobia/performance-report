@@ -672,3 +672,18 @@ def test_exhausted_embedding_budget_refuses_before_the_call():
 def test_embedding_without_a_budget_is_unmetered():
     """The budget is opt-in: no budget, no behaviour change."""
     assert len(make_client().embed(["alpha"])) == 1
+
+
+def test_rejected_embedding_attempts_are_still_counted():
+    """A retry storm must not be free: each attempt is a request."""
+    from config.load import BudgetConfig
+    from rag.budget import SERVICE_EMBEDDINGS
+
+    budget = _budget()
+    client = make_client(
+        transport=FakeTransport(fail_times=2), budget=budget, max_retries=3)
+    client.embed(["alpha"])
+
+    assert budget.remaining(SERVICE_EMBEDDINGS).requests == (
+        BudgetConfig().embeddings.daily_requests - 3
+    )

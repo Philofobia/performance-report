@@ -17,6 +17,7 @@ mostly buys latency. After that the caller degrades to the rule-based path.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import random
 import time
@@ -174,7 +175,9 @@ class GoogleAnalysisClient:
         *,
         model: str = "gemini-2.0-flash",
         api_key: Optional[str] = None,
-        transport: Optional[Callable[[List[Dict[str, str]], str], str]] = None,
+        transport: Optional[Callable[..., Any]] = None,
+        budget: Optional[Any] = None,
+        max_output_tokens: Optional[int] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
         sleep: Callable[[float], None] = time.sleep,
         jitter: Callable[[], float] = random.random,
@@ -182,6 +185,10 @@ class GoogleAnalysisClient:
         self.model = model
         self._explicit_key = api_key
         self._transport = transport
+        self._budget = budget
+        self._max_output_tokens = max_output_tokens
+        #: Resolved once, on first use: whether the transport takes a cap.
+        self._takes_cap: Optional[bool] = None
         self._max_retries = max(0, max_retries)
         self._sleep = sleep
         self._jitter = jitter
@@ -200,29 +207,116 @@ class GoogleAnalysisClient:
 
         client = genai.Client(api_key=key)
 
-        def transport(messages, model):
+        def transport(messages, model, *, max_output_tokens=None):
+            from rag.budget import Usage
+
             system = "\n".join(m["content"] for m in messages if m["role"] == "system")
             contents = [m["content"] for m in messages if m["role"] != "system"]
+            config: Dict[str, Any] = {
+                "system_instruction": system,
+                "temperature": 0,
+                "response_mime_type": "application/json",
+            }
+            if max_output_tokens:
+                config["max_output_tokens"] = max_output_tokens
             response = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config={
-                    "system_instruction": system,
-                    "temperature": 0,
-                    "response_mime_type": "application/json",
-                },
+                model=model, contents=contents, config=config,
             )
-            return response.text or ""
+            meta = getattr(response, "usage_metadata", None)
+            text = response.text or ""
+            if meta is None:
+                return text
+            return text, Usage(
+                int(getattr(meta, "prompt_token_count", 0) or 0),
+                int(getattr(meta, "candidates_token_count", 0) or 0),
+            )
 
         return transport
 
+    def _output_cap(self) -> Optional[int]:
+        """The per-call output ceiling: explicit, else the budget's, else none."""
+        if self._max_output_tokens is not None:
+            return self._max_output_tokens
+        if self._budget is not None:
+            from rag.budget import SERVICE_LLM
+
+            return self._budget.limits_for(SERVICE_LLM).max_output_tokens_per_call
+        return None
+
+    def _transport_takes_cap(self) -> bool:
+        """Whether this transport accepts ``max_output_tokens``.
+
+        Asked once, by signature rather than by calling and catching TypeError:
+        a TypeError raised *inside* a transport would otherwise read as "it does
+        not take the argument", and the call would be made a second time —
+        double-charging the budget this exists to protect.
+        """
+        if self._takes_cap is None:
+            try:
+                parameters = inspect.signature(self._transport).parameters
+            except (TypeError, ValueError):  # builtins and C callables
+                self._takes_cap = False
+            else:
+                self._takes_cap = "max_output_tokens" in parameters or any(
+                    param.kind is inspect.Parameter.VAR_KEYWORD
+                    for param in parameters.values()
+                )
+        return self._takes_cap
+
     def _call(self, messages: List[Dict[str, str]]) -> str:
-        """One generation call, retried on quota errors only."""
+        """One generation call: reserved, retried on quota only, then recorded.
+
+        Metering here rather than in :meth:`analyze_page` is deliberate. This is
+        the one place every request passes through — including the corrective
+        JSON retry and each quota retry, all of which are real calls the free
+        tier charges for.
+        """
         if self._transport is None:
             self._transport = self._build_default_transport()
 
-        return call_with_quota_backoff(
-            lambda: self._transport(messages, self.model),
+        from rag.budget import SERVICE_LLM, Usage, estimate_tokens
+
+        estimated_input = sum(estimate_tokens(m["content"]) for m in messages)
+        cap = self._output_cap()
+        if self._budget is not None:
+            self._budget.reserve(
+                SERVICE_LLM,
+                estimated_input=estimated_input,
+                # Worst case: a reply that runs all the way to the ceiling.
+                # Never start a call that could not be afforded at full length.
+                estimated_output=cap or 0,
+            )
+
+        def invoke():
+            try:
+                result = (
+                    self._transport(messages, self.model, max_output_tokens=cap)
+                    if cap is not None and self._transport_takes_cap()
+                    else self._transport(messages, self.model)
+                )
+            except Exception:
+                # A rejected request is still a request: it counts against the
+                # daily request limit even though it returned no tokens. Not
+                # counting it is how a retry storm quietly outspends its budget.
+                if self._budget is not None:
+                    self._budget.record(
+                        SERVICE_LLM, self.model, input_tokens=0, output_tokens=0
+                    )
+                raise
+            if self._budget is not None:
+                text, usage = result if isinstance(result, tuple) else (result, None)
+                if usage is None:
+                    # No usage metadata: the estimate is the only count there is.
+                    usage = Usage(estimated_input, estimate_tokens(text))
+                self._budget.record(
+                    SERVICE_LLM, self.model,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                )
+            return result
+
+        result = call_with_quota_backoff(
+            invoke,
             max_retries=self._max_retries,
             sleep=self._sleep,
             jitter=self._jitter,
@@ -232,6 +326,7 @@ class GoogleAnalysisClient:
                 "to reset or re-run with --no-llm."
             ),
         )
+        return result[0] if isinstance(result, tuple) else result
 
     # -- validated generation ---------------------------------------------- #
     def _generate_validated(self, messages: List[Dict[str, str]], model_cls):
