@@ -139,6 +139,20 @@ def test_load_runs_errors_when_nothing_is_found(tmp_path):
         load_runs(input_dir=empty)
 
 
+def test_a_mistyped_store_path_is_an_error_not_an_empty_store(tmp_path):
+    """`sql.connect` creates what it opens, which turns a typo into 'no runs'."""
+    missing = tmp_path / "typo.sqlite"
+    with pytest.raises(FileNotFoundError, match="No run store"):
+        load_runs(from_store=missing)
+
+
+def test_a_mistyped_store_path_leaves_no_database_behind(tmp_path):
+    missing = tmp_path / "typo.sqlite"
+    with pytest.raises(FileNotFoundError):
+        load_runs(from_store=missing)
+    assert not missing.exists()
+
+
 def test_load_runs_reports_an_unreadable_file(tmp_path):
     directory = tmp_path / "broken"
     directory.mkdir()

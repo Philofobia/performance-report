@@ -295,3 +295,59 @@ def test_vector_schema_init_is_idempotent(store):
     store.add(docs("a"), [[1, 0]], model=MODEL)
     SqliteVectorStore(store._conn)  # re-init must not wipe existing rows
     assert store.count() == 1
+
+
+# --------------------------------------------------------------------------- #
+# corpus caching — the same corpus is re-read once per analysed page
+# --------------------------------------------------------------------------- #
+def corpus_reads(conn):
+    """Count SELECTs against `embeddings` while the block runs."""
+    statements = []
+    conn.set_trace_callback(statements.append)
+    return statements
+
+
+def test_repeated_queries_read_the_corpus_once(store):
+    """A 10-page campaign rebuilt the whole matrix 10 times (20 with priors)."""
+    store.add(docs("a", "b", "c"), [[1, 0], [0, 1], [1, 1]], model=MODEL)
+    statements = corpus_reads(store._conn)
+
+    store.query([1, 0], k=2)
+    store.query([0, 1], k=2)
+    store.query([1, 1], k=2)
+
+    loads = [s for s in statements if "FROM embeddings" in s and "SELECT doc_id" in s]
+    assert len(loads) == 1
+
+
+def test_queries_scoped_differently_do_not_share_a_cache(store):
+    store.add(docs("a", kind="knowledge"), [[1, 0]], model=MODEL)
+    store.add(docs("f", kind="finding"), [[0, 1]], model=MODEL)
+
+    assert [h.doc_id for h in store.query([1, 0], k=5, kind="knowledge")] == ["a"]
+    assert [h.doc_id for h in store.query([0, 1], k=5, kind="finding")] == ["f"]
+
+
+def test_a_document_added_after_a_query_is_still_found(store):
+    """Cache invalidation on write — the way a cache like this goes wrong."""
+    store.add(docs("a"), [[1, 0]], model=MODEL)
+    store.query([1, 0], k=5)
+
+    store.add(docs("b"), [[0, 1]], model=MODEL)
+    assert {h.doc_id for h in store.query([0, 1], k=5)} == {"a", "b"}
+
+
+def test_a_deleted_document_stops_being_returned(store):
+    store.add(docs("a", "b"), [[1, 0], [0, 1]], model=MODEL)
+    store.query([1, 0], k=5)
+
+    store.delete(doc_ids=["b"])
+    assert [h.doc_id for h in store.query([0, 1], k=5)] == ["a"]
+
+
+def test_a_replaced_document_returns_its_new_text(store):
+    store.add(docs("a"), [[1, 0]], model=MODEL)
+    store.query([1, 0], k=5)
+
+    store.add([Document(doc_id="a", text="rewritten playbook")], [[1, 0]], model=MODEL)
+    assert store.query([1, 0], k=5)[0].text == "rewritten playbook"

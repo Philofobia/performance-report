@@ -88,8 +88,14 @@ def test_parse_output_is_accepted_by_build_manual_run():
 
 
 def test_constraints_are_read_from_the_schema_not_hardcoded():
+    """No `max` for CLS: the schema has no upper bound, so the markup has none.
+
+    This is the property the generation exists for — dropping `le=1` from
+    `CwpMetrics.cls` changed the rendered input without anyone editing the
+    template, which a hardcoded `max="1"` would have silently contradicted.
+    """
     cls_field = next(f for f in form.FIELDS if f.name == "cls")
-    assert form.constraints(cls_field) == {"min": 0, "max": 1, "step": "any"}
+    assert form.constraints(cls_field) == {"min": 0, "step": "any"}
 
 
 def test_lighthouse_constraints_track_the_schema():
@@ -109,17 +115,20 @@ def test_fields_without_a_schema_constraint_return_nothing():
 def test_nested_pydantic_loc_maps_back_to_the_form_field():
     """Validated through the real gate, so the loc is the real one.
 
-    `CwpMetrics(cls=1.5)` on its own reports `('cls',)`; the application never
+    `CwpMetrics(cls=-0.1)` on its own reports `('cls',)`; the application never
     validates that way, and a test that did would be pinning a path no request
     can reach.
+
+    A *negative* CLS is the invalid value here because CLS has no upper bound —
+    only the floor is a real constraint.
     """
     from ingest.manual import build_manual_run
 
     with pytest.raises(ValidationError) as exc:
-        build_manual_run(**form.parse(submitted(cls="1.5"))[0])
+        build_manual_run(**form.parse(submitted(cls="-0.1"))[0])
     errors = form.field_errors(exc.value)
     assert "cls" in errors
-    assert "less than or equal to 1" in errors["cls"]
+    assert "greater than or equal to 0" in errors["cls"]
 
 
 def test_page_and_project_url_errors_do_not_collide():

@@ -377,13 +377,14 @@ performance-projects/
 ├─ ingest/
 │  ├─ manual.py                    # CLI/JSON ingestion + validation
 │  ├─ automated.py                 # orchestrates browser run
+│  ├─ persist.py                   # per-condition sink: scrubbed artifacts + JSON + run store
 │  └─ browser/
 │     ├─ runner.py                 # Playwright lifecycle + emulation/throttling
 │     ├─ lighthouse.py             # Lighthouse over CDP
 │     └─ webser.py                 # web-vitals + network capture helpers
 ├─ normalize/
 │  ├─ schema.py                    # canonical run object → Pydantic model + validators
-│  └─ url_safety.py                # SSRF gate applied before any navigation
+│  └─ url_safety.py                # SSRF gate, before navigation and over the redirect chain
 ├─ store/
 │  ├─ sql.py                       # SQLite schema + queries (runs, metrics)
 │  ├─ vectordb.py                  # embeddings in SQLite + exact cosine search (§8.1)

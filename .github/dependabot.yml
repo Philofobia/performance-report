@@ -1,0 +1,39 @@
+# This repo pins every dependency it imports (requirements.txt says so in as
+# many words), which makes builds reproducible and makes updates invisible: a
+# pinned set with no update signal is how a project ends up shipping a version
+# with a published advisory. `pip-audit` in CI already fails the build when
+# that happens — this is what stops it from happening in the first place.
+#
+# Weekly and grouped, because a separate PR per pin on a 14-package manifest is
+# noise that gets ignored, and ignored update PRs are the same as no updates.
+version: 2
+
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the test tooling: these move together, they cannot affect
+      # what the shipped pipeline does, and the suite either passes or it does
+      # not.
+      test-tooling:
+        patterns:
+          - "pytest*"
+      # Everything the pipeline actually imports at runtime, split from the
+      # above so a red build points at one of the two without bisecting.
+      runtime:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "pytest*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"

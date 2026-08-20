@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from config.load import Device, Network, PageTarget, PageTest, ProjectConfig, Settings
 from ingest import automated
 from ingest.browser import cdp_metrics, lighthouse, webser
+from ingest.browser import runner as runner_mod
 from ingest.browser.runner import (
     BlockedResponseError,
     BrowserRunner,
@@ -79,11 +80,20 @@ class FakeMouse:
         self._log.append("click")
 
 
+class FakeRequest:
+    """Stand-in for a Playwright Request, including its redirect ancestry."""
+
+    def __init__(self, url, redirected_from=None):
+        self.url = url
+        self.redirected_from = redirected_from
+
+
 class FakeResponse:
     """Minimal stand-in for a Playwright Response."""
 
-    def __init__(self, status):
+    def __init__(self, status, request=None):
         self.status = status
+        self.request = request
 
 
 class FakePage:
@@ -102,7 +112,11 @@ class FakePage:
         goto_error=None,
         main_status=200,
         sub_statuses=(),
+        redirects=(),
     ):
+        #: URLs the document passed through *before* the one goto() settles on,
+        #: oldest first — Playwright exposes these via Request.redirected_from.
+        self._redirects = list(redirects)
         self.log = log
         self.gotos = []
         self.screenshots = []
@@ -136,7 +150,12 @@ class FakePage:
         for status in self._sub_statuses:
             for handler in self.listeners.get("response", []):
                 handler(FakeResponse(status))
-        return FakeResponse(self._main_status)
+        request = None
+        # You ask for `url` and the server sends you onward: the requested URL
+        # is the OLDEST hop and `redirects` are where it took you.
+        for hop in [url, *self._redirects]:
+            request = FakeRequest(hop, redirected_from=request)
+        return FakeResponse(self._main_status, request=request)
 
     def wait_for_load_state(self, *args, **kwargs):
         self.log.append(f"wait_for_load_state:{args[0] if args else ''}")
@@ -971,6 +990,28 @@ def test_median_measurement_picks_run_closest_to_median_lcp():
     assert automated.median_measurement(measurements)["captures"]["screenshot"] == "c.png"
 
 
+def test_median_measurement_treats_a_zero_lcp_as_a_real_value():
+    """`or target` read 0.0 as "no LCP" and scored it as a perfect match."""
+    measurements = [
+        {"cwp": {"lcp_ms": 0.0}, "captures": {"screenshot": "zero.png"}},
+        {"cwp": {"lcp_ms": 1000}, "captures": {"screenshot": "a.png"}},
+        {"cwp": {"lcp_ms": 1100}, "captures": {"screenshot": "b.png"}},
+    ]
+    picked = automated.median_measurement(measurements)
+    assert picked["captures"]["screenshot"] == "a.png"   # median is 1000
+
+
+def test_median_measurement_never_picks_an_unmeasured_run_as_representative():
+    """A run with no LCP scored as an exact match and donated the artifacts."""
+    measurements = [
+        {"cwp": {}, "captures": {"screenshot": "nothing.png"}},
+        {"cwp": {"lcp_ms": 1000}, "captures": {"screenshot": "a.png"}},
+        {"cwp": {"lcp_ms": 1100}, "captures": {"screenshot": "b.png"}},
+    ]
+    picked = automated.median_measurement(measurements)
+    assert picked["captures"]["screenshot"] == "a.png"
+
+
 def test_median_measurement_handles_empty_and_missing_lcp():
     assert automated.median_measurement([]) == {}
     measurements = [{"cwp": {}}, {"cwp": {}}]
@@ -1307,6 +1348,55 @@ def test_run_campaign_runs_are_schema_valid_and_distinct():
     cfg = make_cfg()
     runs = automated.run_campaign(cfg, RecordingRunner())
     assert len({r.run_id for r in runs}) == len(runs)
+
+
+# --------------------------------------------------------------------------- #
+# on_run — incremental persistence
+# --------------------------------------------------------------------------- #
+class FailingRunner(RecordingRunner):
+    """Measures normally until the Nth condition, then raises."""
+
+    def __init__(self, fail_on_call: int):
+        super().__init__()
+        self._fail_on_call = fail_on_call
+
+    def run_condition(self, *args, **kwargs):
+        if len(self.calls) + 1 == self._fail_on_call:
+            raise RuntimeError("the browser fell over")
+        return super().run_condition(*args, **kwargs)
+
+
+def test_on_run_receives_each_run_as_its_condition_completes():
+    """Not once at the end: the sink is what makes a run durable."""
+    seen = []
+    runs = automated.run_campaign(make_cfg(), RecordingRunner(), on_run=seen.append)
+    assert [r.run_id for r in seen] == [r.run_id for r in runs]
+
+
+def test_on_run_keeps_the_runs_measured_before_a_later_condition_failed():
+    """A campaign that dies on its last page keeps the pages that worked.
+
+    `make_cfg` is 3 conditions over 6 navigations; failing on the 6th kills the
+    final (pdp) condition after the two homepage conditions are complete.
+    Without a per-condition sink those five successful navigations are lost.
+    """
+    seen = []
+    with pytest.raises(RuntimeError):
+        automated.run_campaign(
+            make_cfg(), FailingRunner(fail_on_call=6), on_run=seen.append
+        )
+    assert [r.page.name for r in seen] == ["homepage", "homepage"]
+
+
+def test_run_campaign_returns_what_the_sink_gives_back():
+    """The sink repoints captures at the stored copies; the campaign keeps those."""
+    def relabel(run):
+        return run.model_copy(update={"run_id": f"stored_{run.run_id}"})
+
+    runs = automated.run_campaign(
+        make_cfg(), RecordingRunner(), pages=["pdp"], on_run=relabel
+    )
+    assert runs[0].run_id.startswith("stored_run_")
     for run in runs:
         assert run.metrics.cwp.lcp_ms is not None
         assert run.meta.source == "automated"
@@ -1445,6 +1535,215 @@ def test_cli_writes_one_json_per_run(monkeypatch, tmp_path, capsys):
     assert data["page"]["name"] == "pdp"
     assert data["meta"]["source"] == "automated"
     assert data["metrics"]["cwp"]["inp_ms"] == 100
+
+
+def _cfg_with_store(tmp_path, monkeypatch):
+    """A config whose run store lives in the test's own tmp dir."""
+    cfg = make_cfg()
+    cfg.settings.storage.sqlite_path = str(tmp_path / "runs.sqlite")
+    monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
+    return cfg
+
+
+def test_cli_records_the_campaign_in_the_run_store(monkeypatch, tmp_path):
+    """Without this, `list-runs` is empty and trends never accumulate."""
+    from store import sql
+
+    _cfg_with_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        automated, "_real_runner", lambda cfg=None: (None, None, RecordingRunner())
+    )
+
+    code = automated.main([
+        "--pages", "pdp", "--output-dir", str(tmp_path / "processed"),
+    ])
+    assert code == 0
+
+    conn = sql.connect(tmp_path / "runs.sqlite")
+    try:
+        assert [r.page.name for r in sql.list_runs(conn)] == ["pdp"]
+    finally:
+        conn.close()
+
+
+def test_cli_no_store_flag_skips_the_run_store(monkeypatch, tmp_path):
+    _cfg_with_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        automated, "_real_runner", lambda cfg=None: (None, None, RecordingRunner())
+    )
+
+    code = automated.main([
+        "--pages", "pdp", "--no-store", "--output-dir", str(tmp_path / "processed"),
+    ])
+    assert code == 0
+    assert not (tmp_path / "runs.sqlite").exists()
+
+
+def test_cli_keeps_the_runs_it_completed_before_a_failure(monkeypatch, tmp_path):
+    """A campaign that dies on its last condition keeps the earlier ones.
+
+    `make_cfg` is 6 navigations across 3 conditions; failing on the 6th leaves
+    the two homepage conditions complete. Before the per-condition sink, `main`
+    wrote nothing at all in this case.
+    """
+    _cfg_with_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        automated,
+        "_real_runner",
+        lambda cfg=None: (None, None, FailingRunner(fail_on_call=6)),
+    )
+
+    out = tmp_path / "processed"
+    code = automated.main(["--output-dir", str(out)])
+    assert code == 1
+    assert sorted(p.name for p in out.glob("*.json")) == [
+        "homepage__desktop__fast-3g.json",
+        "homepage__mid-mobile__slow-4g.json",
+    ]
+
+
+def test_cli_says_what_it_kept_when_a_campaign_fails(monkeypatch, tmp_path, capsys):
+    _cfg_with_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        automated,
+        "_real_runner",
+        lambda cfg=None: (None, None, FailingRunner(fail_on_call=6)),
+    )
+
+    automated.main(["--output-dir", str(tmp_path / "processed")])
+    err = capsys.readouterr().err
+    assert "2" in err and "kept" in err.lower()
+
+
+def test_cli_scrubs_captures_into_the_store(monkeypatch, tmp_path):
+    """The HAR the appendix later reads must be the redacted one."""
+    import json as _json
+
+    cfg = _cfg_with_store(tmp_path, monkeypatch)
+    cfg.settings.storage.raw_dir = str(tmp_path / "store")
+
+    raw = tmp_path / "raw" / "capture.har"
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text(_json.dumps({"log": {"version": "1.2", "entries": [{
+        "request": {"url": "https://example.com/",
+                    "headers": [{"name": "Cookie", "value": "session=abc123"}]},
+        "response": {"headers": [], "content": {"size": 10}},
+    }]}}), encoding="utf-8")
+
+    class HarRunner(RecordingRunner):
+        def run_condition(self, *args, **kwargs):
+            measured = super().run_condition(*args, **kwargs)
+            measured["captures"] = {"har": str(raw)}
+            return measured
+
+    monkeypatch.setattr(
+        automated, "_real_runner", lambda cfg=None: (None, None, HarRunner())
+    )
+
+    code = automated.main([
+        "--pages", "pdp", "--output-dir", str(tmp_path / "processed"),
+    ])
+    assert code == 0
+
+    written = next((tmp_path / "processed").glob("*.json"))
+    stored_har = _json.loads(written.read_text(encoding="utf-8"))["captures"]["har"]
+    assert "session=abc123" not in open(stored_har, encoding="utf-8").read()
+    assert not raw.exists()
+
+
+def test_a_failed_measurement_still_writes_its_trace(public_dns, tmp_path):
+    """The run you most want a trace of is the one that fell over.
+
+    Tracing was stopped on the success path only, so an exception anywhere in
+    collection took the trace down with it at `context.close()`.
+    """
+    def exploding_collect(page):
+        raise RuntimeError("collector exploded")
+
+    browser = FakeBrowser()
+    with pytest.raises(RuntimeError, match="collector exploded"):
+        make_runner(browser, collect=exploding_collect).run_condition(
+            "https://example.com/", DEVICE, NETWORK,
+            artifacts_dir=str(tmp_path), run_id="run_1",
+        )
+
+    _, ctx = browser.contexts[0]
+    assert ctx.tracing.stops, "trace was never stopped, so it was discarded"
+    assert ctx.closed is True
+
+
+def test_a_run_without_artifacts_stops_no_trace(public_dns):
+    """Nothing was started, so there is nothing to stop."""
+    browser = FakeBrowser()
+    make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    _, ctx = browser.contexts[0]
+    assert ctx.tracing.stops == []
+
+
+# --------------------------------------------------------------------------- #
+# Redirect safety — the SSRF gate covers where navigation ENDED, not just
+# where it was pointed
+# --------------------------------------------------------------------------- #
+def test_redirect_chain_is_read_oldest_first():
+    chain = FakeRequest(
+        "https://example.com/final",
+        redirected_from=FakeRequest("https://example.com/start"),
+    )
+    assert runner_mod.redirect_chain(FakeResponse(200, request=chain)) == [
+        "https://example.com/start",
+        "https://example.com/final",
+    ]
+
+
+def test_a_response_without_request_metadata_yields_no_chain():
+    """Nothing to check is not the same as something unsafe."""
+    assert runner_mod.redirect_chain(FakeResponse(200)) == []
+    assert runner_mod.redirect_chain(None) == []
+
+
+def test_a_redirect_onto_a_private_host_fails_the_run(monkeypatch):
+    """The gate validated the URL we asked for; this is where we arrived.
+
+    A public page that 30x-es onto an internal address is the SSRF the
+    pre-navigation check cannot see, and the block-page guard does not catch
+    it either — the internal host can answer a perfectly healthy 200.
+    """
+    def lookup(host):
+        return {"127.0.0.1"} if host == "internal.local" else {"8.8.8.8"}
+
+    monkeypatch.setattr(url_safety, "_lookup", lookup)
+    browser = FakeBrowser(
+        page_kwargs={"redirects": ["https://internal.local/admin"]}
+    )
+
+    with pytest.raises(runner_mod.UnsafeRedirectError) as excinfo:
+        make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    assert "internal.local" in str(excinfo.value)
+
+
+def test_a_redirect_downgrading_to_http_fails_the_run(public_dns):
+    browser = FakeBrowser(page_kwargs={"redirects": ["http://example.com/"]})
+    with pytest.raises(runner_mod.UnsafeRedirectError):
+        make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+
+
+def test_a_safe_redirect_chain_measures_normally(public_dns):
+    browser = FakeBrowser(
+        page_kwargs={"redirects": ["https://example.com/en", "https://example.com/en-us"]}
+    )
+    result = make_runner(browser).run_condition(
+        "https://example.com/", DEVICE, NETWORK
+    )
+    assert result["cwp"]["lcp_ms"] == 6200
+
+
+def test_an_unsafe_redirect_still_closes_the_context(public_dns):
+    """A refused measurement must not leak a browser context."""
+    browser = FakeBrowser(page_kwargs={"redirects": ["http://example.com/"]})
+    with pytest.raises(runner_mod.UnsafeRedirectError):
+        make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    _, ctx = browser.contexts[0]
+    assert ctx.closed is True
 
 
 def test_blocked_response_is_not_treated_as_unreachable(public_dns):
