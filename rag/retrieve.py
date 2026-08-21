@@ -116,10 +116,11 @@ def detect_symptoms(run: Run, thresholds: Optional[Thresholds] = None) -> List[S
             f"{th.fcp_good_ms}ms target.", "warn", "fcp_ms", cwp.fcp_ms, th.fcp_good_ms)
 
     # Main-thread work: TBT is the lab responsiveness signal.
-    if cwp.tbt_ms is not None and cwp.tbt_ms > 200:
+    if cwp.tbt_ms is not None and cwp.tbt_ms > th.tbt_good_ms:
         add("tbt_high", f"Total Blocking Time is {_fmt(cwp.tbt_ms)}ms - long tasks block the "
-            "main thread and delay interactivity.", "fail" if cwp.tbt_ms > 600 else "warn",
-            "tbt_ms", cwp.tbt_ms, 200)
+            "main thread and delay interactivity.",
+            "fail" if cwp.tbt_ms > th.tbt_fail_ms else "warn",
+            "tbt_ms", cwp.tbt_ms, th.tbt_good_ms)
 
     if mt.script_ms is not None and mt.task_ms and mt.script_ms > 0.5 * mt.task_ms:
         add("script_heavy", f"JavaScript execution accounts for {_fmt(mt.script_ms)}ms of "

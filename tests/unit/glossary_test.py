@@ -52,7 +52,9 @@ def test_targets_come_from_the_configured_thresholds(gl):
 
 
 def test_a_metric_with_no_configured_target_has_none(gl):
-    assert gl.target_for("tbt_ms", Thresholds()) is None
+    """Page weight has no threshold; the context column stays empty rather
+    than inventing one."""
+    assert gl.target_for("total_transfer_kb", Thresholds()) is None
 
 
 def test_context_states_how_far_over_target_a_value_is(gl):
@@ -63,7 +65,7 @@ def test_context_states_how_far_over_target_a_value_is(gl):
 
 def test_context_is_empty_without_a_target(gl):
     """An unconfigured threshold must not be reported as a pass."""
-    assert gl.context("tbt_ms", 2041.0, None) == ""
+    assert gl.context("total_transfer_kb", 2041.0, None) == ""
 
 
 def test_context_handles_a_zero_target_without_dividing_by_zero(gl):

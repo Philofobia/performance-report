@@ -204,6 +204,10 @@ class Thresholds(BaseModel):
     inp_fail_ms: int = 500
     fcp_good_ms: int = 1800
     ttfb_good_ms: int = 800
+    # Blocking time had its limits hard-coded in rag/retrieve.py, which left
+    # the report's most severe metric as the one row with no target beside it.
+    tbt_good_ms: int = 200
+    tbt_fail_ms: int = 600
 
 
 class ModelsConfig(BaseModel):

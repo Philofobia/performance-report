@@ -343,3 +343,12 @@ def test_appendix_captures_are_sized_to_share_a_page():
 
     assert appendix.screenshot_width_px == 480
     assert appendix.screenshot_max_height_px == 400
+
+
+def test_the_blocking_time_thresholds_are_configurable_like_the_others():
+    """TBT's limits were hard-coded in rag/retrieve.py, so the report's worst
+    metric was the one row with no target beside it."""
+    thresholds = cl.load_settings().thresholds
+
+    assert thresholds.tbt_good_ms == 200
+    assert thresholds.tbt_fail_ms == 600

@@ -34,6 +34,11 @@ thresholds:
   inp_fail_ms: 500
   fcp_good_ms: 1800
   ttfb_good_ms: 800
+  # Total Blocking Time. Not a Core Web Vital, but it is the metric that most
+  # often explains a poor INP, and on these pages it is the worst measurement
+  # of all — so it is configured here rather than hard-coded, like the rest.
+  tbt_good_ms: 200
+  tbt_fail_ms: 600
 
 models:
   # text-embedding-004 was retired by Google — the API now answers it with

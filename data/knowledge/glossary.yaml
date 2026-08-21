@@ -48,7 +48,7 @@ tbt_ms:
   label: Total blocking time
   unit: ms
   round: integer
-  target_key: null
+  target_key: tbt_good_ms
   plain: >-
     How long the page ignores taps and clicks after it first appears. The page
     looks ready and does nothing.
