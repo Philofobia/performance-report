@@ -252,3 +252,39 @@ def test_an_undecodable_settings_file_degrades_to_path_only_rows_with_a_stderr_n
     assert "data:image/png;base64," not in html
     assert 'data-section="appendix"' in html
     assert "Appendix images skipped" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# Reader-first ordering, end to end (design spec 2026-08-20)
+# --------------------------------------------------------------------------- #
+def test_the_rendered_report_reads_plain_first():
+    """Plan before pages, plain table before findings, evidence last."""
+    from report.render_html import render_html
+
+    html = render_html(a_report())
+
+    assert html.index('data-section="plan"') < html.index('data-section="page"')
+    assert (html.index('data-section="page.at-a-glance"')
+            < html.index('data-section="page.findings"')
+            < html.index('data-section="page.detail"'))
+
+
+def test_the_plan_is_ranked_and_drives_the_executive_summary():
+    report = a_report()
+
+    assert [a.rank for a in report.action_plan] == sorted(
+        a.rank for a in report.action_plan)
+    if report.action_plan:
+        assert report.summary.top_actions[0] == (
+            f"{report.action_plan[0].title} ({report.action_plan[0].page})")
+
+
+def test_both_renderings_agree_on_what_a_measurement_looks_like():
+    """One formatter, so the PDF and the Markdown cannot disagree."""
+    from report.render_html import render_html
+    from report.render_md import render_md
+
+    report = a_report()
+
+    assert "6200 ms" in render_md(report)
+    assert "6200" in render_html(report)

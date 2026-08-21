@@ -193,6 +193,18 @@ def _first_paragraph(text: str, limit: int = 400) -> str:
     return cleaned[:limit]
 
 
+def _evidence(symptom) -> str:
+    """One measurement, rounded the way the report shows it everywhere else.
+
+    Built as a string here, long before any renderer sees it, so the shared
+    formatter has to be applied at the point of construction — otherwise
+    ``lcp_ms=3439.7000000029802`` reaches the reader intact.
+    """
+    from report.glossary import load_glossary
+
+    return f"{symptom.metric}={load_glossary().format_value(symptom.metric, symptom.value)}"
+
+
 def _finding_title(symptom: Symptom) -> str:
     """A short title for a symptom-derived finding."""
     if symptom.metric in _METRIC_NAMES:
@@ -325,7 +337,7 @@ def rule_based_analysis(
         Finding(
             title=_finding_title(symptom),
             detail=symptom.text,
-            evidence=(f"{symptom.metric}={symptom.value}",) if symptom.metric else (),
+            evidence=(_evidence(symptom),) if symptom.metric else (),
             symptom_codes=(symptom.code,),
         )
         for symptom in symptoms

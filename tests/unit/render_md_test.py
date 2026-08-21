@@ -287,3 +287,15 @@ def test_markdown_prints_no_raw_floats():
 
 def test_markdown_carries_the_plain_language_consequence():
     assert "Taps do nothing" in render_md(a_report())
+
+
+def test_a_finding_without_a_consequence_still_says_something():
+    """Rule-based campaigns have no model to write one; an empty bullet is a bug."""
+    report = a_report()
+    report.pages[0].findings = [
+        report.pages[0].findings[0].model_copy(update={"consequence": ""})
+    ]
+
+    md = render_md(report)
+
+    assert "- **Hero video is the LCP element** 2140KB." in md

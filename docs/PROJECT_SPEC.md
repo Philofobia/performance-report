@@ -237,16 +237,30 @@ override the matrix at run time without editing the file.
 
 The PDF must have the **identical structure every time**; only data changes.
 
+Reader-first since the 2026-08-20 revision: plain language leads, evidence follows
+under a heading that says it is technical detail. The committed section list lives in
+`report/skeleton.baseline.json` and `report --skeleton-check` enforces it.
+
 | # | Section | Content type | Source |
 |---|---|---|---|
 | 0 | Cover page | Project, run id/date, tested pages, overall verdict badge | meta + scores |
 | 1 | Executive summary | Problem · key finding · top 3 actions | LLM (grounded) |
-| 2 | Key metrics dashboard | Score table + CWV gauges (LCP/CLS/INP against targets) | metrics |
-| 3 | Where the problem is | Waterfall / resource-size bar charts, per-phase LCP breakdown | resource_timings |
-| 4 | What it causes (impact) | Readable impact statements (UX, SEO, conversion proxies) | LLM + stats |
-| 5 | Improvements | Ordered recommendations, each with effort & expected magnitude | LLM + KB |
-| 6 | Expected improvements | Before/after projected chart (metric delta) per recommendation | estimator |
-| 7 | Methodology & appendix | Device/throttle profile, capture list, raw screenshots | captures |
+| 2 | What to do first | One ranked plan across every page, capped at six actions | estimator + priority |
+| 3 | Per page — at a glance | Each metric with its target, how far over, and a plain sentence | metrics + glossary |
+| 4 | Per page — what is wrong | Findings, each with a plain-language consequence | LLM (grounded) |
+| 5 | Per page — what to do | Ordered recommendations, each with effort & expected magnitude | LLM + KB |
+| 6 | Per page — technical detail | CWV dashboard, resource charts, LCP breakdown, trend, projections, impacts | metrics + estimator |
+| 7 | Cross-page comparison | One row per page × condition | metrics |
+| 8 | Methodology & appendix | Device/throttle profile, capture list, screenshots (thumbnailed) | captures |
+
+Ranking in section 2 is rule-based (`analysis/priority.py`): severity × the playbook's
+conservative projected gain, capped at the gap to target, ties broken by page then
+title. The model never orders it — ordering is a claim about magnitude, and magnitudes
+come from playbook metadata (§11).
+
+The plain-language layer in sections 3–5 comes from `data/knowledge/glossary.yaml`, a
+committed file rather than model output, so the same metric reads identically in every
+campaign. It also carries the rounding rules every renderer shares.
 
 ### 6.1 Chart inventory (rendered from data, same placement each run)
 Reports span all tested pages. Section **2/3** render the CWV dashboard and charts **once per

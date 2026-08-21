@@ -383,3 +383,22 @@ def test_plain_language_fields_reach_the_page_analysis():
     assert result.findings[0].consequence == "Taps do nothing for two seconds."
     assert result.recommendations[0].why_it_matters == (
         "The page reacts to taps sooner.")
+
+
+def test_rule_based_evidence_is_rounded_for_the_reader():
+    """`lcp_ms=3439.7000000029802` reached the rendered report.
+
+    A browser measures to microsecond precision; a reader does not read it.
+    """
+    import re
+
+    run = make_run(lcp=3439.7000000029802, cls=0.14462831674161655)
+    symptoms = retrieve.detect_symptoms(run, Thresholds())
+    chunks = knowledge.load_knowledge_dir("data/knowledge")
+
+    result = analyze_page([run], hits=[], symptoms=symptoms, client=None,
+                          chunks=chunks)
+
+    joined = " ".join(e for f in result.findings for e in f.evidence)
+    assert joined
+    assert not re.search(r"\d+\.\d{4,}", joined), joined

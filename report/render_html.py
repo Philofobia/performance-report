@@ -118,11 +118,18 @@ def glance_by_page(report) -> Dict[str, list]:
     in the Markdown mirror, and two templates computing them separately is how
     the two documents drift apart.
     """
-    from config.load import load_settings
+    from config.load import Thresholds, load_settings
     from report.glossary import glance_rows, load_glossary
 
     glossary = load_glossary()
-    thresholds = load_settings().thresholds
+    try:
+        thresholds = load_settings().thresholds
+    except Exception:
+        # Rendering must not depend on config being readable: the report layer
+        # already degrades an unreadable settings file to path-only appendix
+        # rows rather than losing the document. Defaults keep the targets
+        # column honest — they are the same numbers the shipped file carries.
+        thresholds = Thresholds()
     return {
         page.name: glance_rows(page, glossary, thresholds)
         for page in report.pages

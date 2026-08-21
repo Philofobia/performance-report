@@ -53,24 +53,29 @@ def _a_realistic_screenshot(path):
     return path
 
 
-def _pdf_has_image_xobject(pdf: bytes, *, width: int, height: int) -> bool:
-    """True when `pdf` contains an `/Image` XObject with these exact pixel
-    dimensions.
+def _pdf_image_xobjects(pdf: bytes) -> list:
+    """Every `/Image` XObject in `pdf`, as (width, height) in pixels.
 
-    This is what actually distinguishes "the screenshot reached Chromium's
-    print pipeline" from "the PDF changed size for some reason" — Chromium's
-    PDF writer emits one `/XObject` dictionary with `/Subtype /Image` per
-    raster image it embeds, carrying the image's `/Width` and `/Height` in
-    pixels. Matching the exact dimensions `report/images.py` computed for
-    this capture (not just *an* image existing somewhere) rules out a false
-    positive from an unrelated image elsewhere in the document.
+    Chromium's PDF writer emits one `/XObject` dictionary with
+    `/Subtype /Image` per raster image it embeds. Counting them distinguishes
+    "the screenshot reached Chromium's print pipeline" from "the PDF changed
+    size for some reason", and it stays true however the print CSS scales the
+    image — which the exact-dimension match this replaced did not. Capping
+    `.shot img` at 9cm has Chromium re-encode a tall capture at a smaller
+    raster, so pinning the *source's* pixel dimensions started failing for a
+    reason unrelated to whether the image arrived.
+
+    Charts are inline SVG and produce no `/Image` XObject at all, so an empty
+    list really does mean no screenshot reached the document.
     """
+    found = []
     for marker in re.finditer(rb"/Subtype\s*/Image", pdf):
         window = pdf[marker.end():marker.end() + 200]
-        if (re.search(rb"/Width\s+%d\b" % width, window)
-                and re.search(rb"/Height\s+%d\b" % height, window)):
-            return True
-    return False
+        width = re.search(rb"/Width\s+(\d+)", window)
+        height = re.search(rb"/Height\s+(\d+)", window)
+        if width and height:
+            found.append((int(width.group(1)), int(height.group(1))))
+    return found
 
 
 def test_an_embedded_screenshot_reaches_the_pdf(tmp_path):
@@ -113,10 +118,8 @@ def test_an_embedded_screenshot_reaches_the_pdf(tmp_path):
     )
     without_images = render_pdf(render_html(report), page_factory=chromium_page_factory)
 
-    assert _pdf_has_image_xobject(with_images, width=embedded.width, height=embedded.height)
-    assert not _pdf_has_image_xobject(
-        without_images, width=embedded.width, height=embedded.height
-    )
+    assert _pdf_image_xobjects(with_images), "no raster image reached the PDF"
+    assert _pdf_image_xobjects(without_images) == []
 
     # Non-gating observation, not an assertion (see docstring): the size
     # comparison is fragile to compression changes, so a shrink is reported

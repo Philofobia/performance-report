@@ -1,7 +1,7 @@
 """Unit tests for analysis/priority.py — one ordered plan across all pages."""
 from __future__ import annotations
 
-from analysis.priority import rank_actions
+from analysis.priority import PLAN_LIMIT, rank_actions
 from analysis.reportmodel import (
     PageBlock,
     ProjectionModel,
@@ -147,3 +147,32 @@ def test_a_page_target_beats_the_glossary_default():
 
     # Gain is capped at the 100ms gap, not the claimed 5000ms.
     assert _rank([page])[0].projected == "6000 ms → 1000 ms"
+
+
+def test_the_plan_is_capped_so_it_reads_as_a_plan():
+    """Eighteen actions is a backlog. The rest still appear under their pages."""
+    pages = [
+        _page(f"p{i}", metric="tbt_ms", value=1000.0 + i, severity="fail",
+              gain=100.0 + i, title=f"Action {i}")
+        for i in range(12)
+    ]
+
+    plan = _rank(pages)
+
+    assert len(plan) == PLAN_LIMIT
+    assert [a.rank for a in plan] == list(range(1, PLAN_LIMIT + 1))
+
+
+def test_the_cap_keeps_the_highest_scoring_actions():
+    pages = [
+        _page("small", metric="tbt_ms", value=1000.0, severity="fail", gain=10.0,
+              title="Small"),
+    ] + [
+        _page(f"big{i}", metric="tbt_ms", value=9000.0, severity="fail",
+              gain=2000.0 + i, title=f"Big {i}")
+        for i in range(PLAN_LIMIT)
+    ]
+
+    titles = [a.title for a in _rank(pages)]
+
+    assert "Small" not in titles

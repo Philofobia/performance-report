@@ -22,12 +22,14 @@ _No actions identified._
 
 ## What to do first
 
-Every page's actions in one order, worst payoff last. Effort is the playbook's
+The highest-payoff work across every page, in order. Effort is the playbook's
 own estimate; the expected change is the conservative end of its stated range.
+Each page lists its own remaining recommendations below.
 
 {% if report.action_plan %}
 {% for action in report.action_plan %}
-{{ action.rank }}. **{{ action.title }}** ({{ action.page }}) — {{ action.why_it_matters or action.title }} (effort: {{ action.effort }}{% if action.projected %}; expected: {{ action.projected }}{% endif %}; source: {{ action.playbook_source }})
+{% set why = (' — ' ~ action.why_it_matters) if action.why_it_matters else '' %}{% set expected = ('; expected: ' ~ action.projected) if action.projected else '' %}
+{{ action.rank }}. **{{ action.title }}** ({{ action.page }}){{ why }} (effort: {{ action.effort }}{{ expected }}; source: {{ action.playbook_source }})
 {% endfor %}
 {% else %}
 _No actions could be ranked for this campaign._
@@ -52,7 +54,7 @@ _No actions could be ranked for this campaign._
 
 {% if page.findings %}
 {% for finding in page.findings %}
-- **{{ finding.title }}** {{ finding.consequence }}
+- **{{ finding.title }}** {{ finding.consequence or finding.detail }}
 {% endfor %}
 {% else %}
 _No findings were produced for this page._

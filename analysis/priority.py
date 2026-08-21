@@ -15,6 +15,12 @@ from __future__ import annotations
 
 from typing import Any, List, Optional, Sequence
 
+#: How many actions the plan carries. A campaign of three pages produced
+#: eighteen ranked recommendations, which is a backlog rather than a plan —
+#: nobody reads to number fourteen. The rest are not lost: every page still
+#: lists its own recommendations in full.
+PLAN_LIMIT = 6
+
 #: How much a page's own verdict on the metric weighs.
 SEVERITY_WEIGHT = {"fail": 2.0, "warn": 1.0}
 DEFAULT_WEIGHT = 0.5
@@ -97,7 +103,8 @@ def rank_actions(pages: Sequence[Any], *, glossary: Any,
     scored.sort(key=lambda row: (-row[0], row[1].name, row[2].title))
 
     plan: List[Any] = []
-    for index, (_score, page, recommendation) in enumerate(scored, start=1):
+    for index, (_score, page, recommendation) in enumerate(scored[:PLAN_LIMIT],
+                                                           start=1):
         projection = _primary_projection(recommendation)
         projected = ""
         metric = None
