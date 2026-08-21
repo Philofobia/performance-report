@@ -104,6 +104,8 @@ class Finding:
 
     title: str
     detail: str = ""
+    #: Plain-language consequence for a reader who is not an engineer.
+    consequence: str = ""
     evidence: Tuple[str, ...] = ()
     symptom_codes: Tuple[str, ...] = ()
 
@@ -125,6 +127,9 @@ class Recommendation:
     playbook_source: str
     playbook_section: str
     effort: str
+    #: Plain-language case for doing it, for whoever funds the work. Empty on
+    #: the rule-based path, which has no author to write one.
+    why_it_matters: str = ""
     projections: Tuple[Projection, ...] = ()
 
 
@@ -188,6 +193,18 @@ def _first_paragraph(text: str, limit: int = 400) -> str:
     return cleaned[:limit]
 
 
+def _evidence(symptom) -> str:
+    """One measurement, rounded the way the report shows it everywhere else.
+
+    Built as a string here, long before any renderer sees it, so the shared
+    formatter has to be applied at the point of construction — otherwise
+    ``lcp_ms=3439.7000000029802`` reaches the reader intact.
+    """
+    from report.glossary import load_glossary
+
+    return f"{symptom.metric}={load_glossary().format_value(symptom.metric, symptom.value)}"
+
+
 def _finding_title(symptom: Symptom) -> str:
     """A short title for a symptom-derived finding."""
     if symptom.metric in _METRIC_NAMES:
@@ -234,10 +251,12 @@ def build_recommendations(
     projections: Mapping[str, Sequence[Projection]],
 ) -> List[Recommendation]:
     """Assemble ordered recommendations from ``(title, rationale, source,
-    section, metadata)`` rows and the projections grouped by source.
+    section, metadata, why_it_matters)`` rows and projections grouped by source.
 
     Shared by both paths so LLM-authored and rule-based recommendations are
-    ordered by exactly the same rule (§7.1).
+    ordered by exactly the same rule (§7.1). ``why_it_matters`` is the model's
+    plain-language case for the work, empty on the rule-based path — which has
+    no author to write one.
     """
     from analysis.estimator import rank_key
 
@@ -245,12 +264,13 @@ def build_recommendations(
         Recommendation(
             title=title,
             rationale=rationale,
+            why_it_matters=why_it_matters,
             playbook_source=source,
             playbook_section=section,
             effort=effort_of(metadata),
             projections=tuple(projections.get(source, ())),
         )
-        for title, rationale, source, section, metadata in rows
+        for title, rationale, source, section, metadata, why_it_matters in rows
     ]
     return sorted(
         built, key=lambda r: rank_key(r.playbook_source, r.title, r.projections)
@@ -280,7 +300,7 @@ def _rule_based_recommendations(
     return build_recommendations(
         [
             (chunk.heading_path[-1], _first_paragraph(chunk.text),
-             chunk.source, chunk.heading_path[-1], chunk.metadata)
+             chunk.source, chunk.heading_path[-1], chunk.metadata, "")
             for chunk in selected
         ],
         projections,
@@ -317,7 +337,7 @@ def rule_based_analysis(
         Finding(
             title=_finding_title(symptom),
             detail=symptom.text,
-            evidence=(f"{symptom.metric}={symptom.value}",) if symptom.metric else (),
+            evidence=(_evidence(symptom),) if symptom.metric else (),
             symptom_codes=(symptom.code,),
         )
         for symptom in symptoms
@@ -476,7 +496,7 @@ def analyze_page(
     recommendations = build_recommendations(
         [
             (rec.title, rec.rationale, rec.playbook_source, rec.playbook_section,
-             allowed[rec.playbook_source])
+             allowed[rec.playbook_source], getattr(rec, "why_it_matters", "") or "")
             for rec in kept
         ],
         projections,
@@ -487,6 +507,7 @@ def analyze_page(
         Finding(
             title=f.title,
             detail=f.detail,
+            consequence=getattr(f, "consequence", "") or "",
             evidence=tuple(f.evidence),
             symptom_codes=tuple(c for c in f.symptom_codes if c in detected),
         )

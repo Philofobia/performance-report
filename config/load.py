@@ -204,6 +204,10 @@ class Thresholds(BaseModel):
     inp_fail_ms: int = 500
     fcp_good_ms: int = 1800
     ttfb_good_ms: int = 800
+    # Blocking time had its limits hard-coded in rag/retrieve.py, which left
+    # the report's most severe metric as the one row with no target beside it.
+    tbt_good_ms: int = 200
+    tbt_fail_ms: int = 600
 
 
 class ModelsConfig(BaseModel):
@@ -264,8 +268,8 @@ class AppendixConfig(BaseModel):
     """
 
     top_requests: int = Field(default=15, ge=1)
-    screenshot_width_px: int = Field(default=720, ge=64)
-    screenshot_max_height_px: int = Field(default=1600, ge=64)
+    screenshot_width_px: int = Field(default=480, ge=64)
+    screenshot_max_height_px: int = Field(default=400, ge=64)
 
 
 class ReportConfig(BaseModel):

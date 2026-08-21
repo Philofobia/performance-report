@@ -56,7 +56,12 @@ playbooks. If a playbook gives no range, say the magnitude is unknown.
 4. If the evidence does not support a conclusion, say so plainly rather than \
 speculating.
 5. Report only what the data shows. Do not describe performance as good or bad \
-because someone asked you to.\
+because someone asked you to.
+6. Your reader is a project manager with no performance background. Write the \
+consequence of each finding, and the case for each recommendation, in plain \
+language: what a visitor to this page experiences, and what is gained by \
+fixing it. Do not restate metric values in those fields - the report prints \
+the numbers itself, with their targets, right beside your words.\
 """
 
 

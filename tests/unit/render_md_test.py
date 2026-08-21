@@ -42,20 +42,20 @@ def test_the_trend_mirrors_the_html_section():
     from tests.unit.render_html_test import a_trend
 
     markdown = render_md(a_report(trends=[a_trend()]))
-    assert "**Trend**" in markdown
+    assert "_Trend_" in markdown
     assert "| Condition | Metric | History | Direction | Change |" in markdown
-    assert "6200.0 → 4820.0" in markdown
+    assert "6200 ms → 4820 ms" in markdown
     assert "-22.3%" in markdown
     # The mirror names metrics the way the HTML does, not by raw field name.
     # Scoped to the trend row: `lcp_ms=6200` legitimately appears elsewhere as
     # a finding's evidence.
-    row = next(line for line in markdown.splitlines() if "6200.0 → 4820.0" in line)
+    row = next(line for line in markdown.splitlines() if "6200 ms → 4820 ms" in line)
     assert "| LCP |" in row
     assert "lcp_ms" not in row
 
 
 def test_a_page_with_no_history_says_so_in_the_mirror():
-    assert "No prior campaigns" in render_md(a_report())
+    assert "no history to compare yet" in render_md(a_report())
 
 
 def test_empty_recommendations_render_an_empty_state():
@@ -243,5 +243,59 @@ def test_each_finding_is_its_own_markdown_bullet():
     markdown = render_md(report)
     bullets = [ln for ln in markdown.splitlines() if ln.startswith("- **")]
     titles = [b for b in bullets if "First problem" in b or "Second problem" in b]
-    assert len(titles) == 2, f"findings collapsed onto one line: {bullets}"
+    # Each finding appears twice by design: once in plain language under "What
+    # is wrong", once with its evidence under "Technical detail".
+    assert len(titles) == 4, f"findings collapsed onto one line: {bullets}"
     assert not any("First problem" in b and "Second problem" in b for b in bullets)
+
+
+# --------------------------------------------------------------------------- #
+# Reader-first structure (design spec 2026-08-20)
+# --------------------------------------------------------------------------- #
+def test_markdown_carries_the_plan_and_the_glance_table():
+    md = render_md(a_report())
+
+    assert "## What to do first" in md
+    assert "| Metric | Measured | Target | Verdict | What it means |" in md
+
+
+def test_markdown_leads_with_the_plan():
+    md = render_md(a_report())
+
+    assert md.index("## What to do first") < md.index("## Pages")
+
+
+def test_markdown_groups_the_evidence_under_its_own_heading():
+    md = render_md(a_report())
+
+    assert "**Technical detail**" in md
+    assert md.index("**What is wrong**") < md.index("**Technical detail**")
+
+
+def test_markdown_prints_no_raw_floats():
+    """The trend table joined point values straight from the model."""
+    trends = [{
+        "page": "homepage", "metric": "lcp_ms", "device": "mid-mobile",
+        "network": "slow-4g", "direction": "regressed", "delta_pct": 4.2,
+        "crossed": None,
+        "points": [{"run_id": "r1", "value": 2438.5999999940395, "at": "c1"},
+                   {"run_id": "r2", "value": 2540.111111, "at": "c2"}],
+    }]
+
+    assert not re.search(r"\d+\.\d{4,}", render_md(a_report(trends=trends)))
+
+
+def test_markdown_carries_the_plain_language_consequence():
+    assert "Taps do nothing" in render_md(a_report())
+
+
+def test_a_finding_without_a_consequence_still_says_something():
+    """Rule-based campaigns have no model to write one; an empty bullet is a bug."""
+    report = a_report()
+    report.pages[0].findings = [
+        report.pages[0].findings[0].model_copy(update={"consequence": ""})
+    ]
+
+    md = render_md(report)
+
+    assert "- **Hero video is the LCP element** 2140KB." in md

@@ -718,3 +718,17 @@ def test_prior_findings_are_labelled_by_kind_not_by_prefix():
 
     assert 'kind="prior-finding" source="storefront/homepage"' in built.user
     assert "prior-finding:storefront/homepage" not in built.user
+
+
+def test_blocking_time_symptoms_follow_the_configured_thresholds():
+    from config.load import Thresholds
+
+    strict = Thresholds(tbt_good_ms=10, tbt_fail_ms=20)
+    run = make_run(metrics={"cwp": {"lcp_ms": 1000, "cls": 0.01, "inp_ms": 10,
+                                    "fcp_ms": 500, "ttfb_ms": 100,
+                                    "tbt_ms": 30}})
+
+    codes = {s.code: s for s in retrieve.detect_symptoms(run, strict)}
+
+    assert codes["tbt_high"].severity == "fail"
+    assert codes["tbt_high"].target == 10

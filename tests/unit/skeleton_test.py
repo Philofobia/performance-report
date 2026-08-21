@@ -304,3 +304,34 @@ def test_the_old_appendix_reuse_would_lose_the_capture_children():
     assert broken == ["methodology", "appendix[]"]
     assert "appendix.screenshot" not in broken
     assert "appendix.requests" not in broken
+
+
+# --------------------------------------------------------------------------- #
+# Reader-first order (design spec 2026-08-20)
+# --------------------------------------------------------------------------- #
+def test_the_baseline_leads_with_plain_language():
+    """Order is the promise here: a reader meets the plan and the plain
+    at-a-glance table before any dashboard."""
+    sections = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))["sections"]
+
+    assert sections.index("plan") < sections.index("page[]")
+    assert sections.index("page.at-a-glance") < sections.index("page.findings")
+    assert sections.index("page.findings") < sections.index("page.detail")
+    assert sections.index("page.detail") < sections.index("page.cwv-dashboard")
+
+
+def test_the_evidence_blocks_all_live_inside_the_detail_wrapper():
+    sections = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))["sections"]
+    detail_at = sections.index("page.detail")
+
+    for block in ("page.cwv-dashboard", "page.resources", "page.lcp-breakdown",
+                  "page.trend", "page.projections", "page.impacts"):
+        assert sections.index(block) > detail_at, block
+
+
+def test_a_report_rendered_against_the_old_order_is_caught_as_drift():
+    """The guard must still fail when a section moves."""
+    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))["sections"]
+    stale = [s for s in baseline if s != "plan"]
+
+    assert diff_sections(stale, baseline)

@@ -34,6 +34,11 @@ thresholds:
   inp_fail_ms: 500
   fcp_good_ms: 1800
   ttfb_good_ms: 800
+  # Total Blocking Time. Not a Core Web Vital, but it is the metric that most
+  # often explains a poor INP, and on these pages it is the worst measurement
+  # of all — so it is configured here rather than hard-coded, like the rest.
+  tbt_good_ms: 200
+  tbt_fail_ms: 600
 
 models:
   # text-embedding-004 was retired by Google — the API now answers it with
@@ -63,11 +68,14 @@ report:
     # listing without ever misrepresenting the capture.
     top_requests: 15
     # Screenshots are downscaled before embedding; a full-page mobile capture
-    # is otherwise several MB of base64 per entry.
-    screenshot_width_px: 720
+    # is otherwise several MB of base64 per entry. They are sized to share a
+    # page with their request table rather than own one — six full-page
+    # captures made a three-page campaign a forty-page PDF. The
+    # full-resolution PNG stays under data/raw and is linked beneath each.
+    screenshot_width_px: 480
     # Beyond this height the image is cropped from the top, and the caption
     # says so.
-    screenshot_max_height_px: 1600
+    screenshot_max_height_px: 400
 
 trends:
   # Campaign-over-campaign comparison. A change smaller than this reads as

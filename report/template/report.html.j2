@@ -59,6 +59,32 @@
   {% endif %}
 </section>
 
+<section data-section="plan" class="sheet">
+  <p class="eyebrow">Plan</p>
+  <h2>What to do first</h2>
+  <p class="lede">The highest-payoff work across every page, in order. Effort is
+    the playbook's own estimate; the expected change is the conservative end of
+    its stated range. Each page lists its own remaining recommendations
+    below.</p>
+  {% if report.action_plan %}
+  <ol class="plan">
+    {% for action in report.action_plan %}
+    <li>
+      <p class="rec-title">{{ action.title }} <span class="plan-page">{{ action.page }}</span></p>
+      {% if action.why_it_matters %}<p class="serif">{{ action.why_it_matters }}</p>{% endif %}
+      <p class="rec-meta">
+        <span class="tag tag--{{ action.effort }}">{{ action.effort }} effort</span>
+        {% if action.projected %}<span class="delta">{{ action.projected }}</span>{% endif %}
+        <span class="mono">{{ action.playbook_source }}</span>
+      </p>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="empty">No actions could be ranked for this campaign.</p>
+  {% endif %}
+</section>
+
 {% for page in report.pages %}
 <section data-section="page" data-page="{{ page.name }}" class="sheet page">
 
@@ -78,89 +104,23 @@
     </div>
   </div>
 
-  <div data-section="page.cwv-dashboard" class="block">
-    <h3>Core Web Vitals</h3>
-    {% if charts.pages[page.name].gauges %}
-      <div class="chart">{{ charts.pages[page.name].gauges|safe }}</div>
-    {% else %}
-      <p class="empty">No Core Web Vitals were measured for this page.</p>
-    {% endif %}
-    <table class="metrics">
-      <thead><tr><th>Condition</th><th>LCP</th><th>CLS</th><th>INP</th><th>TBT</th></tr></thead>
+  <div data-section="page.at-a-glance" class="block">
+    <h3>At a glance</h3>
+    <table class="metrics glance">
+      <thead><tr><th>Metric</th><th>Measured</th><th>Target</th>
+        <th>Verdict</th><th>What it means</th></tr></thead>
       <tbody>
-      {% for row in page.conditions %}
+      {% for row in glance[page.name] %}
         <tr>
-          <td>{{ row.device }} / {{ row.network }}</td>
-          <td>{{ row.metrics.lcp_ms|round|int if row.metrics.lcp_ms is not none else '—' }}<span class="unit">ms</span>{% if row.lcp_underestimated %}<span class="qualifier">†</span>{% endif %}</td>
-          <td>{{ '%.2f'|format(row.metrics.cls) if row.metrics.cls is not none else '—' }}</td>
-          <td>{{ row.metrics.inp_ms|round|int if row.metrics.inp_ms is not none else '—' }}<span class="unit">ms</span></td>
-          <td>{{ row.metrics.tbt_ms|round|int if row.metrics.tbt_ms is not none else '—' }}<span class="unit">ms</span></td>
+          <td>{{ row.label }}</td>
+          <td>{{ row.value }}</td>
+          <td>{{ row.target }}</td>
+          <td class="verdict-cell">{{ row.verdict }}</td>
+          <td class="serif plain">{{ row.plain }}</td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
-    {% if page.conditions|selectattr('lcp_underestimated')|list %}
-      <p class="qualifier-note">
-        † LCP is a <strong>lower bound</strong> for this condition. The largest
-        element on the page was a cross-origin resource served without a
-        <code>Timing-Allow-Origin</code> header, so the browser exposed no render
-        time for it. The figure shown is the largest element that <em>did</em>
-        report a time; the real LCP is later by an unknown margin.
-      </p>
-    {% endif %}
-  </div>
-
-  <div data-section="page.trend" class="block">
-    <h3>Trend</h3>
-    {% if page.trends %}
-      <div class="trend-grid">
-      {% for series in page.trends %}
-        <figure class="trend trend--{{ series.direction }}">
-          <figcaption>
-            <span class="trend-metric">{{ series.metric|metric_label }}</span>
-            <span class="trend-condition">{{ series.device }} / {{ series.network }}</span>
-            <span class="trend-direction">{{ series.direction }}</span>
-            {% if series.delta_pct is not none %}
-              <span class="trend-delta">{{ '%+.1f'|format(series.delta_pct) }}%</span>
-            {% endif %}
-            {% if series.crossed %}
-              <span class="trend-crossed">{{ series.crossed }}</span>
-            {% endif %}
-          </figcaption>
-          {% if charts.pages[page.name].trends[loop.index0] %}
-            <div class="chart">{{ charts.pages[page.name].trends[loop.index0]|safe }}</div>
-          {% else %}
-            <p class="empty">First campaign for this condition — no prior campaigns to compare against.</p>
-          {% endif %}
-        </figure>
-      {% endfor %}
-      </div>
-    {% else %}
-      <p class="empty">No prior campaigns for this condition.</p>
-    {% endif %}
-  </div>
-
-  <div data-section="page.resources" class="block">
-    <h3>Where the weight is</h3>
-    {% if charts.pages[page.name].resources %}
-      <div class="chart">{{ charts.pages[page.name].resources|safe }}</div>
-    {% else %}
-      <p class="empty">No resource timings were captured for this page.</p>
-    {% endif %}
-    {% if charts.pages[page.name].donut %}
-      <div class="chart chart--inset">{{ charts.pages[page.name].donut|safe }}</div>
-    {% else %}
-      <p class="empty">No transfer sizes were captured by resource type.</p>
-    {% endif %}
-  </div>
-
-  <div data-section="page.lcp-breakdown" class="block">
-    <h3>LCP breakdown</h3>
-    {% if charts.pages[page.name].lcp %}
-      <div class="chart">{{ charts.pages[page.name].lcp|safe }}</div>
-    {% else %}
-      <p class="empty">Not available — this run did not measure the paint milestones the breakdown is derived from.</p>
-    {% endif %}
   </div>
 
   <div data-section="page.findings" class="block">
@@ -171,6 +131,7 @@
       {% for finding in page.findings %}
       <li>
         <p class="finding-title">{{ finding.title }}</p>
+        {% if finding.consequence %}<p class="serif consequence">{{ finding.consequence }}</p>{% endif %}
         {% if finding.detail %}<p class="serif">{{ finding.detail }}</p>{% endif %}
         {% if finding.evidence %}
         <p class="evidence mono">{{ finding.evidence|join('   ') }}</p>
@@ -183,19 +144,6 @@
     {% endif %}
   </div>
 
-  <div data-section="page.impacts" class="block">
-    <h3>What it costs</h3>
-    {% if page.impacts %}
-    <dl class="impacts">
-      {% for impact in page.impacts %}
-      <dt>{{ impact.audience }}</dt><dd class="serif">{{ impact.text }}</dd>
-      {% endfor %}
-    </dl>
-    {% else %}
-    <p class="empty">No impact statements were produced for this page.</p>
-    {% endif %}
-  </div>
-
   <div data-section="page.recommendations" class="block">
     <h3>What to do</h3>
     {% if page.recommendations %}
@@ -203,6 +151,7 @@
       {% for rec in page.recommendations %}
       <li>
         <p class="rec-title">{{ rec.title }}</p>
+        {% if rec.why_it_matters %}<p class="serif consequence">{{ rec.why_it_matters }}</p>{% endif %}
         {% if rec.rationale %}<p class="serif">{{ rec.rationale }}</p>{% endif %}
         <p class="rec-meta">
           <span class="tag tag--{{ rec.effort }}">{{ rec.effort }} effort</span>
@@ -223,14 +172,112 @@
     {% endif %}
   </div>
 
-  <div data-section="page.projections" class="block">
-    <h3>Expected improvement</h3>
-    {% if charts.pages[page.name].projections %}
-      <div class="chart">{{ charts.pages[page.name].projections|safe }}</div>
-      <p class="caption">Projected values use the conservative end of each playbook's stated range.</p>
-    {% else %}
-      <p class="empty">No improvement could be projected — no cited playbook states an expected range for a measured metric.</p>
-    {% endif %}
+  <div data-section="page.detail" class="block detail">
+    <h3>Technical detail</h3>
+    <p class="caption">The measurements behind the findings above, for whoever
+      does the work.</p>
+    <div data-section="page.cwv-dashboard" class="block">
+      <h3>Core Web Vitals</h3>
+      {% if charts.pages[page.name].gauges %}
+        <div class="chart">{{ charts.pages[page.name].gauges|safe }}</div>
+      {% else %}
+        <p class="empty">No Core Web Vitals were measured for this page.</p>
+      {% endif %}
+      <table class="metrics">
+        <thead><tr><th>Condition</th><th>LCP</th><th>CLS</th><th>INP</th><th>TBT</th></tr></thead>
+        <tbody>
+        {% for row in page.conditions %}
+          <tr>
+            <td>{{ row.device }} / {{ row.network }}</td>
+            <td>{{ row.metrics.lcp_ms|round|int if row.metrics.lcp_ms is not none else '—' }}<span class="unit">ms</span>{% if row.lcp_underestimated %}<span class="qualifier">†</span>{% endif %}</td>
+            <td>{{ '%.2f'|format(row.metrics.cls) if row.metrics.cls is not none else '—' }}</td>
+            <td>{{ row.metrics.inp_ms|round|int if row.metrics.inp_ms is not none else '—' }}<span class="unit">ms</span></td>
+            <td>{{ row.metrics.tbt_ms|round|int if row.metrics.tbt_ms is not none else '—' }}<span class="unit">ms</span></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% if page.conditions|selectattr('lcp_underestimated')|list %}
+        <p class="qualifier-note">
+          † LCP is a <strong>lower bound</strong> for this condition. The largest
+          element on the page was a cross-origin resource served without a
+          <code>Timing-Allow-Origin</code> header, so the browser exposed no render
+          time for it. The figure shown is the largest element that <em>did</em>
+          report a time; the real LCP is later by an unknown margin.
+        </p>
+      {% endif %}
+    </div>
+    <div data-section="page.resources" class="block">
+      <h3>Where the weight is</h3>
+      {% if charts.pages[page.name].resources %}
+        <div class="chart">{{ charts.pages[page.name].resources|safe }}</div>
+      {% else %}
+        <p class="empty">No resource timings were captured for this page.</p>
+      {% endif %}
+      {% if charts.pages[page.name].donut %}
+        <div class="chart chart--inset">{{ charts.pages[page.name].donut|safe }}</div>
+      {% else %}
+        <p class="empty">No transfer sizes were captured by resource type.</p>
+      {% endif %}
+    </div>
+    <div data-section="page.lcp-breakdown" class="block">
+      <h3>LCP breakdown</h3>
+      {% if charts.pages[page.name].lcp %}
+        <div class="chart">{{ charts.pages[page.name].lcp|safe }}</div>
+      {% else %}
+        <p class="empty">Not available — this run did not measure the paint milestones the breakdown is derived from.</p>
+      {% endif %}
+    </div>
+    <div data-section="page.trend" class="block">
+      <h3>Trend</h3>
+      {% if page.trends %}
+        <div class="trend-grid">
+        {% for series in page.trends %}
+          <figure class="trend trend--{{ series.direction }}">
+            <figcaption>
+              <span class="trend-metric">{{ series.metric|metric_label }}</span>
+              <span class="trend-condition">{{ series.device }} / {{ series.network }}</span>
+              <span class="trend-direction">{{ series.direction }}</span>
+              {% if series.delta_pct is not none %}
+                <span class="trend-delta">{{ '%+.1f'|format(series.delta_pct) }}%</span>
+              {% endif %}
+              {% if series.crossed %}
+                <span class="trend-crossed">{{ series.crossed }}</span>
+              {% endif %}
+            </figcaption>
+            {% if charts.pages[page.name].trends[loop.index0] %}
+              <div class="chart">{{ charts.pages[page.name].trends[loop.index0]|safe }}</div>
+            {% else %}
+              <p class="empty">First campaign for this condition — no prior campaigns to compare against.</p>
+            {% endif %}
+          </figure>
+        {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty">No prior campaigns for this condition.</p>
+      {% endif %}
+    </div>
+    <div data-section="page.projections" class="block">
+      <h3>Expected improvement</h3>
+      {% if charts.pages[page.name].projections %}
+        <div class="chart">{{ charts.pages[page.name].projections|safe }}</div>
+        <p class="caption">Projected values use the conservative end of each playbook's stated range.</p>
+      {% else %}
+        <p class="empty">No improvement could be projected — no cited playbook states an expected range for a measured metric.</p>
+      {% endif %}
+    </div>
+    <div data-section="page.impacts" class="block">
+      <h3>What it costs</h3>
+      {% if page.impacts %}
+      <dl class="impacts">
+        {% for impact in page.impacts %}
+        <dt>{{ impact.audience }}</dt><dd class="serif">{{ impact.text }}</dd>
+        {% endfor %}
+      </dl>
+      {% else %}
+      <p class="empty">No impact statements were produced for this page.</p>
+      {% endif %}
+    </div>
   </div>
 
 </section>

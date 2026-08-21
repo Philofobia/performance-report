@@ -20,12 +20,57 @@ Analysis: {% if report.meta.analysis_mode == 'llm' %}retrieval-grounded model an
 _No actions identified._
 {% endif %}
 
+## What to do first
+
+The highest-payoff work across every page, in order. Effort is the playbook's
+own estimate; the expected change is the conservative end of its stated range.
+Each page lists its own remaining recommendations below.
+
+{% if report.action_plan %}
+{% for action in report.action_plan %}
+{% set why = (' — ' ~ action.why_it_matters) if action.why_it_matters else '' %}{% set expected = ('; expected: ' ~ action.projected) if action.projected else '' %}
+{{ action.rank }}. **{{ action.title }}** ({{ action.page }}){{ why }} (effort: {{ action.effort }}{{ expected }}; source: {{ action.playbook_source }})
+{% endfor %}
+{% else %}
+_No actions could be ranked for this campaign._
+{% endif %}
+
 ## Pages
 
 {% for page in report.pages %}
 ### {{ page.name }}
 
 {{ page.url }} · **{{ page.verdict|upper }}**
+
+| Metric | Measured | Target | Verdict | What it means |
+| --- | --- | --- | --- | --- |
+{% for row in glance[page.name] %}
+| {{ row.label }} | {{ row.value }} | {{ row.target }} | {{ row.verdict }} | {{ row.plain }} |
+{% endfor %}
+
+{{ page.summary }}
+
+**What is wrong**
+
+{% if page.findings %}
+{% for finding in page.findings %}
+- **{{ finding.title }}** {{ finding.consequence or finding.detail }}
+{% endfor %}
+{% else %}
+_No findings were produced for this page._
+{% endif %}
+
+**What to do**
+
+{% if page.recommendations %}
+{% for rec in page.recommendations %}
+{{ loop.index }}. **{{ rec.title }}** — {{ rec.why_it_matters or rec.rationale }} (effort: {{ rec.effort }}; source: {{ rec.playbook_source }})
+{% endfor %}
+{% else %}
+_No playbook-grounded recommendations for this page._
+{% endif %}
+
+**Technical detail**
 
 | Condition | LCP | CLS | INP | TBT |
 | --- | --- | --- | --- | --- |
@@ -39,52 +84,32 @@ browser exposed no render time for it. The figure shown is the largest element
 that *did* report a time; the real LCP is later by an unknown margin.
 {% endif %}
 
-**Trend**
-
-{% if page.trends %}
-| Condition | Metric | History | Direction | Change |
-| --- | --- | --- | --- | --- |
-{% for series in page.trends %}
-| {{ series.device }} / {{ series.network }} | {{ series.metric|metric_label }} | {{ series.points|map(attribute='value')|join(' → ') }} | {{ series.direction }}{% if series.crossed %} ({{ series.crossed }}){% endif %} | {{ '%+.1f'|format(series.delta_pct) ~ '%' if series.delta_pct is not none else '—' }} |
-{% endfor %}
-{% else %}
-_No prior campaigns for this condition._
-{% endif %}
-
-{{ page.summary }}
-
-**What is wrong**
-
-{% if page.findings %}
 {% for finding in page.findings %}
-{% if finding.evidence %}
-- **{{ finding.title }}** {{ finding.detail }} ({{ finding.evidence|join(' · ') }})
-{% else %}
-- **{{ finding.title }}** {{ finding.detail }}
-{% endif %}
+{% set evidence = (' (' ~ finding.evidence|join(' · ') ~ ')') if finding.evidence else '' %}
+- **{{ finding.title }}** {{ finding.detail }}{{ evidence }}
 {% endfor %}
-{% else %}
-_No findings were produced for this page._
-{% endif %}
 
-**What it costs**
+{% for rec in page.recommendations %}
+{% set expected = rec.projections|map('projection_range')|join('; ') if rec.magnitude == 'estimated' else 'expected magnitude unknown' %}
+- **{{ rec.title }}** — {{ rec.rationale }} · {{ expected }}
+{% endfor %}
 
 {% if page.impacts %}
 {% for impact in page.impacts %}
 - _{{ impact.audience|upper }}_ — {{ impact.text }}
 {% endfor %}
-{% else %}
-_No impact statements were produced for this page._
 {% endif %}
 
-**What to do**
+_Trend_
 
-{% if page.recommendations %}
-{% for rec in page.recommendations %}
-{{ loop.index }}. **{{ rec.title }}** — {{ rec.rationale }} (effort: {{ rec.effort }}; source: {{ rec.playbook_source }}{% if rec.magnitude == 'estimated' %}{% for projection in rec.projections %}; {{ projection.metric }} {{ projection.before|round|int }} → {{ projection.after_low|round|int }}{% endfor %}{% else %}; expected magnitude unknown{% endif %})
+{% if page.trends %}
+| Condition | Metric | History | Direction | Change |
+| --- | --- | --- | --- | --- |
+{% for series in page.trends %}
+| {{ series.device }} / {{ series.network }} | {{ series.metric|metric_label }} | {{ series.points|map(attribute='value')|map('metric_value', series.metric)|join(' → ') }} | {{ series.direction }}{% if series.crossed %} ({{ series.crossed }}){% endif %} | {{ '%+.1f'|format(series.delta_pct) ~ '%' if series.delta_pct is not none else '—' }} |
 {% endfor %}
 {% else %}
-_No playbook-grounded recommendations for this page._
+_First campaign — no history to compare yet._
 {% endif %}
 
 {% endfor %}

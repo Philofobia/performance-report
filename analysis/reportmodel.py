@@ -25,6 +25,10 @@ from normalize.schema import Run
 
 SCHEMA_VERSION = 2  # 2: adds Report.appendix (Phase 7B)
 
+#: Defined here rather than imported from analysis/__main__: importing the
+#: CLI module from the model layer would invert the dependency.
+MAX_TOP_ACTIONS = 3
+
 _SEVERITY_RANK = {"pass": 0, "warn": 1, "fail": 2}
 
 
@@ -164,6 +168,9 @@ class ConditionRow(BaseModel):
 class FindingModel(BaseModel):
     title: str
     detail: str = ""
+    #: What a visitor to this page actually experiences. Plain language, no
+    #: numbers: the reader of this line is not a performance engineer.
+    consequence: str = ""
     evidence: List[str] = Field(default_factory=list)
     symptom_codes: List[str] = Field(default_factory=list)
 
@@ -176,11 +183,31 @@ class ImpactModel(BaseModel):
 class RecommendationModel(BaseModel):
     title: str
     rationale: str = ""
+    #: Why this is worth doing, for someone deciding whether to fund it.
+    why_it_matters: str = ""
     playbook_source: str
     playbook_section: str = ""
     effort: str
     magnitude: str
     projections: List[ProjectionModel] = Field(default_factory=list)
+
+
+class PlannedAction(BaseModel):
+    """One entry in the campaign-wide plan, ordered by expected payoff.
+
+    A flattened, display-ready view of a recommendation, because the reader's
+    first question is "what do I do first", not "what did page three say".
+    """
+
+    rank: int
+    page: str
+    title: str
+    why_it_matters: str = ""
+    effort: str = ""
+    metric: Optional[str] = None
+    #: Pre-formatted ("2041 ms -> 1633 ms"); empty when nothing was projected.
+    projected: str = ""
+    playbook_source: str = ""
 
 
 class PageBlock(BaseModel):
@@ -293,6 +320,9 @@ class Report(BaseModel):
     schema_version: int = SCHEMA_VERSION
     cover: Cover
     summary: Summary
+    #: Every page's recommendations in one ranked order. Defaulted so a
+    #: report.json written before this existed still validates.
+    action_plan: List[PlannedAction] = Field(default_factory=list)
     pages: List[PageBlock]
     comparison: List[ComparisonRow]
     methodology: Methodology
@@ -358,7 +388,9 @@ def _page_block(
         resource_type_totals={k: totals[k] for k in sorted(totals)},
         summary=page.summary,
         findings=[
-            FindingModel(title=f.title, detail=f.detail, evidence=list(f.evidence),
+            FindingModel(title=f.title, detail=f.detail,
+                         consequence=getattr(f, "consequence", "") or "",
+                         evidence=list(f.evidence),
                          symptom_codes=list(f.symptom_codes))
             for f in page.findings
         ],
@@ -366,6 +398,7 @@ def _page_block(
         recommendations=[
             RecommendationModel(
                 title=r.title, rationale=r.rationale,
+                why_it_matters=getattr(r, "why_it_matters", "") or "",
                 playbook_source=r.playbook_source,
                 playbook_section=r.playbook_section, effort=r.effort,
                 magnitude="estimated" if r.projections else "unknown",
@@ -493,6 +526,18 @@ def build_report(
 
     degraded = [p for p in ordered if p.mode != "llm"]
     appendix = _appendix(ordered, settings)
+    page_blocks = [
+        _page_block(p, settings, trends.get(p.page_name, ())) for p in ordered
+    ]
+
+    # One ranked plan over every page, so "what do I fix first" is answered by
+    # expected payoff rather than by which page sorted first.
+    from analysis.priority import rank_actions
+    from report.glossary import load_glossary
+
+    plan = rank_actions(page_blocks, glossary=load_glossary(),
+                        thresholds=settings.thresholds)
+
     return Report(
         schema_version=SCHEMA_VERSION,
         cover=Cover(
@@ -509,12 +554,15 @@ def build_report(
         summary=Summary(
             problem=summary.problem,
             key_finding=summary.key_finding,
-            top_actions=list(summary.top_actions),
+            # The plan already knows what matters most; the model's own three
+            # only stand in when nothing could be ranked.
+            top_actions=(
+                [f"{a.title} ({a.page})" for a in plan[:MAX_TOP_ACTIONS]]
+                if plan else list(summary.top_actions)
+            ),
         ),
-        pages=[
-            _page_block(p, settings, trends.get(p.page_name, ()))
-            for p in ordered
-        ],
+        action_plan=plan,
+        pages=page_blocks,
         comparison=_comparison(ordered, settings),
         methodology=_methodology(ordered, settings),
         appendix=appendix,

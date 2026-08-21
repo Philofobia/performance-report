@@ -26,7 +26,10 @@ embedding each screenshot and its heaviest HAR requests** · **a loopback-only w
 for manual entry** · **a CI job that regenerates a real campaign report and gates its
 skeleton** · **a per-UTC-day request and token budget over the Google free tier, which
 degrades the analysis to rules rather than overspending** · **playbook indexing
-wired into the analysis run, so retrieval has a corpus to retrieve from**.
+wired into the analysis run, so retrieval has a corpus to retrieve from** · **a
+report written plain-language-first: one ranked cross-page plan, every metric shown
+against its target with a sentence explaining it, and the evidence grouped behind
+it**.
 
 **Missing:** no phase in the [Roadmap](#roadmap) is unbuilt. Two limitations are
 known and accepted rather than fixed, both written up where the code lives:
@@ -445,6 +448,34 @@ python -m cli report --update-baseline              # accept a structural change
 ```
 
 Writes `report.html`, `report.md` and `report.pdf` beside the source `report.json`.
+
+### Who the report is written for
+
+Plain language first, evidence behind it — one document that a project manager can
+read start to finish without taking anything away from the developer doing the work.
+
+1. **What to do first** — every page's recommendations in *one* ranked order, capped
+   at six. Ranking is rule-based: severity of the metric being fixed × the playbook's
+   conservative projected gain, capped at the gap to target, ties broken by page then
+   title so two runs of one campaign render identically. Before this existed the
+   executive actions came from whichever page sorted first alphabetically, which put a
+   2041 ms homepage action above an 8636 ms blocking time on the PDP.
+2. **Per page, at a glance** — every metric with its **target**, how far over it is,
+   and one sentence saying what it means for a visitor. `TBT 2041 ms · target 200 ms ·
+   10× over · "the page ignores taps for about two seconds after it appears"`.
+3. **What is wrong / what to do** — findings and actions, each carrying a plain
+   consequence written for someone with no performance background.
+4. **Technical detail** — dashboards, resource tables, the LCP breakdown, trends and
+   projections, grouped under one heading and clearly marked as such.
+5. **Appendix** — one capture per condition, sized to share a page with its request
+   table rather than own one. The full-resolution PNG stays under `data/raw`.
+
+The plain wording lives in **`data/knowledge/glossary.yaml`** — a committed file giving
+each metric a display name, a target key, a rounding rule and one plain sentence.
+Editing it changes every future report. It is data rather than model output on purpose:
+a model asked twice what "total blocking time" means writes it two ways, and comparable
+documents are the point. That file is also the single formatter every renderer shares,
+which is why no raw float (`2438.5999999940395`) reaches a reader any more.
 
 **The skeleton is enforced, not hoped for.** Every structural block carries a
 `data-section` attribute; `report/skeleton.py` reads them in document order and

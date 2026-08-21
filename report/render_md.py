@@ -23,7 +23,8 @@ from typing import Optional, Tuple
 from jinja2 import Environment, FileSystemLoader
 
 from analysis.reportmodel import Report
-from report.render_html import metric_label, transfer_size
+from report.glossary import load_glossary
+from report.render_html import glance_by_page, metric_label, transfer_size
 
 TEMPLATE_DIR = Path(__file__).parent / "template"
 MD_TEMPLATE = "report.md.j2"
@@ -31,8 +32,12 @@ MD_TEMPLATE = "report.md.j2"
 # The `##` heading sequence, mirroring the HTML skeleton minus the chart-only
 # blocks. Asserted by the tests, so a template edit that drops a section fails
 # rather than silently shipping a shorter document.
+#: Loaded once: the file is committed data and never changes mid-run.
+_GLOSSARY = load_glossary()
+
 MD_SECTIONS: Tuple[str, ...] = (
     "Executive summary",
+    "What to do first",
     "Pages",
     "Cross-page comparison",
     "Methodology",
@@ -75,6 +80,14 @@ def _table_cell(value: Optional[object]) -> object:
     return str(value).replace("|", "\\|")
 
 
+def _projection_range(projection) -> str:
+    """One projection as the reader meets it: "LCP 6200 ms → 4820 ms"."""
+    label = metric_label(projection.metric)
+    before = _GLOSSARY.format_value(projection.metric, projection.before)
+    after = _GLOSSARY.format_value(projection.metric, projection.after_low)
+    return f"{label} {before} → {after}"
+
+
 def _env(base_dir: Optional[Path] = None) -> Environment:
     env = Environment(
         loader=FileSystemLoader(str(TEMPLATE_DIR)),
@@ -89,6 +102,12 @@ def _env(base_dir: Optional[Path] = None) -> Environment:
     env.filters["transfer_size"] = transfer_size
     env.filters["link_path"] = lambda p: _link_path(p, base_dir)
     env.filters["table_cell"] = _table_cell
+    # Rounding is the glossary's job, so the Markdown mirror and the HTML agree
+    # on what a measurement looks like. Without it the trend table joined raw
+    # floats and shipped 2438.5999999940395 to the reader.
+    env.filters["metric_value"] = lambda value, metric: _GLOSSARY.format_value(
+        metric, value)
+    env.filters["projection_range"] = _projection_range
     return env
 
 
@@ -100,4 +119,5 @@ def render_md(report: Report, *, base_dir: Optional[Path] = None) -> str:
     that makes sense in a self-contained HTML file is megabytes of noise in a
     document meant to be read as text in a pull request.
     """
-    return _env(base_dir).get_template(MD_TEMPLATE).render(report=report)
+    return _env(base_dir).get_template(MD_TEMPLATE).render(
+        report=report, glance=glance_by_page(report))

@@ -390,3 +390,50 @@ def test_budget_refusals_are_not_disguised_as_unavailability():
 
     with pytest.raises(BudgetExhaustedError):
         client.analyze_page(a_prompt())
+
+
+# --------------------------------------------------------------------------- #
+# Plain-language contract fields (design spec 2026-08-20)
+# --------------------------------------------------------------------------- #
+def _page_payload(**overrides):
+    payload = json.loads(json.dumps(VALID_PAGE))
+    for key, value in overrides.items():
+        payload[key] = value
+    return payload
+
+
+def test_a_finding_carries_a_plain_language_consequence():
+    findings = json.loads(json.dumps(VALID_PAGE["findings"]))
+    findings[0]["consequence"] = (
+        "Visitors stare at an empty hero while the video downloads."
+    )
+    client = make_client([json.dumps(_page_payload(findings=findings))])
+
+    result = client.analyze_page(a_prompt())
+
+    assert result.findings[0].consequence.startswith("Visitors stare")
+
+
+def test_a_recommendation_carries_why_it_matters():
+    recs = json.loads(json.dumps(VALID_PAGE["recommendations"]))
+    recs[0]["why_it_matters"] = "The page becomes usable sooner on a phone."
+    client = make_client([json.dumps(_page_payload(recommendations=recs))])
+
+    result = client.analyze_page(a_prompt())
+
+    assert result.recommendations[0].why_it_matters.startswith("The page becomes")
+
+
+def test_the_new_fields_are_optional():
+    """A model that omits them degrades to today's output, not to an error."""
+    result = make_client([json.dumps(VALID_PAGE)]).analyze_page(a_prompt())
+
+    assert result.findings[0].consequence == ""
+    assert result.recommendations[0].why_it_matters == ""
+
+
+def test_the_output_contract_asks_for_plain_language():
+    from analysis.llm import JSON_INSTRUCTION
+
+    assert "consequence" in JSON_INSTRUCTION
+    assert "why_it_matters" in JSON_INSTRUCTION

@@ -58,6 +58,7 @@ def a_report(pages=("homepage",), *, recommendations=True, mode="llm",
             "resource_type_totals": {"media": 2140.0},
             "summary": f"{name} is slow.",
             "findings": [{"title": finding_title, "detail": "2140KB.",
+                          "consequence": "Taps do nothing for two seconds.",
                           "evidence": ["lcp_ms=6200"],
                           "symptom_codes": ["lcp_fail"]}],
             "impacts": [{"audience": "ux", "text": "Empty hero."}],
@@ -435,3 +436,53 @@ def test_lcp_caveat_does_not_drift_the_skeleton():
     plain = _flag_lcp(a_report(), flagged=False)
     assert fingerprint(render_html(flagged)) == \
            fingerprint(render_html(plain))
+
+
+# --------------------------------------------------------------------------- #
+# Reader-first structure (design spec 2026-08-20)
+# --------------------------------------------------------------------------- #
+def test_the_at_a_glance_table_states_target_and_verdict():
+    html = render_html(a_report())
+
+    assert 'data-section="page.at-a-glance"' in html
+    assert "Target" in html and "What it means" in html
+    # 6200ms against a 2500ms target.
+    assert "2.5× over" in html
+
+
+def test_the_glance_table_explains_the_metric_in_plain_words():
+    html = render_html(a_report())
+
+    assert "ignores taps and clicks" in html
+
+
+def test_the_plan_is_rendered_before_the_pages():
+    html = render_html(a_report())
+
+    assert 'data-section="plan"' in html
+    assert html.index('data-section="plan"') < html.index('data-section="page"')
+
+
+def test_technical_detail_is_grouped_behind_its_own_heading():
+    html = render_html(a_report())
+
+    assert 'data-section="page.detail"' in html
+    assert html.index('data-section="page.findings"') < html.index(
+        'data-section="page.detail"')
+
+
+def test_a_finding_carries_its_consequence():
+    html = render_html(a_report())
+
+    assert "Taps do nothing" in html
+
+
+def test_no_raw_float_reaches_the_page():
+    """2438.5999999940395 shipped to the reader in the trend table.
+
+    Chart SVGs are excluded: their path coordinates are geometry, not prose,
+    and nobody reads them.
+    """
+    prose = re.sub(r"<svg.*?</svg>", "", render_html(a_report()), flags=re.S)
+
+    assert not re.search(r"\d+\.\d{4,}", prose)
