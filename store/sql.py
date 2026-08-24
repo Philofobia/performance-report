@@ -84,6 +84,19 @@ CREATE TABLE IF NOT EXISTS resource_timings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_timings_run ON resource_timings (run_id);
+
+CREATE TABLE IF NOT EXISTS field_snapshots (
+    snapshot_id  TEXT PRIMARY KEY,
+    project      TEXT NOT NULL,
+    fetched_at   TEXT NOT NULL,
+    window_from  TEXT NOT NULL,
+    window_to    TEXT NOT NULL,
+    hosts        TEXT NOT NULL,
+    payload      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_field_project_fetched
+    ON field_snapshots (project, fetched_at);
 """
 
 
@@ -304,3 +317,80 @@ def delete_run(conn: sqlite3.Connection, run_id: str) -> bool:
 def count_runs(conn: sqlite3.Connection) -> int:
     """Total stored runs."""
     return int(conn.execute("SELECT COUNT(*) AS n FROM runs").fetchone()["n"])
+
+
+# --------------------------------------------------------------------------- #
+# Field snapshots
+# --------------------------------------------------------------------------- #
+def insert_snapshot(
+    conn: sqlite3.Connection, snapshot: "FieldSnapshot", *, replace: bool = False
+) -> str:
+    """Persist one field snapshot.
+
+    Same split the ``runs`` table uses: columns for querying, one JSON payload
+    for fidelity. The snapshot is a document — it is read whole or not at all —
+    so decomposing eight row lists into eight tables would buy nothing and cost
+    a migration every time a panel gains a column.
+    """
+    verb = "INSERT OR REPLACE" if replace else "INSERT"
+    try:
+        conn.execute(
+            f"{verb} INTO field_snapshots "
+            "(snapshot_id, project, fetched_at, window_from, window_to, "
+            " hosts, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                snapshot.snapshot_id,
+                snapshot.project,
+                snapshot.fetched_at.isoformat(),
+                snapshot.window_from.isoformat(),
+                snapshot.window_to.isoformat(),
+                json.dumps(snapshot.hosts),
+                json.dumps(snapshot.model_dump(mode="json")),
+            ),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        raise StoreError(
+            f"Field snapshot {snapshot.snapshot_id} already exists. "
+            "Pass replace=True to overwrite it."
+        ) from exc
+    return snapshot.snapshot_id
+
+
+def _snapshot_from_row(row: Any) -> "FieldSnapshot":
+    from normalize.field import FieldSnapshot
+
+    return FieldSnapshot.model_validate(json.loads(row["payload"]))
+
+
+def get_latest_snapshot(
+    conn: sqlite3.Connection, project: str
+) -> Optional["FieldSnapshot"]:
+    """The most recently *fetched* snapshot for a project, or None.
+
+    Ordered by ``fetched_at`` rather than insertion order: backfilling an older
+    window must not make it look like the current one.
+    """
+    row = conn.execute(
+        "SELECT payload FROM field_snapshots WHERE project = ? "
+        "ORDER BY fetched_at DESC LIMIT 1",
+        (project,),
+    ).fetchone()
+    return None if row is None else _snapshot_from_row(row)
+
+
+def list_snapshots(
+    conn: sqlite3.Connection, *, project: Optional[str] = None
+) -> List["FieldSnapshot"]:
+    """Every stored snapshot, newest first."""
+    if project is None:
+        rows = conn.execute(
+            "SELECT payload FROM field_snapshots ORDER BY fetched_at DESC"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT payload FROM field_snapshots WHERE project = ? "
+            "ORDER BY fetched_at DESC",
+            (project,),
+        ).fetchall()
+    return [_snapshot_from_row(row) for row in rows]
