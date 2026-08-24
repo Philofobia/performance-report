@@ -85,3 +85,84 @@ def test_frame_with_mismatched_column_lengths_raises():
     results["by_pagetype"]["frames"][0]["data"]["values"][1] = [1200]
     with pytest.raises(ParseError):
         _snapshot(results)
+
+
+def _sessions_panel(fields, values):
+    """A minimal one-frame ``sessions`` panel, for aggregate-sum tests."""
+    return {"sessions": {"frames": [{
+        "schema": {"fields": fields},
+        "data": {"values": values},
+    }]}}
+
+
+def _frustration_panel(fields, values):
+    """A minimal one-frame ``frustration`` panel, for aggregate-sum tests."""
+    return {"frustration": {"frames": [{
+        "schema": {"fields": fields},
+        "data": {"values": values},
+    }]}}
+
+
+def test_session_count_is_none_when_column_never_carried():
+    """Buckets exist, but no bucket ever carries session_count - stays None.
+
+    ``sum(... or 0)`` would report a confident zero sessions here, which
+    reads as "nobody visited" rather than "we didn't measure this".
+    """
+    results = _sessions_panel(
+        fields=[{"name": "time", "type": "time"}, {"name": "bounce_pct", "type": "number"}],
+        values=[[1787529600000, 1787616000000], [10.0, 12.0]],
+    )
+    snap = _snapshot(results)
+    assert snap.sessions.session_count is None
+
+
+def test_session_count_sums_only_the_present_values():
+    """A null bucket is excluded from the sum, not treated as a zero."""
+    results = _sessions_panel(
+        fields=[{"name": "time", "type": "time"}, {"name": "session_count", "type": "number"}],
+        values=[
+            [1787529600000, 1787616000000, 1787702400000],
+            [100, None, 50],
+        ],
+    )
+    snap = _snapshot(results)
+    assert snap.sessions.session_count == 150
+
+
+def test_rage_clicks_total_is_none_when_column_never_carried():
+    results = _frustration_panel(
+        fields=[{"name": "time", "type": "time"}, {"name": "frustration_p75", "type": "number"}],
+        values=[[1787529600000, 1787616000000], [20.0, 25.0]],
+    )
+    snap = _snapshot(results)
+    assert snap.frustration.rage_clicks_total is None
+
+
+def test_rage_clicks_total_sums_only_the_present_values():
+    results = _frustration_panel(
+        fields=[{"name": "time", "type": "time"}, {"name": "rage_clicks", "type": "number"}],
+        values=[
+            [1787529600000, 1787616000000, 1787702400000],
+            [5, None, 7],
+        ],
+    )
+    snap = _snapshot(results)
+    assert snap.frustration.rage_clicks_total == 12
+
+
+def test_out_of_range_value_raises_parse_error_naming_field_and_value():
+    """A datasource sending an impossible value fails loudly, but actionably.
+
+    Bare Pydantic ValidationError names the field but not which panel or row
+    produced it. ParseError must wrap it and say all three.
+    """
+    results = _results()
+    # bounce_pct is column index 5 in the by_pagetype fixture frame; 150 is
+    # outside PageTypeRow's 0..100 bound.
+    results["by_pagetype"]["frames"][0]["data"]["values"][5] = [150.0, 38.0]
+    with pytest.raises(ParseError) as exc_info:
+        _snapshot(results)
+    message = str(exc_info.value)
+    assert "bounce_pct" in message
+    assert "150" in message
