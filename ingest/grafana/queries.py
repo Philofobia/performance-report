@@ -32,6 +32,14 @@ def quote_hosts(hosts: Sequence[str]) -> str:
     The hostname never reaches the quoting step unless it matched the
     allowlist, so there is no escaping path to get wrong.
     """
+    # str satisfies Sequence[str] structurally, so a caller who passes a bare
+    # hostname string instead of a one-element list would otherwise iterate
+    # its characters - "abc" becoming the hosts ['a', 'b', 'c'] - silently
+    # building nonsense SQL instead of failing loudly.
+    if isinstance(hosts, str):
+        raise HostError(
+            f"hosts must be a sequence of hostnames, not a bare string: {hosts!r}"
+        )
     cleaned = [h.strip() for h in hosts]
     if not cleaned:
         raise HostError(
@@ -39,7 +47,7 @@ def quote_hosts(hosts: Sequence[str]) -> str:
             "page whose URL has a hostname."
         )
     for host in cleaned:
-        if not _HOSTNAME.match(host):
+        if not _HOSTNAME.fullmatch(host):
             raise HostError(
                 f"Refusing to build SQL with hostname {host!r}: it is not a "
                 "plain lowercase hostname."
