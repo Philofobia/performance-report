@@ -52,18 +52,42 @@ before it is quoted (§3.3).
 
 ### 1. Configuration
 
-New `grafana:` block in `config/settings.yaml`, modelled by `GrafanaConfig` in
-`config/load.py` beside `RagConfig` and `TrendsConfig`, mounted on `Settings`:
+Configuration splits along one line: **`.env` says which Grafana and which
+data; `settings.yaml` says how we query and interpret it.** The first half is
+deployment identity that must not be committed, the second is behaviour that
+should be reviewed in diffs.
+
+#### 1.1 `.env` — connection identity, never committed
+
+```bash
+# Grafana instance. Must be a public https URL: the SSRF guard in
+# normalize/url_safety.py applies to it unchanged.
+GRAFANA_BASE_URL=
+# Service-account token with Viewer rights on the ClickHouse datasource.
+GRAFANA_TOKEN=
+# ClickHouse datasource uid, from the dashboard JSON.
+GRAFANA_DATASOURCE_UID=
+# Fully-qualified table the panels read.
+GRAFANA_TABLE=
+```
+
+All four are read through a `resolve_grafana_env()` helper modelled on
+`rag.embeddings.resolve_api_key()`: missing values raise a message naming the
+variable and how to set it, and **never echo the value** (SECURITY_PLAN §2.8).
+
+The datasource uid and table are not secrets, but they belong here for two
+reasons. They are per-instance rather than per-project — a staging Grafana has
+a different uid and nothing else about the config changes. And the table name
+carries the organisation's tenant (`luxotticagroupspa`), which a public
+repository has no reason to record.
+
+#### 1.2 `config/settings.yaml` — query behaviour, committed
+
+New `grafana:` block, modelled by `GrafanaConfig` in `config/load.py` beside
+`RagConfig` and `TrendsConfig`, mounted on `Settings`:
 
 ```yaml
 grafana:
-  # Base URL of the Grafana instance. Must be a public https host: the SSRF
-  # guard in normalize/url_safety.py applies to it unchanged.
-  base_url: ""
-  # ClickHouse datasource uid, from the dashboard JSON.
-  datasource_uid: bea6kbi7cbpxcc
-  # Fully-qualified table the panels read.
-  table: luxotticagroupspa.mpulse
   # Relative window, Grafana syntax. Matches the dashboard default.
   window: 7d
   # Per-request HTTP timeout.
@@ -76,9 +100,9 @@ grafana:
     Pdp: pdp
 ```
 
-The token is **not** configuration. `GRAFANA_TOKEN` is read from `.env`,
-following `GOOGLE_API_KEY` and `AKAMAI_BOT_TOKEN`, and `.env.example` gains a
-documented blank entry.
+Nothing in this block is secret, so it stays reviewable: a changed window or a
+re-pointed page group should show up in a diff, which is precisely what putting
+them in `.env` would prevent.
 
 ### 2. Scoping: hosts come from `targets.yaml`
 
@@ -99,8 +123,8 @@ US pages is not expressible. If that is wanted later it is an additive
 
 #### 3.1 `client.py`
 
-`POST {base_url}/api/ds/query` with `Authorization: Bearer <GRAFANA_TOKEN>`,
-body:
+`POST {GRAFANA_BASE_URL}/api/ds/query` with
+`Authorization: Bearer <GRAFANA_TOKEN>`, body:
 
 ```json
 {
@@ -360,6 +384,7 @@ Fixtures only — no live Grafana in CI, and no network in any test.
 | `queries.py` | Hostnames failing the pattern raise; valid ones quote correctly |
 | `parse.py` | Real recorded response → typed models; reordered columns still map; missing field → `None` |
 | `client.py` | Bearer header set; 5xx retried once; 4xx not retried; timeout honoured |
+| `client.py` | Each missing `.env` variable raises naming that variable, and **no test asserts a token value appears in any message** |
 | `store/sql.py` | Snapshot round-trips; `get_latest_snapshot` picks the newest |
 | `rag/prompt.py` | Page slice contains only its own group; token bound respected; datasource strings neutralised |
 | `detect_symptoms` | Field rules fire on rule-based path with no LLM |
@@ -385,9 +410,11 @@ creates no exception to the SSRF guard.
 These are known and do not block the plan; they are resolved with operator
 input during implementation:
 
-1. **`GRAFANA_BASE_URL` is not yet known.** Config ships with an empty default;
-   an empty base URL means the stage is not configured and `ingest field`
-   says so rather than failing obscurely.
+1. **The `.env` values are supplied by the operator, not by this repo.**
+   `.env.example` ships the four variables blank and documented. An unset
+   `GRAFANA_BASE_URL` means the stage is not configured: `ingest field` says
+   which variable is missing and exits, and `analysis` treats the snapshot as
+   `unavailable` rather than failing (§8).
 2. **No recorded API response yet.** `parse.py` is written against the
    documented frame format and reconciled against a real response when one is
    available. The by-name mapping in §3.4 is what makes that reconciliation
