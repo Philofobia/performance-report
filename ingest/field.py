@@ -20,6 +20,13 @@ from config.load import load_settings, load_targets
 from ingest.grafana import parse, queries
 from ingest.grafana.client import GrafanaClient, GrafanaError, resolve_grafana_env
 from normalize.field import FieldSnapshot, window_delta
+from store import sql
+
+#: ``store.sql`` costs only ``sqlite3`` and ``json`` (see its own module
+#: docstring), so importing it eagerly here does not undo the deferred-import
+#: discipline ``cli.py`` relies on — that discipline is about *this module*
+#: only being imported when ``ingest field`` runs, which the CLI façade's
+#: loader already guarantees.
 
 
 def hosts_for(targets: Any) -> List[str]:
@@ -127,12 +134,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"Field ingestion failed: {exc}", file=sys.stderr)
         return 1
 
-    from store import sql
-
+    # ``sql.connect`` already calls ``init_schema`` internally, so a second
+    # call here would be dead weight — and, sitting before the ``try``, a
+    # handle-leak risk if it ever raised.
     conn = sql.connect(settings.storage.sqlite_path)
-    sql.init_schema(conn)
     try:
         sql.insert_snapshot(conn, snapshot, replace=args.replace)
+    except sql.StoreError:
+        # The only failure insert_snapshot raises is a duplicate snapshot_id
+        # without --replace (store/sql.py's own IntegrityError branch), so
+        # naming that fix is safe rather than echoing a library-facing
+        # message that talks about the Python keyword instead of the flag.
+        print(
+            f"A field snapshot with id {snapshot.snapshot_id!r} already "
+            "exists. Pass --replace to overwrite it.",
+            file=sys.stderr,
+        )
+        return 1
     finally:
         conn.close()
 

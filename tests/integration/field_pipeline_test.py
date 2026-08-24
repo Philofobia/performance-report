@@ -106,6 +106,34 @@ def test_main_persists_and_reports(tmp_path, monkeypatch, capsys):
     assert "www.oakley.com" in capsys.readouterr().out
 
 
+def test_main_exits_one_on_duplicate_snapshot_without_replace(tmp_path, monkeypatch, capsys):
+    """insert_snapshot's StoreError on a duplicate id must surface as this
+    stage's own clean message and exit 1 - never as a raw traceback, and
+    never as Python's crash-implied exit 1 rather than this stage's
+    deliberate one."""
+
+    class _FrozenDatetime(datetime):
+        """Pins ``datetime.now()`` so two ``main()`` calls mint the same
+        ``snapshot_id`` (it is derived from ``fetched_at`` to the second)."""
+
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 8, 24, tzinfo=timezone.utc)
+
+    monkeypatch.setattr("ingest.field.datetime", _FrozenDatetime)
+    monkeypatch.setattr("ingest.field._build_client", lambda settings: _StubClient())
+    monkeypatch.setattr(
+        "ingest.field.load_settings",
+        lambda *a, **k: Settings(storage={"sqlite_path": str(tmp_path / "runs.sqlite")}),
+    )
+
+    argv = ["--project", "oakley", "--hosts", "www.oakley.com"]
+    assert main(argv) == 0
+    assert main(argv) == 1  # same snapshot_id, no --replace
+    err = capsys.readouterr().err
+    assert "--replace" in err
+
+
 def test_main_exits_non_zero_when_grafana_is_unreachable(tmp_path, monkeypatch):
     from ingest.grafana.client import GrafanaError
 
