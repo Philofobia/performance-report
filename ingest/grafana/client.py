@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 from urllib.error import HTTPError, URLError
 
@@ -43,7 +43,13 @@ class MissingGrafanaConfigError(GrafanaError):
 @dataclass(frozen=True)
 class GrafanaEnv:
     base_url: str
-    token: str
+    # repr=False keeps the bearer token out of repr()/str() (and so out of any
+    # unhandled traceback, print(), or log call that formats this object) —
+    # the same SECURITY_PLAN 2.8 guarantee resolve_api_key gives its callers,
+    # just closed at the dataclass's own printable surface. The field stays
+    # required and in position: repr=False carries no default, so it does not
+    # disturb field ordering.
+    token: str = field(repr=False)
     datasource_uid: str
     table: str
 

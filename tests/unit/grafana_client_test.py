@@ -149,3 +149,11 @@ def test_malformed_json_response_raises_grafana_error():
 def test_client_exposes_its_table_publicly():
     client = _client([{"results": {}}])
     assert client.table == "tenant.mpulse"
+
+
+def test_token_is_not_reachable_through_repr():
+    """SECURITY_PLAN 2.8: an unhandled traceback must not print the credential."""
+    env = resolve_grafana_env(FULL_ENV)
+    assert "glsa_secret_value" not in repr(env)
+    assert "glsa_secret_value" not in str(env)
+    assert env.token == "glsa_secret_value"  # still readable by the client
