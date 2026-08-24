@@ -28,13 +28,14 @@ Loader = Callable[[], Delegate]
 COMMANDS: Dict[str, str] = {
     "ingest auto": "Run a headless browser campaign over the configured matrix",
     "ingest manual": "Record a run from hand-supplied metrics",
+    "ingest field": "Fetch real-user (RUM) data from Grafana into the store",
     "analyze": "Turn stored runs into a Report JSON",
     "report": "Render a Report JSON to HTML, Markdown and PDF",
     "list-runs": "List the runs held in the SQLite run store",
     "ui": "Serve the local manual-entry form (loopback only)",
 }
 
-_INGEST_MODES = ("auto", "manual")
+_INGEST_MODES = ("auto", "manual", "field")
 
 
 def _ingest_auto() -> Delegate:
@@ -44,6 +45,11 @@ def _ingest_auto() -> Delegate:
 
 def _ingest_manual() -> Delegate:
     from ingest.manual import main
+    return main
+
+
+def _ingest_field() -> Delegate:
+    from ingest.field import main
     return main
 
 
@@ -72,6 +78,7 @@ def _ui() -> Delegate:
 _DELEGATES: Dict[str, Loader] = {
     "ingest auto": _ingest_auto,
     "ingest manual": _ingest_manual,
+    "ingest field": _ingest_field,
     "analyze": _analyze,
     "report": _report,
     "list-runs": _list_runs,
