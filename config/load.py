@@ -215,7 +215,13 @@ class Thresholds(BaseModel):
     #: Percentage *points* above the site-wide rate, not a ratio: a ratio makes
     #: a low-traffic group with 2% bounce look catastrophic at 4%.
     field_bounce_excess_pp: float = 10.0
+    #: Bounce excess (percentage points) at which a page group is a failure
+    #: rather than a warning. Configured rather than derived from the warn
+    #: value: tuning one bound must not silently move the other.
+    field_bounce_excess_fail_pp: float = 20.0
     field_cache_hit_warn_pct: float = 70.0
+    #: CDN cache-hit ratio below which an asset type is a failure.
+    field_cache_hit_fail_pct: float = 35.0
     field_frustration_warn: float = 30.0
     field_frustration_fail: float = 60.0
 

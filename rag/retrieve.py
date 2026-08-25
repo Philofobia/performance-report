@@ -260,7 +260,7 @@ def detect_field_symptoms(
                 f"{_fmt(row.bounce_pct)}% of real visitors who land on this page "
                 f"leave without going any further, against {_fmt(site_bounce)}% "
                 "across the site - they are giving up here specifically.",
-                "fail" if excess >= th.field_bounce_excess_pp * 2 else "warn",
+                "fail" if excess >= th.field_bounce_excess_fail_pp else "warn",
                 "bounce_pct", row.bounce_pct, site_bounce)
 
     if row is not None and row.frustration_p75 is not None:
@@ -283,12 +283,12 @@ def detect_field_symptoms(
             continue
         if asset.cache_hit_pct < th.field_cache_hit_warn_pct:
             origin = (f" and each miss costs {_fmt(asset.origin_ms)}ms at the origin"
-                      if asset.origin_ms else "")
+                      if asset.origin_ms is not None else "")
             add("field_cache_low",
                 f"Only {_fmt(asset.cache_hit_pct)}% of {asset.asset_type} requests "
                 f"are served from the CDN edge{origin} - real users are waiting "
                 "for content that could have been cached.",
-                "fail" if asset.cache_hit_pct < th.field_cache_hit_warn_pct / 2
+                "fail" if asset.cache_hit_pct < th.field_cache_hit_fail_pct
                 else "warn",
                 "cache_hit_pct", asset.cache_hit_pct, th.field_cache_hit_warn_pct)
 
@@ -301,7 +301,7 @@ def detect_field_symptoms(
             f"Visitors whose interactions fall in the '{worst.bucket}' band show "
             f"an average frustration of {_fmt(worst.avg_frustration)} - slow "
             "responses are translating into real irritation.",
-            "fail", "frustration_p75", worst.avg_frustration,
+            "fail", "avg_frustration", worst.avg_frustration,
             th.field_frustration_fail)
 
     # Same ordering contract as detect_symptoms: severity, then code, so the

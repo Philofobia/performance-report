@@ -58,6 +58,32 @@ def test_low_cache_hit_ratio_names_the_asset_type():
     assert not any("CSS" in s.text for s in symptoms)
 
 
+def test_measured_zero_origin_ms_is_not_dropped_like_unmeasured():
+    """A cache miss that costs 0ms at the origin (already-warm edge case, or
+    a same-region origin) is still a *measurement* and must render, the same
+    bug class fixed for aggregate sums in edb52f2 - a falsy 0.0 must not
+    be treated the same as "we never measured this".
+    """
+    snap = _snap(assets=[AssetRow(asset_type="Images", cache_hit_pct=48.0,
+                                   origin_ms=0.0)])
+    symptoms = detect_field_symptoms(snap)
+    cache = next(s for s in symptoms if s.code == "field_cache_low")
+    assert "0ms at the origin" in cache.text
+
+
+def test_inp_bucket_symptom_metric_is_avg_frustration_not_a_percentile():
+    """InpBucketRow.avg_frustration is a bucket mean, not a p75 - the metric
+    name on the symptom must say what it actually is.
+    """
+    snap = _snap(inp_buckets=[
+        InpBucketRow(bucket="4 - over 1000 ms (critical)", beacons=300,
+                     avg_frustration=71.0),
+    ])
+    symptoms = detect_field_symptoms(snap)
+    inp = next(s for s in symptoms if s.code == "field_inp_frustration")
+    assert inp.metric == "avg_frustration"
+
+
 def test_frustration_severity_splits_at_the_configured_thresholds():
     warn = detect_field_symptoms(
         _snap(by_pagetype=[PageTypeRow(page_group="Pdp", frustration_p75=40.0)]),
@@ -81,19 +107,62 @@ def test_worst_inp_bucket_with_climbing_frustration_fires():
 
 
 def test_symptoms_are_ordered_fail_before_warn_and_deterministic():
+    """Mixed severities on purpose, and chosen so code order alone would get
+    it wrong: "field_cache_low" sorts alphabetically *before*
+    "field_frustration_fail", so a sort keyed on code only (severity term
+    dropped) would put the warn ahead of the fail. With everything resolving
+    to the same severity, or with codes that happen to already agree with
+    severity order, the 'fail before warn' assertion could pass even if the
+    sort key ignored severity entirely - this snapshot rules that out.
+    """
     snap = _snap(
-        sessions=SessionKpis(bounce_pct=30.0),
-        by_pagetype=[PageTypeRow(page_group="Pdp", bounce_pct=70.0,
-                                 frustration_p75=70.0)],
-        assets=[AssetRow(asset_type="Images", cache_hit_pct=10.0)],
+        by_pagetype=[PageTypeRow(page_group="Pdp", frustration_p75=70.0)],
+        assets=[AssetRow(asset_type="Images", cache_hit_pct=50.0)],
     )
     first = detect_field_symptoms(snap, page_group="Pdp")
-    assert [s.severity for s in first] == sorted(
-        [s.severity for s in first], key=lambda sev: 0 if sev == "fail" else 1
+    codes = [s.code for s in first]
+    severities = [s.severity for s in first]
+    assert codes == ["field_frustration_fail", "field_cache_low"]
+    assert severities == ["fail", "warn"]
+    assert "fail" in severities and "warn" in severities
+    assert severities == sorted(
+        severities, key=lambda sev: 0 if sev == "fail" else 1
     )
+    last_fail = max(i for i, s in enumerate(severities) if s == "fail")
+    first_warn = min(i for i, s in enumerate(severities) if s == "warn")
+    assert last_fail < first_warn
+
     assert [s.code for s in first] == [
         s.code for s in detect_field_symptoms(snap, page_group="Pdp")
     ]
+
+
+def test_bounce_fail_boundary_is_configured_independently_of_warn():
+    """The fail severity flips at ``field_bounce_excess_fail_pp`` itself, not
+    at a code-level multiple of ``field_bounce_excess_pp`` - proves the two
+    bounds are no longer coupled (they were ``* 2`` before this fix).
+    """
+    snap = _snap(
+        sessions=SessionKpis(bounce_pct=40.0),
+        by_pagetype=[PageTypeRow(page_group="Pdp", bounce_pct=57.0)],  # 17pp excess
+    )
+    # Old derived rule: fail at 2 * 10 = 20pp, so 17pp would only warn.
+    # Configured fail boundary set well below that, at 15pp: 17pp must fail.
+    th = Thresholds(field_bounce_excess_pp=10.0, field_bounce_excess_fail_pp=15.0)
+    symptoms = detect_field_symptoms(snap, page_group="Pdp", thresholds=th)
+    bounce = [s for s in symptoms if s.code == "field_bounce_high"]
+    assert [s.severity for s in bounce] == ["fail"]
+
+
+def test_cache_fail_boundary_is_configured_independently_of_warn():
+    """Same independence proof for the cache-hit rule (was ``/ 2`` before)."""
+    snap = _snap(assets=[AssetRow(asset_type="Images", cache_hit_pct=40.0)])
+    # Old derived rule: fail below 70 / 2 = 35, so 40% would only warn.
+    # Configured fail boundary set above that, at 45%: 40% must fail.
+    th = Thresholds(field_cache_hit_warn_pct=70.0, field_cache_hit_fail_pct=45.0)
+    symptoms = detect_field_symptoms(snap, thresholds=th)
+    cache = [s for s in symptoms if s.code == "field_cache_low"]
+    assert [s.severity for s in cache] == ["fail"]
 
 
 def test_custom_thresholds_are_honoured():
