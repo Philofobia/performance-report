@@ -375,7 +375,10 @@ def test_methodology_captures_are_unchanged_by_the_appendix():
     assert [c.run_id for c in report.methodology.captures] == ["run_homepage"]
 
 
-def test_schema_version_records_the_appendix_addition():
+def test_schema_version_records_the_field_addition():
+    """schema_version is 3: it bumped once for the appendix (Phase 7B) and
+    again for Report.field (2026-08-24 design) — this only pins the current
+    value, not which change most recently moved it."""
     assert a_report_with_captures().schema_version == 3
 
 
@@ -500,6 +503,26 @@ def test_field_mode_is_stale_beyond_one_window():
     assert field_mode_for(snap, generated_at=now, window="7d") == "stale"
 
 
+def test_field_mode_is_live_exactly_one_window_old():
+    """The boundary is strictly `>`, not `>=`: a snapshot exactly one window
+    old still overlaps the period it is read against and must stay live. If
+    this ever flips to `>=`, a snapshot fetched right on schedule would read
+    as stale the moment the next fetch is due."""
+    from datetime import timedelta
+
+    from analysis.reportmodel import field_mode_for
+    from normalize.field import FieldSnapshot, window_delta
+
+    now = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    window_to = now - window_delta("7d")
+    snap = FieldSnapshot(
+        snapshot_id="s", project="p", hosts=["a.com"],
+        window_from=window_to - timedelta(days=7), window_to=window_to,
+        fetched_at=window_to,
+    )
+    assert field_mode_for(snap, generated_at=now, window="7d") == "live"
+
+
 # --------------------------------------------------------------------------- #
 # field data — the report and page blocks
 # --------------------------------------------------------------------------- #
@@ -510,6 +533,40 @@ def test_report_without_field_data_still_carries_an_empty_field_block():
     assert report.field.available is False
     assert report.meta.field_mode == "unavailable"
     assert all(page.field is not None for page in report.pages)
+
+
+def test_meta_field_mode_is_live_when_the_snapshot_still_overlaps():
+    """Regression guard: `"unavailable"` is also ReportMeta.field_mode's
+    hardcoded default, so a test that only ever sees "unavailable" cannot
+    tell a wired-through mode from a `field_mode=field_block.mode` argument
+    that was silently dropped from the ReportMeta(...) call in build_report.
+    This drives a snapshot that computes to "live" and checks it survives
+    the assembly, which only happens if the wiring is actually present."""
+    from normalize.field import FieldSnapshot
+
+    now = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    snapshot = FieldSnapshot(
+        snapshot_id="s", project="p", hosts=["a.com"],
+        window_from=now, window_to=now, fetched_at=now,
+    )
+    report = build(field=snapshot, generated_at=now)
+    assert report.meta.field_mode == "live"
+
+
+def test_meta_field_mode_is_stale_when_the_snapshot_has_aged_out():
+    """Same regression guard as above, for the "stale" branch."""
+    from datetime import timedelta
+
+    from normalize.field import FieldSnapshot
+
+    now = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    old = now - timedelta(days=20)
+    snapshot = FieldSnapshot(
+        snapshot_id="s", project="p", hosts=["a.com"],
+        window_from=old - timedelta(days=7), window_to=old, fetched_at=old,
+    )
+    report = build(field=snapshot, generated_at=now)
+    assert report.meta.field_mode == "stale"
 
 
 def test_page_field_block_joins_through_the_configured_map():
