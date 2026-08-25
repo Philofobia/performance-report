@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
+import pytest
+
 from analysis.reportmodel import Report
 from report.render_html import build_charts, render_html
 from report.skeleton import fingerprint
@@ -116,6 +118,13 @@ def a_report(pages=("homepage",), *, recommendations=True, mode="llm",
                  "model": "gemini-2.0-flash", "playbooks_cited": ["images.md"],
                  "dropped_recommendations": 0, "knowledge_digest": "abc"},
     })
+
+
+@pytest.fixture
+def minimal_report():
+    """A validated report with no field data — the state most campaigns are in
+    until Grafana ingestion is configured."""
+    return a_report()
 
 
 def test_renders_a_complete_html_document():
@@ -486,3 +495,35 @@ def test_no_raw_float_reaches_the_page():
     prose = re.sub(r"<svg.*?</svg>", "", render_html(a_report()), flags=re.S)
 
     assert not re.search(r"\d+\.\d{4,}", prose)
+
+
+# --------------------------------------------------------------------------- #
+# Field section (grafana field ingestion)
+# --------------------------------------------------------------------------- #
+def test_field_section_renders_when_unavailable(minimal_report):
+    """Absence is a state; the section must still be in the document."""
+    from report.render_html import render_html
+
+    html = render_html(minimal_report)
+    assert 'data-section="field"' in html
+    assert "No field data" in html
+
+
+def test_field_section_renders_the_headline_when_available(minimal_report):
+    from analysis.reportmodel import FieldBlock, FieldHeadline
+    from report.render_html import render_html
+
+    minimal_report.field = FieldBlock(
+        available=True, mode="live",
+        headline=FieldHeadline(bounce_pct=41.0, conversion_pct=2.4),
+    )
+    html = render_html(minimal_report)
+    assert "41" in html and "2.4" in html
+
+
+def test_stale_snapshot_says_so(minimal_report):
+    from analysis.reportmodel import FieldBlock
+    from report.render_html import render_html
+
+    minimal_report.field = FieldBlock(available=True, mode="stale")
+    assert "stale" in render_html(minimal_report).lower()

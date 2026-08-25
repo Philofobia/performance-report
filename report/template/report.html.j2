@@ -85,6 +85,130 @@
   {% endif %}
 </section>
 
+<section data-section="field" class="sheet">
+  <p class="eyebrow">Real users</p>
+  <h2>What visitors actually experienced</h2>
+  <p class="lede">Measured from real sessions, not from the emulated campaign.
+    Where these disagree with the page measurements below, these are what your
+    visitors lived through.</p>
+  {% if not report.field.available %}
+  <p class="empty">No field data for this window. Run
+    <code>python -m cli ingest field</code> to fetch it from Grafana.</p>
+  {% elif report.field.mode == "stale" %}
+  <p class="empty">These figures are stale
+    {% if report.field.fetched_at %}— fetched {{ report.field.fetched_at.strftime("%Y-%m-%d") }}{% endif %}
+    {% if report.field.window_from and report.field.window_to %},
+    covering {{ report.field.window_from.strftime("%Y-%m-%d") }} to
+    {{ report.field.window_to.strftime("%Y-%m-%d") }}{% endif %}. Re-run
+    <code>python -m cli ingest field</code> for current numbers.</p>
+  {% else %}
+  <p class="url mono">
+    {% if report.field.window_from and report.field.window_to %}
+    {{ report.field.window_from.strftime("%Y-%m-%d") }} to
+    {{ report.field.window_to.strftime("%Y-%m-%d") }} ·
+    {% endif %}
+    {{ report.field.hosts | join(", ") }}</p>
+  {% endif %}
+
+  <div data-section="field.headline" class="block">
+    <h3>Engagement and real-user vitals</h3>
+    {% if report.field.available %}
+    <table class="metrics glance">
+      <thead><tr><th>Metric</th><th>Measured</th></tr></thead>
+      <tbody>
+      {% for row in field_headline %}
+        <tr><td>{{ row.label }}</td><td>{{ row.value }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if charts.field_sessions %}
+    <div class="chart">{{ charts.field_sessions|safe }}</div>
+    {% endif %}
+    {% else %}
+    <p class="empty">No engagement data.</p>
+    {% endif %}
+  </div>
+
+  <div data-section="field.frustration" class="block">
+    <h3>Where users got stuck</h3>
+    {% if report.field.symptoms %}
+    <ul class="findings">
+      {% for symptom in report.field.symptoms %}
+      <li><span class="tag tag--{{ symptom.severity }}">{{ symptom.severity }}</span>
+        <span class="serif">{{ symptom.text }}</span></li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">No frustration signals crossed their thresholds.</p>
+    {% endif %}
+    {% if report.field.segments.inp_buckets %}
+    <table class="metrics">
+      <caption>Interaction speed buckets (groups under 50 beacons omitted)</caption>
+      <thead><tr><th>Interaction speed</th><th>Beacons</th>
+        <th>Avg frustration</th><th>% with rage clicks</th></tr></thead>
+      <tbody>
+      {% for row in report.field.segments.inp_buckets %}
+        <tr><td>{{ row.bucket }}</td><td>{{ row.beacons }}</td>
+          <td>{{ row.avg_frustration }}</td><td>{{ row.rage_session_pct }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+
+  <div data-section="field.segments" class="block">
+    <h3>By device, market and page type</h3>
+    {% for caption, key, label_col in [
+        ("Device", "by_device", "device"),
+        ("Market", "by_country", "country"),
+        ("Page type", "by_pagetype", "page_group")] %}
+      {% set rows = report.field.segments[key] %}
+      <h4>{{ caption }}</h4>
+      {% if rows %}
+      <table class="metrics">
+        {% if key == "by_country" %}
+        <caption>Top 15 markets by traffic (groups under 50 beacons omitted)</caption>
+        {% elif key == "by_pagetype" %}
+        <caption>Groups under 50 beacons omitted</caption>
+        {% endif %}
+        <thead><tr><th>{{ caption }}</th><th>Beacons</th><th>LCP p75</th>
+          <th>INP p75</th><th>CLS p75</th><th>Frustration p75</th></tr></thead>
+        <tbody>
+        {% for row in rows %}
+          <tr><td>{{ row[label_col] }}</td><td>{{ row.beacons }}</td>
+            <td>{{ row.lcp_p75 }}</td><td>{{ row.inp_p75 }}</td>
+            <td>{{ row.cls_p75 }}</td><td>{{ row.frustration_p75 }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">No {{ caption | lower }} breakdown available.</p>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+  <div data-section="field.assets" class="block">
+    <h3>What the CDN served</h3>
+    <p class="serif">A low cache-hit percentage means real users waited for the
+      origin to answer for content that could have been served from the edge.</p>
+    {% if report.field.segments.assets %}
+    <table class="metrics">
+      <thead><tr><th>Asset type</th><th>Requests</th><th>Avg size</th>
+        <th>Edge time</th><th>Origin time</th><th>Cache hit</th></tr></thead>
+      <tbody>
+      {% for row in report.field.segments.assets %}
+        <tr><td>{{ row.asset_type }}</td><td>{{ row.request_count }}</td>
+          <td>{{ row.avg_size_kb }} KB</td><td>{{ row.edge_ms }} ms</td>
+          <td>{{ row.origin_ms }} ms</td><td>{{ row.cache_hit_pct }}%</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No CDN breakdown available.</p>
+    {% endif %}
+  </div>
+</section>
+
 {% for page in report.pages %}
 <section data-section="page" data-page="{{ page.name }}" class="sheet page">
 
@@ -121,6 +245,30 @@
       {% endfor %}
       </tbody>
     </table>
+  </div>
+
+  <div data-section="page.field" class="block">
+    <h3>Real users on this page</h3>
+    {% if not page.field.available %}
+    <p class="empty">This page is not mapped to an mPulse page group. Add it to
+      <code>grafana.page_groups</code> in settings.yaml to compare it against
+      real-user data.</p>
+    {% else %}
+    <p class="serif">The campaign above emulates one device on one connection.
+      This is the same page as {{ page.field.beacons }} real visits measured it
+      ({{ page.field.page_group }}).</p>
+    <table class="metrics glance">
+      <thead><tr><th>Metric</th><th>This campaign</th><th>Real users (p75)</th></tr></thead>
+      <tbody>
+      {% for row in field_rows[page.name] %}
+        <tr><td>{{ row.label }}</td><td>{{ row.lab }}</td><td>{{ row.field }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if charts.pages[page.name].lab_vs_field %}
+    <div class="chart">{{ charts.pages[page.name].lab_vs_field|safe }}</div>
+    {% endif %}
+    {% endif %}
   </div>
 
   <div data-section="page.findings" class="block">

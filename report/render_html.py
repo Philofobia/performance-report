@@ -102,12 +102,16 @@ def build_charts(report: Report) -> Dict[str, Any]:
             "trends": [
                 charts.trend_chart(series.model_dump()) for series in page.trends
             ],
+            "lab_vs_field": charts.lab_vs_field_chart(
+                cwp, page.field.model_dump()
+            ),
         }
     return {
         "pages": pages,
         "comparison": charts.comparison_heat(
             [row.model_dump() for row in report.comparison]
         ),
+        "field_sessions": charts.field_sessions_chart(report.field.series),
     }
 
 
@@ -136,6 +140,69 @@ def glance_by_page(report) -> Dict[str, list]:
     }
 
 
+def _fmt(value: Optional[float], unit: str = "", decimals: int = 0) -> str:
+    """A metric cell, or an em dash. Never prints 0 for an absent value."""
+    if value is None:
+        return "—"
+    return f"{value:.{decimals}f}{unit}"
+
+
+def field_headline_rows(report) -> list:
+    """The brand-wide figures as label/value pairs, computed once."""
+    h = report.field.headline
+    return [
+        {"label": "Sessions", "value": _fmt(h.sessions)},
+        {"label": "Bounce rate", "value": _fmt(h.bounce_pct, "%", 1)},
+        {"label": "Conversion rate", "value": _fmt(h.conversion_pct, "%", 2)},
+        {"label": "Pages per session", "value": _fmt(h.avg_session_pages, "", 2)},
+        {"label": "LCP p75", "value": _fmt(h.lcp_p75, "ms")},
+        {"label": "INP p75", "value": _fmt(h.inp_p75, "ms")},
+        {"label": "CLS p75", "value": _fmt(h.cls_p75, "", 3)},
+        {"label": "TTFB p75", "value": _fmt(h.ttfb_p75, "ms")},
+        {"label": "Rage clicks", "value": _fmt(h.rage_clicks_total)},
+        {"label": "Frustration index p75", "value": _fmt(h.frustration_p75, "", 1)},
+    ]
+
+
+def field_rows_by_page(report) -> Dict[str, list]:
+    """Lab beside field, per page, keyed by page name.
+
+    The comparison is the point of the whole feature, so it is built here
+    rather than in two templates: an emulated number and a p75 field number
+    formatted differently in HTML and Markdown would undermine the one row
+    readers are meant to trust.
+    """
+    rows: Dict[str, list] = {}
+    for page in report.pages:
+        field = page.field
+        # PageBlock.metrics is a plain dict (the Run's metrics dumped whole),
+        # unpacked here rather than in the template - build_charts already
+        # does exactly this at report/render_html.py:88, because the template
+        # does not reach into structures.
+        cwp = page.metrics.get("cwp", {}) if isinstance(page.metrics, dict) else {}
+        rows[page.name] = [
+            {"label": "LCP",
+             "lab": _fmt(cwp.get("lcp_ms"), "ms"),
+             "field": _fmt(field.lcp_p75, "ms")},
+            {"label": "INP",
+             "lab": _fmt(cwp.get("inp_ms"), "ms"),
+             "field": _fmt(field.inp_p75, "ms")},
+            {"label": "CLS",
+             "lab": _fmt(cwp.get("cls"), "", 3),
+             "field": _fmt(field.cls_p75, "", 3)},
+            # No lab counterpart exists for these: a single scripted navigation
+            # cannot bounce, get frustrated, or rage-click. The em dash says
+            # "not measurable here", which is not the same as "zero".
+            {"label": "Entry bounce rate",
+             "lab": "—", "field": _fmt(field.bounce_pct, "%", 1)},
+            {"label": "Frustration index p75",
+             "lab": "—", "field": _fmt(field.frustration_p75, "", 1)},
+            {"label": "Rage clicks",
+             "lab": "—", "field": _fmt(field.rage_clicks)},
+        ]
+    return rows
+
+
 def render_html(
     report: Report, *, images: Optional[Mapping[str, "EmbeddedImage"]] = None
 ) -> str:
@@ -156,4 +223,6 @@ def render_html(
         images=images or {},
         stylesheet=stylesheet,
         glance=glance_by_page(report),
+        field_headline=field_headline_rows(report),
+        field_rows=field_rows_by_page(report),
     )
