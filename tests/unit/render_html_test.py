@@ -510,15 +510,21 @@ def test_field_section_renders_when_unavailable(minimal_report):
 
 
 def test_field_section_renders_the_headline_when_available(minimal_report):
+    # "41" and "2.4" alone are too weak: both already appear in a render with
+    # no field data at all (chart SVG path data, unrelated prose), so a bare
+    # substring check would still pass with field.headline deleted entirely.
+    # Assert the label and its formatted value together, on the row that can
+    # only come from the headline table.
     from analysis.reportmodel import FieldBlock, FieldHeadline
     from report.render_html import render_html
 
     minimal_report.field = FieldBlock(
         available=True, mode="live",
-        headline=FieldHeadline(bounce_pct=41.0, conversion_pct=2.4),
+        headline=FieldHeadline(bounce_pct=63.7, conversion_pct=9.87),
     )
     html = render_html(minimal_report)
-    assert "41" in html and "2.4" in html
+    assert "<td>Bounce rate</td><td>63.7%</td>" in html
+    assert "<td>Conversion rate</td><td>9.87%</td>" in html
 
 
 def test_stale_snapshot_says_so(minimal_report):
@@ -527,3 +533,46 @@ def test_stale_snapshot_says_so(minimal_report):
 
     minimal_report.field = FieldBlock(available=True, mode="stale")
     assert "stale" in render_html(minimal_report).lower()
+
+
+def test_a_stale_snapshot_with_no_dates_still_reads_as_a_sentence(minimal_report):
+    # window_from/window_to/fetched_at are all Optional and default to None;
+    # the banner must not read "...are stale . Re-run..." with a stray space
+    # and orphaned period when they are absent.
+    from analysis.reportmodel import FieldBlock
+    from report.render_html import render_html
+
+    minimal_report.field = FieldBlock(available=True, mode="stale")
+    html = render_html(minimal_report)
+    assert "stale . Re-run" not in html
+    assert re.search(r"These figures are stale\.\s+Re-run", html)
+
+
+def test_field_segment_tables_never_show_none_or_a_raw_float(minimal_report):
+    """report.field.segments.* is a list of plain dicts carried through
+    verbatim from Grafana - nothing upstream formats it. Printed straight
+    into a template, an absent cell renders as the literal string "None"
+    and a float keeps its full binary-rounding tail."""
+    from analysis.reportmodel import FieldBlock, FieldSegments
+    from report.render_html import render_html
+
+    minimal_report.field = FieldBlock(
+        available=True, mode="live",
+        segments=FieldSegments(
+            by_device=[{"device": "mobile", "beacons": 800, "lcp_p75": 3300.0,
+                        "inp_p75": None, "cls_p75": 0.10999999999,
+                        "frustration_p75": 13.0}],
+            inp_buckets=[{"bucket": "1 - under 200 ms (good)", "beacons": 600,
+                          "avg_frustration": 5.0, "rage_session_pct": None}],
+            assets=[{"asset_type": "image", "request_count": 1200,
+                     "avg_size_kb": None, "edge_ms": 30.0, "origin_ms": None,
+                     "cache_hit_pct": 88.5}],
+        ),
+    )
+    html = render_html(minimal_report)
+    prose = re.sub(r"<svg.*?</svg>", "", html, flags=re.S)
+    assert "None" not in prose
+    assert not re.search(r"\d+\.\d{4,}", prose)
+    # the None cells above rendered as an em dash somewhere in these tables,
+    # not as an omission of the row itself
+    assert "<td>—</td>" in prose

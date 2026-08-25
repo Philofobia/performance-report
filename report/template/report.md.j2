@@ -79,31 +79,37 @@ _No engagement data._
 _No frustration signals crossed their thresholds._
 {% endif %}
 
-{% if report.field.segments.inp_buckets %}
+{% if field_segments.inp_buckets %}
 Interaction speed buckets (groups under 50 beacons omitted)
 
 | Interaction speed | Beacons | Avg frustration | % with rage clicks |
 | --- | --- | --- | --- |
-{% for row in report.field.segments.inp_buckets %}
-| {{ row.bucket }} | {{ row.beacons }} | {{ row.avg_frustration }} | {{ row.rage_session_pct }} |
+{% for row in field_segments.inp_buckets %}
+| {{ row.label }} | {{ row.beacons }} | {{ row.avg_frustration }} | {{ row.rage_session_pct }} |
 {% endfor %}
 {% endif %}
 
 **By device, market and page type**
 
-{% for caption, key, label_col in [
-    ("Device", "by_device", "device"),
-    ("Market", "by_country", "country"),
-    ("Page type", "by_pagetype", "page_group")] %}
-{% set rows = report.field.segments[key] %}
+{% for caption, key in [
+    ("Device", "by_device"),
+    ("Market", "by_country"),
+    ("Page type", "by_pagetype")] %}
+{% set rows = field_segments[key] %}
 _{{ caption }}_
-{% if key == "by_country" %}(top 15 markets by traffic, groups under 50 beacons omitted){% elif key == "by_pagetype" %}(groups under 50 beacons omitted){% endif %}
 
 {% if rows %}
+{% if key == "by_country" %}
+Top 15 markets by traffic (groups under 50 beacons omitted)
+
+{% elif key == "by_pagetype" %}
+Groups under 50 beacons omitted
+
+{% endif %}
 | {{ caption }} | Beacons | LCP p75 | INP p75 | CLS p75 | Frustration p75 |
 | --- | --- | --- | --- | --- | --- |
 {% for row in rows %}
-| {{ row[label_col] }} | {{ row.beacons }} | {{ row.lcp_p75 }} | {{ row.inp_p75 }} | {{ row.cls_p75 }} | {{ row.frustration_p75 }} |
+| {{ row.label }} | {{ row.beacons }} | {{ row.lcp_p75 }} | {{ row.inp_p75 }} | {{ row.cls_p75 }} | {{ row.frustration_p75 }} |
 {% endfor %}
 {% else %}
 _No {{ caption | lower }} breakdown available._
@@ -116,11 +122,11 @@ _No {{ caption | lower }} breakdown available._
 A low cache-hit percentage means real users waited for the origin to answer
 for content that could have been served from the edge.
 
-{% if report.field.segments.assets %}
+{% if field_segments.assets %}
 | Asset type | Requests | Avg size | Edge time | Origin time | Cache hit |
 | --- | --- | --- | --- | --- | --- |
-{% for row in report.field.segments.assets %}
-| {{ row.asset_type }} | {{ row.request_count }} | {{ row.avg_size_kb }} KB | {{ row.edge_ms }} ms | {{ row.origin_ms }} ms | {{ row.cache_hit_pct }}% |
+{% for row in field_segments.assets %}
+| {{ row.label }} | {{ row.request_count }} | {{ row.avg_size_kb }} | {{ row.edge_ms }} | {{ row.origin_ms }} | {{ row.cache_hit_pct }} |
 {% endfor %}
 {% else %}
 _No CDN breakdown available._

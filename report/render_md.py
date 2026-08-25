@@ -27,6 +27,7 @@ from report.glossary import load_glossary
 from report.render_html import (
     field_headline_rows,
     field_rows_by_page,
+    field_segment_rows,
     glance_by_page,
     metric_label,
     transfer_size,
@@ -129,4 +130,5 @@ def render_md(report: Report, *, base_dir: Optional[Path] = None) -> str:
     return _env(base_dir).get_template(MD_TEMPLATE).render(
         report=report, glance=glance_by_page(report),
         field_headline=field_headline_rows(report),
-        field_rows=field_rows_by_page(report))
+        field_rows=field_rows_by_page(report),
+        field_segments=field_segment_rows(report))

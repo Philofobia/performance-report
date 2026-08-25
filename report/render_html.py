@@ -203,6 +203,64 @@ def field_rows_by_page(report) -> Dict[str, list]:
     return rows
 
 
+def _seg_row(row: Mapping, label_key: str) -> Dict[str, str]:
+    """One device/country/page-type breakdown row, cells pre-formatted.
+
+    Shared by all three tables: they carry identical columns (see
+    ``normalize.field._SegmentRow``), so one formatter keeps them from
+    drifting apart the way the raw-dict template loop let them.
+    """
+    return {
+        "label": row.get(label_key, ""),
+        "beacons": _fmt(row.get("beacons")),
+        "lcp_p75": _fmt(row.get("lcp_p75"), "ms"),
+        "inp_p75": _fmt(row.get("inp_p75"), "ms"),
+        "cls_p75": _fmt(row.get("cls_p75"), "", 3),
+        "frustration_p75": _fmt(row.get("frustration_p75"), "", 1),
+    }
+
+
+def field_segment_rows(report) -> Dict[str, list]:
+    """The five breakdown tables, cells pre-formatted, computed once.
+
+    ``report.field.segments.*`` is a list of plain dicts straight from
+    ``FieldSnapshot`` (see ``analysis/reportmodel.py``'s ``FieldSegments``
+    docstring: "carried through verbatim") — nothing upstream of this
+    formats them. Printing them unformatted in the template means an
+    unmeasured cell renders as the literal string ``None`` and a float
+    prints with its full binary-rounding tail; both are exactly what
+    ``_fmt`` and the em-dash rule exist to prevent, and reusing the same
+    ``_fmt`` here rather than re-deriving units per template is the same
+    "compute once, render twice" rule ``field_headline_rows`` follows.
+    """
+    seg = report.field.segments
+    return {
+        "by_device": [_seg_row(r, "device") for r in seg.by_device],
+        "by_country": [_seg_row(r, "country") for r in seg.by_country],
+        "by_pagetype": [_seg_row(r, "page_group") for r in seg.by_pagetype],
+        "inp_buckets": [
+            {
+                "label": row.get("bucket", ""),
+                "beacons": _fmt(row.get("beacons")),
+                "avg_frustration": _fmt(row.get("avg_frustration"), "", 1),
+                "rage_session_pct": _fmt(row.get("rage_session_pct"), "%", 1),
+            }
+            for row in seg.inp_buckets
+        ],
+        "assets": [
+            {
+                "label": row.get("asset_type", ""),
+                "request_count": _fmt(row.get("request_count")),
+                "avg_size_kb": _fmt(row.get("avg_size_kb"), " KB", 1),
+                "edge_ms": _fmt(row.get("edge_ms"), " ms"),
+                "origin_ms": _fmt(row.get("origin_ms"), " ms"),
+                "cache_hit_pct": _fmt(row.get("cache_hit_pct"), "%", 1),
+            }
+            for row in seg.assets
+        ],
+    }
+
+
 def render_html(
     report: Report, *, images: Optional[Mapping[str, "EmbeddedImage"]] = None
 ) -> str:
@@ -225,4 +283,5 @@ def render_html(
         glance=glance_by_page(report),
         field_headline=field_headline_rows(report),
         field_rows=field_rows_by_page(report),
+        field_segments=field_segment_rows(report),
     )

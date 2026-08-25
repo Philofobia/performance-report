@@ -95,12 +95,12 @@
   <p class="empty">No field data for this window. Run
     <code>python -m cli ingest field</code> to fetch it from Grafana.</p>
   {% elif report.field.mode == "stale" %}
-  <p class="empty">These figures are stale
-    {% if report.field.fetched_at %}— fetched {{ report.field.fetched_at.strftime("%Y-%m-%d") }}{% endif %}
-    {% if report.field.window_from and report.field.window_to %},
-    covering {{ report.field.window_from.strftime("%Y-%m-%d") }} to
-    {{ report.field.window_to.strftime("%Y-%m-%d") }}{% endif %}. Re-run
-    <code>python -m cli ingest field</code> for current numbers.</p>
+  <p class="empty">These figures are stale.
+    {% if report.field.fetched_at %}Fetched {{ report.field.fetched_at.strftime("%Y-%m-%d") }}.{% endif %}
+    {% if report.field.window_from and report.field.window_to %}Covering
+    {{ report.field.window_from.strftime("%Y-%m-%d") }} to
+    {{ report.field.window_to.strftime("%Y-%m-%d") }}.{% endif %}
+    Re-run <code>python -m cli ingest field</code> for current numbers.</p>
   {% else %}
   <p class="url mono">
     {% if report.field.window_from and report.field.window_to %}
@@ -141,14 +141,14 @@
     {% else %}
     <p class="empty">No frustration signals crossed their thresholds.</p>
     {% endif %}
-    {% if report.field.segments.inp_buckets %}
+    {% if field_segments.inp_buckets %}
     <table class="metrics">
       <caption>Interaction speed buckets (groups under 50 beacons omitted)</caption>
       <thead><tr><th>Interaction speed</th><th>Beacons</th>
         <th>Avg frustration</th><th>% with rage clicks</th></tr></thead>
       <tbody>
-      {% for row in report.field.segments.inp_buckets %}
-        <tr><td>{{ row.bucket }}</td><td>{{ row.beacons }}</td>
+      {% for row in field_segments.inp_buckets %}
+        <tr><td>{{ row.label }}</td><td>{{ row.beacons }}</td>
           <td>{{ row.avg_frustration }}</td><td>{{ row.rage_session_pct }}</td></tr>
       {% endfor %}
       </tbody>
@@ -158,11 +158,11 @@
 
   <div data-section="field.segments" class="block">
     <h3>By device, market and page type</h3>
-    {% for caption, key, label_col in [
-        ("Device", "by_device", "device"),
-        ("Market", "by_country", "country"),
-        ("Page type", "by_pagetype", "page_group")] %}
-      {% set rows = report.field.segments[key] %}
+    {% for caption, key in [
+        ("Device", "by_device"),
+        ("Market", "by_country"),
+        ("Page type", "by_pagetype")] %}
+      {% set rows = field_segments[key] %}
       <h4>{{ caption }}</h4>
       {% if rows %}
       <table class="metrics">
@@ -175,7 +175,7 @@
           <th>INP p75</th><th>CLS p75</th><th>Frustration p75</th></tr></thead>
         <tbody>
         {% for row in rows %}
-          <tr><td>{{ row[label_col] }}</td><td>{{ row.beacons }}</td>
+          <tr><td>{{ row.label }}</td><td>{{ row.beacons }}</td>
             <td>{{ row.lcp_p75 }}</td><td>{{ row.inp_p75 }}</td>
             <td>{{ row.cls_p75 }}</td><td>{{ row.frustration_p75 }}</td></tr>
         {% endfor %}
@@ -191,15 +191,15 @@
     <h3>What the CDN served</h3>
     <p class="serif">A low cache-hit percentage means real users waited for the
       origin to answer for content that could have been served from the edge.</p>
-    {% if report.field.segments.assets %}
+    {% if field_segments.assets %}
     <table class="metrics">
       <thead><tr><th>Asset type</th><th>Requests</th><th>Avg size</th>
         <th>Edge time</th><th>Origin time</th><th>Cache hit</th></tr></thead>
       <tbody>
-      {% for row in report.field.segments.assets %}
-        <tr><td>{{ row.asset_type }}</td><td>{{ row.request_count }}</td>
-          <td>{{ row.avg_size_kb }} KB</td><td>{{ row.edge_ms }} ms</td>
-          <td>{{ row.origin_ms }} ms</td><td>{{ row.cache_hit_pct }}%</td></tr>
+      {% for row in field_segments.assets %}
+        <tr><td>{{ row.label }}</td><td>{{ row.request_count }}</td>
+          <td>{{ row.avg_size_kb }}</td><td>{{ row.edge_ms }}</td>
+          <td>{{ row.origin_ms }}</td><td>{{ row.cache_hit_pct }}</td></tr>
       {% endfor %}
       </tbody>
     </table>

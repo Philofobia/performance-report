@@ -281,14 +281,28 @@ def test_field_sessions_chart_needs_more_than_one_point():
     assert field_sessions_chart(one) == NO_CHART
 
 
-def test_field_sessions_chart_accepts_iso_strings_from_reloaded_json():
-    from report.charts import NO_CHART, field_sessions_chart
+def test_field_sessions_chart_parses_iso_strings_to_the_same_svg_as_datetimes():
+    # A bare "does not crash" assertion passes even with the fromisoformat
+    # parsing deleted, because matplotlib will still plot strings as
+    # categorical x-values rather than raising. Comparing against the
+    # datetime-object render is the check that actually exercises the parse:
+    # if `report.json` strings were left unparsed, the two SVGs would differ
+    # (different x-axis tick placement/labels), which fails this assertion.
+    from datetime import datetime, timezone
 
-    series = [
+    from report.charts import field_sessions_chart
+
+    dt_series = [
+        {"time": datetime(2026, 8, 23, tzinfo=timezone.utc),
+         "values": {"bounce_pct": 40.0}},
+        {"time": datetime(2026, 8, 24, tzinfo=timezone.utc),
+         "values": {"bounce_pct": 44.0}},
+    ]
+    str_series = [
         {"time": "2026-08-23T00:00:00+00:00", "values": {"bounce_pct": 40.0}},
         {"time": "2026-08-24T00:00:00+00:00", "values": {"bounce_pct": 44.0}},
     ]
-    assert field_sessions_chart(series) != NO_CHART
+    assert field_sessions_chart(dt_series) == field_sessions_chart(str_series)
 
 
 def test_lab_vs_field_chart_is_empty_when_one_side_is_missing():
