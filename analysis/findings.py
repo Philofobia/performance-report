@@ -411,6 +411,8 @@ def analyze_page(
     chunks: Optional[Sequence[Chunk]] = None,
     knowledge_dir: str = "data/knowledge",
     no_client_reason: str = "no_api_key",
+    field: Optional[Any] = None,
+    page_group: Optional[str] = None,
 ) -> PageAnalysis:
     """Analyse one page, with a model when there is one and rules when not.
 
@@ -422,6 +424,15 @@ def analyze_page(
     ``no_client_reason`` distinguishes *why* there is no model. "No key
     configured" and "the user passed --no-llm" both land on the rule-based
     path, but the report must not claim the first when the second happened.
+
+    ``field`` and ``page_group`` exist here purely to reach the LLM prompt so
+    the model can see real-user measurements alongside the lab ones. Field
+    *symptoms* are not derived here: the caller (``run_analysis``) already
+    detected them against ``settings.thresholds`` — the same thresholds the
+    report's top-level field section is graded against — and folded them into
+    ``symptoms`` before calling this function. Re-deriving them here would
+    need a second thresholds parameter and risk that grading drifting from
+    the field section's.
     """
     from analysis.estimator import aggregate
     from analysis.llm import (
@@ -446,7 +457,8 @@ def analyze_page(
         )
 
     prompt = build_analysis_prompt(
-        primary, hits, symptoms=symptoms, prior_findings=prior_findings
+        primary, hits, symptoms=symptoms, prior_findings=prior_findings,
+        field=field, page_group=page_group,
     )
     try:
         result = client.analyze_page(prompt)

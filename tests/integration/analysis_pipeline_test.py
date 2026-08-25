@@ -60,6 +60,16 @@ def input_dir(tmp_path):
     return directory
 
 
+@pytest.fixture
+def sample_runs():
+    """A minimal in-memory campaign — no disk, no store — for field-wiring
+    tests that only care about ``run_analysis`` degrading gracefully."""
+    return [
+        Run.model_validate(run_payload("run_h1", "homepage")),
+        Run.model_validate(run_payload("run_p1", "plp")),
+    ]
+
+
 class FakeEmbeddings:
     model = "fake-embed"
 
@@ -568,3 +578,146 @@ def test_live_clients_share_the_embedding_cache(monkeypatch, tmp_path):
     _store, embed_client, _llm = _build_live_clients(settings)
 
     assert embed_client._cache is not None
+
+
+# --------------------------------------------------------------------------- #
+# field data wiring (Task 11)
+# --------------------------------------------------------------------------- #
+def test_analysis_succeeds_with_no_snapshot_in_the_store(tmp_path, sample_runs):
+    """Analysis never fails because Grafana was down."""
+    from analysis.__main__ import run_analysis
+
+    report = run_analysis(sample_runs, llm_disabled=True, history=[])
+    assert report.meta.field_mode == "unavailable"
+    assert report.field.available is False
+
+
+def test_analysis_uses_the_latest_stored_snapshot(tmp_path, sample_runs):
+    from datetime import datetime, timezone
+
+    from analysis.__main__ import load_field_snapshot
+    from config.load import Settings
+    from normalize.field import FieldSnapshot, SessionKpis
+    from store import sql
+
+    store_path = tmp_path / "runs.sqlite"
+    now = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    conn = sql.connect(store_path)
+    sql.init_schema(conn)
+    sql.insert_snapshot(conn, FieldSnapshot(
+        snapshot_id="s1", project=sample_runs[0].project.name,
+        hosts=["a.com"], window_from=now, window_to=now, fetched_at=now,
+        sessions=SessionKpis(bounce_pct=44.0),
+    ))
+    conn.close()
+
+    settings = Settings(storage={"sqlite_path": str(store_path)})
+    loaded = load_field_snapshot(settings, sample_runs[0].project.name)
+    assert loaded.sessions.bounce_pct == 44.0
+
+
+def test_load_field_snapshot_returns_none_when_the_store_is_absent(tmp_path):
+    from analysis.__main__ import load_field_snapshot
+    from config.load import Settings
+
+    settings = Settings(storage={"sqlite_path": str(tmp_path / "missing.sqlite")})
+    assert load_field_snapshot(settings, "oakley") is None
+    assert not (tmp_path / "missing.sqlite").exists(), (
+        "must not create the store as a side effect"
+    )
+
+
+def test_load_field_snapshot_degrades_on_a_corrupt_store(tmp_path):
+    """A file that exists but is not a valid SQLite database (or whose schema
+    cannot be read) must degrade to None, not raise — the same contract as a
+    missing store."""
+    from analysis.__main__ import load_field_snapshot
+    from config.load import Settings
+
+    store_path = tmp_path / "runs.sqlite"
+    store_path.write_text("not a sqlite database", encoding="utf-8")
+
+    settings = Settings(storage={"sqlite_path": str(store_path)})
+    assert load_field_snapshot(settings, "oakley") is None
+
+
+def test_no_field_flag_suppresses_a_stored_snapshot(sample_runs):
+    from analysis.__main__ import _build_parser
+
+    args = _build_parser().parse_args(["--no-field"])
+    assert args.no_field is True
+
+
+def test_no_field_flag_is_honoured_by_run_analysis(tmp_path, sample_runs):
+    """An injected ``field`` still bypasses the store, but ``no_field`` must
+    also stop ``run_analysis`` from loading one on its own."""
+    from datetime import datetime, timezone
+
+    from analysis.__main__ import run_analysis
+    from config.load import Settings
+    from normalize.field import FieldSnapshot, SessionKpis
+    from store import sql
+
+    store_path = tmp_path / "runs.sqlite"
+    now = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    conn = sql.connect(store_path)
+    sql.init_schema(conn)
+    sql.insert_snapshot(conn, FieldSnapshot(
+        snapshot_id="s1", project=sample_runs[0].project.name,
+        hosts=["a.com"], window_from=now, window_to=now, fetched_at=now,
+        sessions=SessionKpis(bounce_pct=44.0),
+    ))
+    conn.close()
+
+    settings = Settings(storage={"sqlite_path": str(store_path)})
+    report = run_analysis(sample_runs, settings=settings, llm_disabled=True,
+                          history=[], no_field=True)
+    assert report.field.available is False
+
+
+def test_page_field_symptoms_use_the_configured_thresholds_not_the_default(
+    input_dir,
+):
+    """The plan's original approach let per-page field symptoms fall back to
+    a bare ``Thresholds()`` default, which could disagree with the top-level
+    field section's grading (built from ``settings.thresholds``). This test
+    is the one the amendment exists to satisfy: a snapshot whose bounce
+    excess sits between the built-in default (10pp) and a configured,
+    stricter value (18pp) must be graded by the CONFIGURED value on the page
+    block, not by the default.
+    """
+    from datetime import datetime, timezone
+
+    from analysis.__main__ import load_runs, run_analysis
+    from config.load import Settings
+    from normalize.field import FieldSnapshot, PageTypeRow, SessionKpis
+
+    now = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    snapshot = FieldSnapshot(
+        snapshot_id="s1", project="storefront", hosts=["a.com"],
+        window_from=now, window_to=now, fetched_at=now,
+        sessions=SessionKpis(bounce_pct=30.0),
+        by_pagetype=[PageTypeRow(page_group="home", bounce_pct=45.0)],
+    )
+    runs = load_runs(input_dir=input_dir)
+
+    default_settings = Settings(grafana={"page_groups": {"home": "homepage"}})
+    default_report = run_analysis(
+        runs, field=snapshot, settings=default_settings,
+        llm_disabled=True, history=[],
+    )
+    homepage = next(p for p in default_report.pages if p.name == "homepage")
+    assert any(s.code == "field_bounce_high" for s in homepage.symptoms), (
+        "the default threshold (10pp) should have flagged a 15pp excess"
+    )
+
+    custom_settings = default_settings.model_copy(deep=True)
+    custom_settings.thresholds.field_bounce_excess_pp = 18.0
+    custom_report = run_analysis(
+        runs, field=snapshot, settings=custom_settings,
+        llm_disabled=True, history=[],
+    )
+    homepage_custom = next(p for p in custom_report.pages if p.name == "homepage")
+    assert not any(s.code == "field_bounce_high" for s in homepage_custom.symptoms), (
+        "a 15pp excess must NOT fire once the configured threshold is 18pp"
+    )
