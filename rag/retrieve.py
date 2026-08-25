@@ -17,11 +17,14 @@ type in the query, so weight is not carried by the metric names alone.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 from config.load import Thresholds
 from normalize.schema import Run
 from store.vectordb import SearchHit
+
+if TYPE_CHECKING:  # pragma: no cover
+    from normalize.field import FieldSnapshot
 
 # Resource types we describe in prose when one dominates page weight.
 _TYPE_PROSE = {
@@ -224,3 +227,83 @@ def retrieve_prior_findings(
     query = build_query(run, thresholds=thresholds)
     vector = client.embed_query(query.text)
     return store.query(vector, k=top_k, kind="finding", min_score=min_score)
+
+
+def detect_field_symptoms(
+    snapshot: "FieldSnapshot",
+    *,
+    page_group: Optional[str] = None,
+    thresholds: Optional[Thresholds] = None,
+) -> List[Symptom]:
+    """Threshold-backed statements about *real users*, not the lab.
+
+    Rule-based for the same reason :func:`detect_symptoms` is: a campaign
+    degraded to the no-LLM path by an exhausted budget still surfaces field
+    findings instead of losing the feature entirely.
+
+    ``page_group`` scopes the per-page rules to one mPulse page group; the
+    asset and INP-bucket rules are brand-wide and always evaluated.
+    """
+    th = thresholds or Thresholds()
+    found: List[Symptom] = []
+
+    def add(code, text, severity, metric=None, value=None, target=None):
+        found.append(Symptom(code, text, severity, metric, value, target))
+
+    row = snapshot.page_row(page_group) if page_group else None
+    site_bounce = snapshot.sessions.bounce_pct
+
+    if row is not None and row.bounce_pct is not None and site_bounce is not None:
+        excess = row.bounce_pct - site_bounce
+        if excess >= th.field_bounce_excess_pp:
+            add("field_bounce_high",
+                f"{_fmt(row.bounce_pct)}% of real visitors who land on this page "
+                f"leave without going any further, against {_fmt(site_bounce)}% "
+                "across the site - they are giving up here specifically.",
+                "fail" if excess >= th.field_bounce_excess_pp * 2 else "warn",
+                "bounce_pct", row.bounce_pct, site_bounce)
+
+    if row is not None and row.frustration_p75 is not None:
+        if row.frustration_p75 >= th.field_frustration_fail:
+            add("field_frustration_fail",
+                f"Real users register a frustration index of "
+                f"{_fmt(row.frustration_p75)} on this page - repeated clicks on "
+                "things that did not respond.",
+                "fail", "frustration_p75", row.frustration_p75,
+                th.field_frustration_warn)
+        elif row.frustration_p75 >= th.field_frustration_warn:
+            add("field_frustration_warn",
+                f"Real users register a frustration index of "
+                f"{_fmt(row.frustration_p75)} on this page.",
+                "warn", "frustration_p75", row.frustration_p75,
+                th.field_frustration_warn)
+
+    for asset in snapshot.assets:
+        if asset.cache_hit_pct is None:
+            continue
+        if asset.cache_hit_pct < th.field_cache_hit_warn_pct:
+            origin = (f" and each miss costs {_fmt(asset.origin_ms)}ms at the origin"
+                      if asset.origin_ms else "")
+            add("field_cache_low",
+                f"Only {_fmt(asset.cache_hit_pct)}% of {asset.asset_type} requests "
+                f"are served from the CDN edge{origin} - real users are waiting "
+                "for content that could have been cached.",
+                "fail" if asset.cache_hit_pct < th.field_cache_hit_warn_pct / 2
+                else "warn",
+                "cache_hit_pct", asset.cache_hit_pct, th.field_cache_hit_warn_pct)
+
+    worst = max(
+        (b for b in snapshot.inp_buckets if b.avg_frustration is not None),
+        key=lambda b: b.avg_frustration, default=None,
+    )
+    if worst is not None and worst.avg_frustration >= th.field_frustration_fail:
+        add("field_inp_frustration",
+            f"Visitors whose interactions fall in the '{worst.bucket}' band show "
+            f"an average frustration of {_fmt(worst.avg_frustration)} - slow "
+            "responses are translating into real irritation.",
+            "fail", "frustration_p75", worst.avg_frustration,
+            th.field_frustration_fail)
+
+    # Same ordering contract as detect_symptoms: severity, then code, so the
+    # query text and therefore retrieval are deterministic for equal input.
+    return sorted(found, key=lambda s: (0 if s.severity == "fail" else 1, s.code))
