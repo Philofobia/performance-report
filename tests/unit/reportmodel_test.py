@@ -171,7 +171,7 @@ def test_verdict_is_the_worst_severity_present():
 def test_report_has_every_section_of_the_fixed_skeleton():
     report = build()
     assert isinstance(report, Report)
-    assert report.schema_version == 2
+    assert report.schema_version == 3
     for section in ("cover", "summary", "pages", "comparison", "methodology", "meta"):
         assert getattr(report, section) is not None
 
@@ -288,7 +288,7 @@ def test_thresholds_come_from_settings_not_hard_coded():
 # --------------------------------------------------------------------------- #
 def test_to_json_round_trips():
     payload = json.loads(to_json(build()))
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["cover"]["campaign_id"]
 
 
@@ -376,7 +376,7 @@ def test_methodology_captures_are_unchanged_by_the_appendix():
 
 
 def test_schema_version_records_the_appendix_addition():
-    assert a_report_with_captures().schema_version == 2
+    assert a_report_with_captures().schema_version == 3
 
 
 def test_appendix_breaks_ties_on_device_and_network_when_run_ids_collide():
@@ -458,3 +458,88 @@ def test_a_report_json_without_a_plan_still_validates():
     del payload["action_plan"]
 
     assert Report.model_validate(payload).action_plan == []
+
+
+# --------------------------------------------------------------------------- #
+# field data (2026-08-24 design) — field_mode_for
+# --------------------------------------------------------------------------- #
+def test_field_mode_is_unavailable_without_a_snapshot():
+    from analysis.reportmodel import field_mode_for
+
+    assert field_mode_for(None, generated_at=None, window="7d") == "unavailable"
+
+
+def test_field_mode_is_live_inside_one_window():
+    from datetime import timedelta
+
+    from analysis.reportmodel import field_mode_for
+    from normalize.field import FieldSnapshot
+
+    now = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    snap = FieldSnapshot(
+        snapshot_id="s", project="p", hosts=["a.com"],
+        window_from=now - timedelta(days=7), window_to=now, fetched_at=now,
+    )
+    assert field_mode_for(snap, generated_at=now, window="7d") == "live"
+
+
+def test_field_mode_is_stale_beyond_one_window():
+    """A 7d snapshot fetched over 7 days ago no longer overlaps the period it
+    is being read against."""
+    from datetime import timedelta
+
+    from analysis.reportmodel import field_mode_for
+    from normalize.field import FieldSnapshot
+
+    now = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    old = now - timedelta(days=20)
+    snap = FieldSnapshot(
+        snapshot_id="s", project="p", hosts=["a.com"],
+        window_from=old - timedelta(days=7), window_to=old, fetched_at=old,
+    )
+    assert field_mode_for(snap, generated_at=now, window="7d") == "stale"
+
+
+# --------------------------------------------------------------------------- #
+# field data — the report and page blocks
+# --------------------------------------------------------------------------- #
+def test_report_without_field_data_still_carries_an_empty_field_block():
+    """Absence is a state, never an omitted section."""
+    report = build()
+    assert report.field is not None
+    assert report.field.available is False
+    assert report.meta.field_mode == "unavailable"
+    assert all(page.field is not None for page in report.pages)
+
+
+def test_page_field_block_joins_through_the_configured_map():
+    from normalize.field import FieldSnapshot, PageTypeRow
+
+    now = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    settings = Settings()
+    settings.grafana.page_groups = {"Pdp": "homepage"}
+    snapshot = FieldSnapshot(
+        snapshot_id="s", project="p", hosts=["a.com"],
+        window_from=now, window_to=now, fetched_at=now,
+        by_pagetype=[PageTypeRow(page_group="Pdp", lcp_p75=4100.0,
+                                 bounce_pct=61.5)],
+    )
+    report = build(settings=settings, field=snapshot, generated_at=now)
+    joined = next(p for p in report.pages if p.name == "homepage")
+    assert joined.field.available is True
+    assert joined.field.lcp_p75 == 4100.0
+    assert joined.field.page_group == "Pdp"
+
+
+def test_unmapped_page_renders_the_not_available_state():
+    from normalize.field import FieldSnapshot
+
+    now = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    settings = Settings()
+    settings.grafana.page_groups = {}
+    snapshot = FieldSnapshot(
+        snapshot_id="s", project="p", hosts=["a.com"],
+        window_from=now, window_to=now, fetched_at=now,
+    )
+    report = build(settings=settings, field=snapshot, generated_at=now)
+    assert all(p.field.available is False for p in report.pages)
