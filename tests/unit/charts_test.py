@@ -263,3 +263,58 @@ def test_every_builder_is_deterministic():
     ]
     for builder, args in pairs:
         assert builder(*args) == builder(*args), builder.__name__
+
+
+# --------------------------------------------------------------------------- #
+# Field charts (grafana field ingestion)
+# --------------------------------------------------------------------------- #
+def test_field_sessions_chart_is_empty_without_a_series():
+    from report.charts import NO_CHART, field_sessions_chart
+
+    assert field_sessions_chart([]) == NO_CHART
+
+
+def test_field_sessions_chart_needs_more_than_one_point():
+    from report.charts import NO_CHART, field_sessions_chart
+
+    one = [{"time": "2026-08-24T00:00:00+00:00", "values": {"bounce_pct": 40.0}}]
+    assert field_sessions_chart(one) == NO_CHART
+
+
+def test_field_sessions_chart_parses_iso_strings_to_the_same_svg_as_datetimes():
+    # A bare "does not crash" assertion passes even with the fromisoformat
+    # parsing deleted, because matplotlib will still plot strings as
+    # categorical x-values rather than raising. Comparing against the
+    # datetime-object render is the check that actually exercises the parse:
+    # if `report.json` strings were left unparsed, the two SVGs would differ
+    # (different x-axis tick placement/labels), which fails this assertion.
+    from datetime import datetime, timezone
+
+    from report.charts import field_sessions_chart
+
+    dt_series = [
+        {"time": datetime(2026, 8, 23, tzinfo=timezone.utc),
+         "values": {"bounce_pct": 40.0}},
+        {"time": datetime(2026, 8, 24, tzinfo=timezone.utc),
+         "values": {"bounce_pct": 44.0}},
+    ]
+    str_series = [
+        {"time": "2026-08-23T00:00:00+00:00", "values": {"bounce_pct": 40.0}},
+        {"time": "2026-08-24T00:00:00+00:00", "values": {"bounce_pct": 44.0}},
+    ]
+    assert field_sessions_chart(dt_series) == field_sessions_chart(str_series)
+
+
+def test_lab_vs_field_chart_is_empty_when_one_side_is_missing():
+    """A bar with nothing to compare against invites comparison with zero."""
+    from report.charts import NO_CHART, lab_vs_field_chart
+
+    assert lab_vs_field_chart({"lcp_ms": 4000.0}, {"lcp_p75": None}) == NO_CHART
+    assert lab_vs_field_chart({}, {"lcp_p75": 4100.0}) == NO_CHART
+
+
+def test_lab_vs_field_chart_draws_when_both_sides_are_present():
+    from report.charts import NO_CHART, lab_vs_field_chart
+
+    svg = lab_vs_field_chart({"lcp_ms": 4000.0}, {"lcp_p75": 4100.0})
+    assert svg != NO_CHART and svg.startswith("<svg")

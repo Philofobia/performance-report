@@ -1,0 +1,53 @@
+{
+  "results": {
+    "vitals": {
+      "frames": [
+        {
+          "schema": {
+            "fields": [
+              {"name": "time", "type": "time"},
+              {"name": "lcp_p75", "type": "number"},
+              {"name": "inp_p75", "type": "number"},
+              {"name": "cls_p75", "type": "number"}
+            ]
+          },
+          "data": {
+            "values": [
+              [1787529600000, 1787616000000],
+              [3900.0, 4100.0],
+              [240.0, 260.0],
+              [0.12, 0.14]
+            ]
+          }
+        }
+      ]
+    },
+    "by_pagetype": {
+      "frames": [
+        {
+          "schema": {
+            "fields": [
+              {"name": "page_group", "type": "string"},
+              {"name": "beacons", "type": "number"},
+              {"name": "lcp_p75", "type": "number"},
+              {"name": "frustration_p75", "type": "number"},
+              {"name": "rage_clicks", "type": "number"},
+              {"name": "bounce_pct", "type": "number"}
+            ]
+          },
+          "data": {
+            "values": [
+              ["Pdp", "Home"],
+              [1200, 800],
+              [4100.0, 2200.0],
+              [42.0, 18.0],
+              [310, 40],
+              [61.5, 38.0]
+            ]
+          }
+        }
+      ]
+    },
+    "assets": {"frames": []}
+  }
+}

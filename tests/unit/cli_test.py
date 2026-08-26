@@ -138,3 +138,26 @@ def test_delegates_are_imported_lazily():
     import inspect
     for loader in cli._DELEGATES.values():
         assert "import" in inspect.getsource(loader)
+
+
+def test_ingest_field_is_a_known_mode():
+    import cli
+
+    assert "ingest field" in cli.COMMANDS
+    assert "ingest field" in cli._DELEGATES
+    assert "field" in cli._INGEST_MODES
+
+
+def test_ingest_field_forwards_argv_verbatim(monkeypatch):
+    import cli
+
+    seen = {}
+    monkeypatch.setitem(
+        cli._DELEGATES, "ingest field",
+        # dict.update() returns None, so this reliably yields 0 regardless of
+        # whether argv is empty — unlike dict.setdefault(), which returns the
+        # value just set and would make a non-empty argv falsify the "or 0".
+        lambda: (lambda argv: seen.update(argv=argv) or 0),
+    )
+    assert cli.main(["ingest", "field", "--project", "oakley"]) == 0
+    assert seen["argv"] == ["--project", "oakley"]

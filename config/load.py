@@ -209,6 +209,22 @@ class Thresholds(BaseModel):
     tbt_good_ms: int = 200
     tbt_fail_ms: int = 600
 
+    # Field (RUM) rules. Defaults match the colour thresholds already set on
+    # the Grafana panels, so the report and the dashboard agree about what
+    # counts as bad.
+    #: Percentage *points* above the site-wide rate, not a ratio: a ratio makes
+    #: a low-traffic group with 2% bounce look catastrophic at 4%.
+    field_bounce_excess_pp: float = 10.0
+    #: Bounce excess (percentage points) at which a page group is a failure
+    #: rather than a warning. Configured rather than derived from the warn
+    #: value: tuning one bound must not silently move the other.
+    field_bounce_excess_fail_pp: float = 20.0
+    field_cache_hit_warn_pct: float = 70.0
+    #: CDN cache-hit ratio below which an asset type is a failure.
+    field_cache_hit_fail_pct: float = 35.0
+    field_frustration_warn: float = 30.0
+    field_frustration_fail: float = 60.0
+
 
 class ModelsConfig(BaseModel):
     embeddings: str = "text-embedding-004"
@@ -218,6 +234,24 @@ class ModelsConfig(BaseModel):
 
 class RagConfig(BaseModel):
     top_k: int = Field(default=5, ge=1)
+
+
+class GrafanaConfig(BaseModel):
+    """How field data is queried and interpreted.
+
+    Connection identity — base URL, token, datasource uid, table — lives in
+    ``.env``, not here: it is per-instance rather than per-project, and the
+    table name carries the organisation's tenant. What stays in this file is
+    everything a reviewer should see change in a diff.
+    """
+
+    #: Relative window in Grafana syntax. Matches the dashboard default.
+    window: str = "7d"
+    timeout_s: int = Field(default=30, ge=1)
+    #: mPulse ``pageGroupName`` -> ``targets.yaml`` page name. Cannot be
+    #: inferred: the two vocabularies coincide today by luck, not by rule.
+    #: An unmapped page renders its field row in the "not available" state.
+    page_groups: Dict[str, str] = Field(default_factory=dict)
 
 
 class ServiceBudget(BaseModel):
@@ -321,6 +355,7 @@ class Settings(BaseModel):
     report: ReportConfig = Field(default_factory=ReportConfig)
     trends: TrendsConfig = Field(default_factory=TrendsConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
+    grafana: GrafanaConfig = Field(default_factory=GrafanaConfig)
 
 
 # --------------------------------------------------------------------------- #

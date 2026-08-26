@@ -17,11 +17,14 @@ type in the query, so weight is not carried by the metric names alone.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 from config.load import Thresholds
 from normalize.schema import Run
 from store.vectordb import SearchHit
+
+if TYPE_CHECKING:  # pragma: no cover
+    from normalize.field import FieldSnapshot
 
 # Resource types we describe in prose when one dominates page weight.
 _TYPE_PROSE = {
@@ -62,6 +65,36 @@ class RetrievalQuery:
 def _fmt(value: float) -> str:
     """Render a metric without trailing noise (6200.0 -> 6200)."""
     return str(int(value)) if float(value).is_integer() else str(round(float(value), 3))
+
+
+#: Datasource strings folded into symptom text are short labels (an asset
+#: type, an INP bucket name), never prose - this cap is just a backstop.
+_MAX_SAFE_FIELD_CHARS = 60
+
+
+def _safe_field(text: str) -> str:
+    """Neutralise and length-cap a string that *originates in the datasource*
+    before it is interpolated into symptom text.
+
+    Symptoms render under ``# DETECTED SYMPTOMS`` in the trusted region of
+    the prompt (``rag/prompt.py:build_analysis_prompt``), unlike playbooks
+    and prior findings, which are wrapped as delimited, neutralised context.
+    A string like ``asset.asset_type`` or an INP ``bucket`` label comes from
+    Grafana/ClickHouse, not from this system - low risk, but not authored by
+    it either, the same reasoning ``rag/prompt.py:format_field_measurements``
+    already applies to every datasource string it prints. Forging
+    ``rag.prompt.CONTEXT_OPEN`` into one of these fields must not let it
+    survive into the trusted section un-neutralised.
+
+    Imports ``rag.prompt`` locally: ``rag/prompt.py`` does not import
+    ``rag/retrieve.py``, so there is no cycle, but keeping the import at call
+    time (rather than module scope) means this module's only *unconditional*
+    dependency stays ``config``/``normalize``/``store``, matching the pattern
+    ``analysis/reportmodel.py`` already uses for its own late imports.
+    """
+    from rag.prompt import neutralize, truncate
+
+    return truncate(neutralize(str(text)), _MAX_SAFE_FIELD_CHARS)
 
 
 def detect_symptoms(run: Run, thresholds: Optional[Thresholds] = None) -> List[Symptom]:
@@ -224,3 +257,87 @@ def retrieve_prior_findings(
     query = build_query(run, thresholds=thresholds)
     vector = client.embed_query(query.text)
     return store.query(vector, k=top_k, kind="finding", min_score=min_score)
+
+
+def detect_field_symptoms(
+    snapshot: "FieldSnapshot",
+    *,
+    page_group: Optional[str] = None,
+    thresholds: Optional[Thresholds] = None,
+) -> List[Symptom]:
+    """Threshold-backed statements about *real users*, not the lab.
+
+    Rule-based for the same reason :func:`detect_symptoms` is: a campaign
+    degraded to the no-LLM path by an exhausted budget still surfaces field
+    findings instead of losing the feature entirely.
+
+    ``page_group`` scopes the per-page rules to one mPulse page group; the
+    asset and INP-bucket rules are brand-wide and always evaluated.
+    """
+    th = thresholds or Thresholds()
+    found: List[Symptom] = []
+
+    def add(code, text, severity, metric=None, value=None, target=None):
+        found.append(Symptom(code, text, severity, metric, value, target))
+
+    row = snapshot.page_row(page_group) if page_group else None
+    # The true whole-window figure, not the most recent bucket - `row`
+    # (a by_pagetype segment) is already a whole-window SQL aggregate, and
+    # comparing it against anything less than a window figure on the other
+    # side is the invalid comparison this rule exists to avoid.
+    site_bounce = snapshot.sessions.window.bounce_pct
+
+    if row is not None and row.bounce_pct is not None and site_bounce is not None:
+        excess = row.bounce_pct - site_bounce
+        if excess >= th.field_bounce_excess_pp:
+            add("field_bounce_high",
+                f"{_fmt(row.bounce_pct)}% of real visitors who land on this page "
+                f"leave without going any further, against {_fmt(site_bounce)}% "
+                "across the site - they are giving up here specifically.",
+                "fail" if excess >= th.field_bounce_excess_fail_pp else "warn",
+                "bounce_pct", row.bounce_pct, site_bounce)
+
+    if row is not None and row.frustration_p75 is not None:
+        if row.frustration_p75 >= th.field_frustration_fail:
+            add("field_frustration_fail",
+                f"Real users register a frustration index of "
+                f"{_fmt(row.frustration_p75)} on this page - repeated clicks on "
+                "things that did not respond.",
+                "fail", "frustration_p75", row.frustration_p75,
+                th.field_frustration_warn)
+        elif row.frustration_p75 >= th.field_frustration_warn:
+            add("field_frustration_warn",
+                f"Real users register a frustration index of "
+                f"{_fmt(row.frustration_p75)} on this page.",
+                "warn", "frustration_p75", row.frustration_p75,
+                th.field_frustration_warn)
+
+    for asset in snapshot.assets:
+        if asset.cache_hit_pct is None:
+            continue
+        if asset.cache_hit_pct < th.field_cache_hit_warn_pct:
+            origin = (f" and each miss costs {_fmt(asset.origin_ms)}ms at the origin"
+                      if asset.origin_ms is not None else "")
+            add("field_cache_low",
+                f"Only {_fmt(asset.cache_hit_pct)}% of {_safe_field(asset.asset_type)} "
+                f"requests are served from the CDN edge{origin} - real users are "
+                "waiting for content that could have been cached.",
+                "fail" if asset.cache_hit_pct < th.field_cache_hit_fail_pct
+                else "warn",
+                "cache_hit_pct", asset.cache_hit_pct, th.field_cache_hit_warn_pct)
+
+    worst = max(
+        (b for b in snapshot.inp_buckets if b.avg_frustration is not None),
+        key=lambda b: b.avg_frustration, default=None,
+    )
+    if worst is not None and worst.avg_frustration >= th.field_frustration_fail:
+        add("field_inp_frustration",
+            f"Visitors whose interactions fall in the '{_safe_field(worst.bucket)}' "
+            f"band show an average frustration of {_fmt(worst.avg_frustration)} - "
+            "slow responses are translating into real irritation.",
+            "fail", "avg_frustration", worst.avg_frustration,
+            th.field_frustration_fail)
+
+    # Same ordering contract as detect_symptoms: severity, then code, so the
+    # query text and therefore retrieval are deterministic for equal input.
+    return sorted(found, key=lambda s: (0 if s.severity == "fail" else 1, s.code))

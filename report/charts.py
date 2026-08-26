@@ -27,6 +27,7 @@ import matplotlib
 matplotlib.use("Agg")  # no display backend, ever — must precede pyplot
 
 import matplotlib.pyplot as plt  # noqa: E402 - deliberately after use("Agg")
+from datetime import datetime  # noqa: E402
 from io import StringIO  # noqa: E402
 from typing import Mapping, Optional, Sequence  # noqa: E402
 
@@ -396,4 +397,81 @@ def comparison_heat(rows: Sequence[Mapping]) -> str:
     axis.set_axisbelow(True)
     _bare_axis(axis)
     fig.tight_layout()
+    return to_svg(fig)
+
+
+def field_sessions_chart(series: Sequence[Mapping]) -> str:
+    """Bounce and conversion over the window, on two axes.
+
+    Two axes because the dashboard draws them that way and because the scales
+    are incomparable: bounce sits near 40%, conversion near 2%, and one axis
+    would flatten conversion into the baseline.
+
+    Returns ``NO_CHART`` when there is nothing to plot — a chart of one point
+    is less informative than the sentence the template prints instead.
+    """
+    points = [p for p in series if p.get("time") is not None]
+    if len(points) < 2:
+        return NO_CHART
+
+    # `series` carries live TimePoint dumps (a datetime) when built straight
+    # from a fresh Report, but `model_dump(mode="json")` — as a reloaded
+    # report.json produces — turns `time` into an ISO string. Both shapes
+    # must draw the same chart.
+    times = [
+        datetime.fromisoformat(p["time"]) if isinstance(p["time"], str)
+        else p["time"]
+        for p in points
+    ]
+    bounce = [(p.get("values") or {}).get("bounce_pct") for p in points]
+    conversion = [(p.get("values") or {}).get("conversion_pct") for p in points]
+    if not any(v is not None for v in bounce):
+        return NO_CHART
+
+    fig, axis = plt.subplots(figsize=(9, 2.6))
+    axis.plot(times, bounce, linewidth=2, color=palette.WARN, label="Bounce %")
+    axis.set_ylabel("Bounce %")
+    axis.set_ylim(bottom=0)
+
+    if any(v is not None for v in conversion):
+        right = axis.twinx()
+        right.plot(times, conversion, linewidth=2, color=palette.PASS,
+                   label="Conversion %")
+        right.set_ylabel("Conversion %")
+        right.set_ylim(bottom=0)
+
+    _bare_axis(axis)
+    fig.autofmt_xdate()
+    return to_svg(fig)
+
+
+def lab_vs_field_chart(
+    cwp: Mapping[str, Optional[float]], page_field: Mapping
+) -> str:
+    """This campaign's Core Web Vitals beside the p75 real users get.
+
+    Grouped bars on a shared axis per metric pair. Only metrics present on
+    *both* sides are drawn: a bar with nothing to compare against invites the
+    reader to compare it with zero.
+    """
+    pairs = [
+        ("LCP", cwp.get("lcp_ms"), page_field.get("lcp_p75")),
+        ("INP", cwp.get("inp_ms"), page_field.get("inp_p75")),
+    ]
+    present = [(l, a, b) for l, a, b in pairs if a is not None and b is not None]
+    if not present:
+        return NO_CHART
+
+    fig, axis = plt.subplots(figsize=(6, 2.4))
+    positions = range(len(present))
+    width = 0.38
+    axis.bar([p - width / 2 for p in positions], [p[1] for p in present],
+             width, label="This campaign", color=palette.categorical_for(0))
+    axis.bar([p + width / 2 for p in positions], [p[2] for p in present],
+             width, label="Real users p75", color=palette.categorical_for(1))
+    axis.set_xticks(list(positions))
+    axis.set_xticklabels([p[0] for p in present])
+    axis.set_ylabel("ms")
+    axis.legend(frameon=False, fontsize="small")
+    _bare_axis(axis)
     return to_svg(fig)

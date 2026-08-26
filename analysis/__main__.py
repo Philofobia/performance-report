@@ -160,6 +160,42 @@ def _top_up_actions(summary: Any, pages: Sequence[PageAnalysis]) -> Any:
     return summary
 
 
+def load_field_snapshot(settings: Any, project: str) -> Optional[Any]:
+    """The latest stored field snapshot for ``project``, or ``None``.
+
+    Mirrors ``load_runs``'s store-safety rule: ``sql.connect`` creates what it
+    opens, so asking "is there field data yet?" for a campaign analysed from
+    a directory would otherwise leave an empty database behind. Checking
+    ``Path.is_file()`` first keeps that question free of side effects.
+
+    Analysis must never fail because Grafana was down or no snapshot was ever
+    ingested — the opposite of ``ingest field``, which exits non-zero on
+    exactly those conditions. So every failure here — no store, an unreadable
+    file, a corrupt row — degrades to ``None`` rather than raising, the same
+    way a missing LLM API key degrades the analysis mode instead of aborting
+    the report.
+    """
+    path = Path(settings.storage.sqlite_path)
+    if not path.is_file():
+        return None
+
+    from store import sql
+
+    try:
+        conn = sql.connect(path)
+    except Exception as exc:  # field data must never cost a report
+        print(f"Field data unavailable: {exc}", file=sys.stderr)
+        return None
+    try:
+        sql.init_schema(conn)
+        return sql.get_latest_snapshot(conn, project)
+    except Exception as exc:  # a corrupt snapshot degrades, it does not raise
+        print(f"Field data unavailable: {exc}", file=sys.stderr)
+        return None
+    finally:
+        conn.close()
+
+
 def run_analysis(
     runs: Sequence[Run],
     *,
@@ -174,6 +210,8 @@ def run_analysis(
     page_analyses_out: Optional[List[PageAnalysis]] = None,
     llm_disabled: bool = False,
     history: Optional[Sequence[Any]] = None,
+    field: Optional[Any] = None,
+    no_field: bool = False,
 ) -> Report:
     """Run the full analysis pipeline over a campaign's runs.
 
@@ -186,11 +224,23 @@ def run_analysis(
     current campaign came from, because the default path never touches the
     store and would otherwise have no history at all. Tests inject it, the way
     the LLM and embedding clients are already injected.
+
+    ``field`` is the campaign's real-user snapshot. Left None (and
+    ``no_field`` False) it is loaded from the configured store, the same way
+    ``history`` is — tests inject it directly. A missing store, an unreadable
+    snapshot, or a corrupt payload all degrade to no field data rather than
+    failing the report: this stage never fails because Grafana was down.
+    ``no_field`` lets a caller (the ``--no-field`` CLI flag) suppress a stored
+    snapshot even when one exists.
     """
     settings = settings or load_settings()
     k = top_k or settings.rag.top_k
     chunks = knowledge.load_knowledge_dir(knowledge_dir)
     digest = knowledge.content_digest(chunks)
+
+    project = runs[0].project.name if runs else "report"
+    if field is None and not no_field:
+        field = load_field_snapshot(settings, project)
 
     if store is not None and embed_client is not None:
         # Nothing else ever called `index_knowledge`, so a real store shipped
@@ -207,9 +257,22 @@ def run_analysis(
             print(f"Playbooks were not indexed: {exc}", file=sys.stderr)
 
     analyses: List[PageAnalysis] = []
-    for _page_name, page_runs in group_by_page(runs).items():
+    for page_name, page_runs in group_by_page(runs).items():
         primary = select_primary(page_runs)
+        page_group = next(
+            (g for g, name in settings.grafana.page_groups.items()
+             if name == page_name),
+            None,
+        )
         symptoms = retrieve.detect_symptoms(primary, settings.thresholds)
+        if field is not None:
+            # Graded with the SAME thresholds as the report's top-level field
+            # section (Task 10's `_field_block`). Detecting them here, where
+            # `settings.thresholds` is already in scope, rather than inside
+            # `analyze_page`, keeps the two gradings from ever drifting apart.
+            symptoms = list(symptoms) + retrieve.detect_field_symptoms(
+                field, page_group=page_group, thresholds=settings.thresholds
+            )
 
         hits: List[Any] = []
         priors: List[Any] = []
@@ -237,6 +300,7 @@ def run_analysis(
             page_runs, hits=hits, symptoms=symptoms, client=page_client,
             prior_findings=priors, chunks=chunks,
             no_client_reason=page_reason,
+            field=field, page_group=page_group,
         ))
 
     summary: Any = rule_based_summary(analyses)
@@ -254,7 +318,6 @@ def run_analysis(
     if page_analyses_out is not None:
         page_analyses_out.extend(analyses)
 
-    project = runs[0].project.name if runs else "report"
     model = getattr(llm_client, "model", "none") if llm_client else "none"
 
     if history is None:
@@ -268,7 +331,7 @@ def run_analysis(
     return build_report(
         analyses, project=project, settings=settings, summary=summary,
         generated_at=generated_at or datetime.now(timezone.utc),
-        model=model, knowledge_digest=digest, trends=series,
+        model=model, knowledge_digest=digest, trends=series, field=field,
     )
 
 
@@ -391,6 +454,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Force the rule-based path; make no model calls.")
     p.add_argument("--use-priors", action="store_true",
                    help="Ground analysis in findings from previous campaigns.")
+    p.add_argument("--no-field", action="store_true",
+                   help="Ignore any stored field data; analyse lab metrics only.")
     p.add_argument("--top-k", type=int, default=None,
                    help="Playbook chunks to retrieve per page.")
     p.add_argument("--no-budget", action="store_true",
@@ -463,6 +528,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         runs, store=store, embed_client=embed_client, llm_client=llm_client,
         settings=settings, use_priors=args.use_priors, top_k=args.top_k,
         page_analyses_out=collected, llm_disabled=args.no_llm,
+        no_field=args.no_field,
     )
 
     target = output_dir / report.cover.campaign_id

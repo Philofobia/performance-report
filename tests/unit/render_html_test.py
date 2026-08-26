@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
+import pytest
+
 from analysis.reportmodel import Report
 from report.render_html import build_charts, render_html
 from report.skeleton import fingerprint
@@ -116,6 +118,13 @@ def a_report(pages=("homepage",), *, recommendations=True, mode="llm",
                  "model": "gemini-2.0-flash", "playbooks_cited": ["images.md"],
                  "dropped_recommendations": 0, "knowledge_digest": "abc"},
     })
+
+
+@pytest.fixture
+def minimal_report():
+    """A validated report with no field data — the state most campaigns are in
+    until Grafana ingestion is configured."""
+    return a_report()
 
 
 def test_renders_a_complete_html_document():
@@ -486,3 +495,166 @@ def test_no_raw_float_reaches_the_page():
     prose = re.sub(r"<svg.*?</svg>", "", render_html(a_report()), flags=re.S)
 
     assert not re.search(r"\d+\.\d{4,}", prose)
+
+
+# --------------------------------------------------------------------------- #
+# Field section (grafana field ingestion)
+# --------------------------------------------------------------------------- #
+def test_field_section_renders_when_unavailable(minimal_report):
+    """Absence is a state; the section must still be in the document."""
+    from report.render_html import render_html
+
+    html = render_html(minimal_report)
+    assert 'data-section="field"' in html
+    assert "No field data" in html
+
+
+def test_field_section_renders_the_headline_when_available(minimal_report):
+    # "41" and "2.4" alone are too weak: both already appear in a render with
+    # no field data at all (chart SVG path data, unrelated prose), so a bare
+    # substring check would still pass with field.headline deleted entirely.
+    # Assert the label and its formatted value together, on the row that can
+    # only come from the headline table.
+    from analysis.reportmodel import FieldBlock, FieldHeadline
+    from report.render_html import render_html
+
+    minimal_report.field = FieldBlock(
+        available=True, mode="live",
+        headline=FieldHeadline(bounce_pct_window=63.7, bounce_pct_latest=92.0,
+                               conversion_pct_window=9.87),
+    )
+    html = render_html(minimal_report)
+    assert "<td>Bounce rate</td><td>63.7%</td><td>92.0%</td>" in html
+    assert "<td>Conversion rate</td><td>9.87%</td><td>—</td>" in html
+
+
+def test_stale_snapshot_says_so(minimal_report):
+    from analysis.reportmodel import FieldBlock
+    from report.render_html import render_html
+
+    minimal_report.field = FieldBlock(available=True, mode="stale")
+    assert "stale" in render_html(minimal_report).lower()
+
+
+def test_a_stale_snapshot_with_no_dates_still_reads_as_a_sentence(minimal_report):
+    # window_from/window_to/fetched_at are all Optional and default to None;
+    # the banner must not read "...are stale . Re-run..." with a stray space
+    # and orphaned period when they are absent.
+    from analysis.reportmodel import FieldBlock
+    from report.render_html import render_html
+
+    minimal_report.field = FieldBlock(available=True, mode="stale")
+    html = render_html(minimal_report)
+    assert "stale . Re-run" not in html
+    assert re.search(r"These figures are stale\.\s+Re-run", html)
+
+
+def test_field_segment_tables_never_show_none_or_a_raw_float(minimal_report):
+    """report.field.segments.* is a list of plain dicts carried through
+    verbatim from Grafana - nothing upstream formats it. Printed straight
+    into a template, an absent cell renders as the literal string "None"
+    and a float keeps its full binary-rounding tail."""
+    from analysis.reportmodel import FieldBlock, FieldSegments
+    from report.render_html import render_html
+
+    minimal_report.field = FieldBlock(
+        available=True, mode="live",
+        segments=FieldSegments(
+            by_device=[{"device": "mobile", "beacons": 800, "lcp_p75": 3300.0,
+                        "inp_p75": None, "cls_p75": 0.10999999999,
+                        "frustration_p75": 13.0}],
+            inp_buckets=[{"bucket": "1 - under 200 ms (good)", "beacons": 600,
+                          "avg_frustration": 5.0, "rage_session_pct": None}],
+            assets=[{"asset_type": "image", "request_count": 1200,
+                     "avg_size_kb": None, "edge_ms": 30.0, "origin_ms": None,
+                     "cache_hit_pct": 88.5}],
+        ),
+    )
+    html = render_html(minimal_report)
+    prose = re.sub(r"<svg.*?</svg>", "", html, flags=re.S)
+    assert "None" not in prose
+    assert not re.search(r"\d+\.\d{4,}", prose)
+    # the None cells above rendered as an em dash somewhere in these tables,
+    # not as an omission of the row itself
+    assert "<td>—</td>" in prose
+    # Whole-branch review item 8: the assets sub-builder used to emit a
+    # leading space ("12 ms") while `_seg_row` (device/country/page-type)
+    # and `field_headline_rows` both use the no-space form ("240ms").
+    assert "30ms" in prose
+    assert "30 ms" not in prose
+
+
+def test_field_symptoms_and_session_chart_actually_render(minimal_report):
+    """Regression guard: FieldBlock.symptoms and .series are easy to gut
+    without any offline test noticing, because the "Where users got stuck"
+    heading and the field section itself render either way. This asserts the
+    symptom text and the session chart survive intact when the block carries
+    real data.
+    """
+    from analysis.reportmodel import FieldBlock, SymptomModel
+    from report.render_html import render_html
+
+    minimal_report.field = FieldBlock(
+        available=True, mode="live",
+        symptoms=[SymptomModel(
+            code="field_bounce_high",
+            text="61.5% of real visitors who land on this page leave "
+                 "without going any further, against 40.0% across the site.",
+            severity="fail", metric="bounce_pct", value=61.5, target=40.0,
+        )],
+        series=[
+            {"time": "2026-08-17T00:00:00Z",
+             "values": {"bounce_pct": 40.0, "conversion_pct": 2.0}},
+            {"time": "2026-08-18T00:00:00Z",
+             "values": {"bounce_pct": 44.0, "conversion_pct": 2.4}},
+            {"time": "2026-08-19T00:00:00Z",
+             "values": {"bounce_pct": 46.0, "conversion_pct": 2.6}},
+        ],
+    )
+    html = render_html(minimal_report)
+    assert ("61.5% of real visitors who land on this page leave without "
+            "going any further, against 40.0% across the site.") in html
+    # "Bounce %" is drawn onto the session chart's own axis label by
+    # report/charts.py:field_sessions_chart and appears nowhere else in the
+    # document - a generic `<div class="chart">`/`<svg` check would still
+    # pass with this specific chart deleted, since the report renders other
+    # charts regardless.
+    assert "Bounce %" in html
+
+
+def test_page_field_with_no_snapshot_at_all_says_so(minimal_report):
+    """Whole-branch review item 6: with no field snapshot ever fetched
+    (Grafana unconfigured, the default), the page-level section must not
+    tell the reader to fix a page-group map that is correct - it must say
+    no field data exists at all.
+    """
+    from analysis.reportmodel import FieldBlock, FieldHeadline, PageFieldBlock
+    from report.render_html import render_html
+
+    # Make the brand-wide section `available` so its own "No field data"
+    # copy cannot be mistaken for the page-level assertion below.
+    minimal_report.field = FieldBlock(
+        available=True, mode="live", headline=FieldHeadline(bounce_pct_window=10.0),
+    )
+    minimal_report.pages[0].field = PageFieldBlock(
+        available=False, snapshot_taken=False,
+    )
+    html = render_html(minimal_report)
+    assert "No field data for this window" in html
+    assert "not mapped to an mPulse page group" not in html
+
+
+def test_page_field_with_a_snapshot_but_no_mapping_says_not_mapped(minimal_report):
+    """The other cause: a snapshot was fetched, but this page carries no
+    ``grafana.page_groups`` entry (or its group's row never reached the
+    traffic floor). This is the only case that should tell the reader to
+    fix the map.
+    """
+    from analysis.reportmodel import PageFieldBlock
+    from report.render_html import render_html
+
+    minimal_report.pages[0].field = PageFieldBlock(
+        available=False, snapshot_taken=True,
+    )
+    html = render_html(minimal_report)
+    assert "not mapped to an mPulse page group" in html

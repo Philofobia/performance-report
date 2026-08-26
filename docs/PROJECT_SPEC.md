@@ -209,6 +209,77 @@ ms & Mb/s). Applied via CDP `Network.emulateNetworkConditions` + CPU throttle.
 **CLI override:** `--device`, `--network`, `--runs`, and `--pages <name,...>` let the user
 override the matrix at run time without editing the file.
 
+### 4.5 Field (RUM) data — the third ingestion door
+
+Full design: `docs/superpowers/specs/2026-08-24-grafana-field-ingestion-design.md`.
+
+`python -m cli ingest field` is a third door beside manual and automated ingestion,
+but it produces no `Run`. Real-user data from mPulse (via a Grafana dashboard backed
+by ClickHouse) is **session-scoped and brand-wide** — it has no `device`/`network`
+condition — so it converges on a separate canonical object instead of being forced
+into §4.2's per-condition schema:
+
+```
+FieldSnapshot                                       (normalize/field.py)
+  snapshot_id, project, hosts[], window_from, window_to, fetched_at
+  sessions      SessionKpis    bounce_pct, conversion_pct, avg_session_pages,
+                                session_count, series[]
+  vitals        FieldVitals    lcp_p75/p95, inp_p75/p95, cls_p75/p95, ttfb_p75,
+                                plt_p75, series[]
+  frustration   Frustration    rage_clicks_total, frustration_p75, series[]
+  by_device     [DeviceRow]
+  by_country    [CountryRow]
+  by_pagetype   [PageTypeRow]  page_group, beacons, lcp_p75, inp_p75, cls_p75,
+                                plt_p75, bounce_pct, frustration_p75, rage_clicks
+  inp_buckets   [InpBucketRow]
+  assets        [AssetRow]     request_count, avg_size_kb, edge_ms, origin_ms,
+                                cache_hit_pct
+```
+
+Every metric is `Optional` with no default coercion — a panel that returned nothing
+stays `None`, so a zero bounce rate and an unmeasured one never render identically.
+`window_from`/`window_to` are stored absolute UTC at fetch time, because `now-7d` is
+not reproducible and a report re-rendered later must still state the week it
+describes.
+
+**Fetch layer** (`ingest/grafana/`): `client.py` POSTs the nine ClickHouse queries in
+`queries.py` to Grafana's `/api/ds/query` in one request (stdlib `urllib.request`, no
+new dependency); `parse.py` maps the column-major frame response to `FieldSnapshot` by
+field *name*, never position. The host filter (`pageDomainName IN (...)`) is derived
+from `config/targets.yaml`'s page URLs rather than configured separately, so lab and
+field data can never silently describe two different sites, and every hostname is
+validated against `^[a-z0-9][a-z0-9.-]*$` before being quoted into that filter —
+dashboard template variables are interpolated by the Grafana frontend, not the API, so
+this module owns that substitution and the injection risk it carries.
+
+**Persistence** (`store/sql.py`): a `field_snapshots` table, keyed by `snapshot_id`,
+with queryable columns (`project`, `fetched_at`, `window_from/to`, `hosts`) plus the
+full payload as JSON — the same pattern as `runs`.
+
+**Consumption:** field measurements enter the RAG prompt's trusted
+`# MEASUREMENTS` block (not the untrusted `# CONTEXT` region) since this system
+fetched them itself over an authenticated channel; `detect_field_symptoms` in
+`rag/retrieve.py` applies new `field_*` thresholds from `config/settings.yaml` on the
+rule-based path, so a budget-degraded report still surfaces field findings.
+`analysis/reportmodel.py` joins each lab page to its `by_pagetype` row through the
+*configured* (not inferred) `grafana.page_groups` map and never fails when Grafana is
+unconfigured or unreachable — `meta.field_mode` records `live` / `stale` /
+`unavailable`, and the report's `field` section and per-page `page.field` block always
+render, even in the unavailable state.
+
+**Two limitations, documented rather than hidden** (see also the README's
+[Missing](../README.md#where-the-project-is) list):
+
+1. **Field bounce per page group is *entry-page* bounce** — sessions that started on
+   that page group and viewed one page (`ingest/grafana/queries.py`). It is not the
+   site-wide bounce rate, and the two should not be subtracted from one another.
+2. **The `pageGroupName` → page-name map is configured, not inferred**
+   (`grafana.page_groups`). `pageGroupName` is an mPulse-side taxonomy and
+   `targets.yaml` page names are operator-chosen; they coincide today by convention,
+   not by rule. An unmapped page renders its field row as unavailable. `by_country` is
+   also `LIMIT 15` and several field tables drop groups under 50 beacons — the report
+   captions state this.
+
 ## 5. RAG design & knowledge base
 
 ### 5.1 What gets embedded (indexed into vector DB)
@@ -392,15 +463,21 @@ performance-projects/
 │  ├─ manual.py                    # CLI/JSON ingestion + validation
 │  ├─ automated.py                 # orchestrates browser run
 │  ├─ persist.py                   # per-condition sink: scrubbed artifacts + JSON + run store
-│  └─ browser/
-│     ├─ runner.py                 # Playwright lifecycle + emulation/throttling
-│     ├─ lighthouse.py             # Lighthouse over CDP
-│     └─ webser.py                 # web-vitals + network capture helpers
+│  ├─ field.py                     # `ingest field` stage — fetch, validate, persist (§4.5)
+│  ├─ browser/
+│  │  ├─ runner.py                 # Playwright lifecycle + emulation/throttling
+│  │  ├─ lighthouse.py             # Lighthouse over CDP
+│  │  └─ webser.py                 # web-vitals + network capture helpers
+│  └─ grafana/
+│     ├─ client.py                 # POST /api/ds/query, bearer auth, retry on 5xx (§4.5)
+│     ├─ queries.py                # the nine ClickHouse query templates
+│     └─ parse.py                  # column-major frame → FieldSnapshot, by field name
 ├─ normalize/
 │  ├─ schema.py                    # canonical run object → Pydantic model + validators
+│  ├─ field.py                     # FieldSnapshot — real-user data, session-scoped (§4.5)
 │  └─ url_safety.py                # SSRF gate, before navigation and over the redirect chain
 ├─ store/
-│  ├─ sql.py                       # SQLite schema + queries (runs, metrics)
+│  ├─ sql.py                       # SQLite schema + queries (runs, metrics, field_snapshots)
 │  ├─ vectordb.py                  # embeddings in SQLite + exact cosine search (§8.1)
 │  ├─ artifacts.py                 # raw capture files (png/har/trace/json)
 │  └─ listing.py                   # `list-runs` — table over the run store
@@ -441,21 +518,24 @@ performance-projects/
 │  └─ e2e/                         # real browser + real PDF (marked `e2e`)
 ├─ pyproject.toml / requirements.txt
 ├─ .env.example                    # template with placeholders — commit this
-├─ .env                            # real secrets (Google API key) — NEVER commit (gitignored)
+├─ .env                            # real secrets (Google API key, Akamai bot token,
+│                                   #   Grafana token) — NEVER commit (gitignored)
 ├─ .gitignore                      # ignores .env, data/vector, data/raw, data/reports, __pycache__
 └─ README.md
 ```
 
 ### 9.1 Secrets & `.env` (Google API key hygiene)
-- The **Google AI API key** (free tier) is the only shared secret; it must **never** reach git even
-  though the code is shared.
+- The **Google AI API key** (free tier) was the only shared secret at MVP; `.env` has
+  since grown an optional per-target bot-allowlist token
+  ([CUSTOM_HEADERS.md](CUSTOM_HEADERS.md)) and, as of §4.5, `GRAFANA_TOKEN` for field
+  ingestion. None of the three must **ever** reach git even though the code is shared.
 - `.env.example` (committed) contains **placeholders only**, e.g.:
   ```env
   GOOGLE_API_KEY=your_google_api_key_here
   GEMINI_MODEL=gemini-2.0-flash          # generation model (optional/pluggable)
   EMBEDDING_MODEL=text-embedding-004     # Google embeddings model
   ```
-- Each developer copies `.env.example` → `.env` and fills in their own key.
+- Each developer copies `.env.example` → `.env` and fills in their own values.
 - `.gitignore` must include `.env` (and `data/vector`, `data/raw`, `data/reports`). A CI
   guard/`pre-commit` step can fail if `.env` ever appears in `git status`.
 - Code loads secrets via `python-dotenv`; nothing hard-codes the key.
@@ -588,6 +668,18 @@ subsystems, and one of them (prior-run memory) had already shipped in Phase 4.
       ```
 
       Design: `docs/superpowers/specs/2026-08-20-token-budget-design.md`.
+- [x] **7f — Grafana field (RUM) ingestion.** `ingest/grafana/{client,queries,parse}.py`
+      fetches real-user data (bounce, conversion, pages/session, rage clicks,
+      frustration, field CWV, CDN cache behaviour) from a Grafana dashboard over
+      ClickHouse; `normalize/field.py`'s `FieldSnapshot` persists it to a new
+      `field_snapshots` table (`ingest/field.py`, `python -m cli ingest field`); the RAG
+      and analysis layers ground on it as trusted measurement; the report gains a
+      brand-wide `field` section plus a per-page lab-vs-field `page.field` block.
+      `analysis/reportmodel.SCHEMA_VERSION` went 2 → 3. Two limitations are load-bearing
+      enough to be documented rather than fixed: field bounce per page group is
+      *entry-page* bounce, not site-wide bounce; and the `pageGroupName` → page-name map
+      is configured, not inferred. Full detail: §4.5 and
+      `docs/superpowers/specs/2026-08-24-grafana-field-ingestion-design.md`.
 
 ## 11. Risks & open questions
 

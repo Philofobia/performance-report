@@ -410,6 +410,8 @@ p { margin: 0 0 2.5mm; }
 .tag--low { border-color: var(--pass); color: var(--pass); }
 .tag--medium { border-color: var(--warn); color: var(--warn); }
 .tag--high { border-color: var(--fail); color: var(--fail); }
+.tag--warn { border-color: var(--warn); color: var(--warn); }
+.tag--fail { border-color: var(--fail); color: var(--fail); }
 
 .actions { margin: 3mm 0 0; padding: 0 0 0 9mm; }
 .actions > li { margin-bottom: 2mm; font-size: 10.5pt; }

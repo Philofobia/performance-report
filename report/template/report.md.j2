@@ -35,6 +35,107 @@ Each page lists its own remaining recommendations below.
 _No actions could be ranked for this campaign._
 {% endif %}
 
+## What visitors actually experienced
+
+Measured from real sessions, not from the emulated campaign. Where these
+disagree with the page measurements below, these are what your visitors lived
+through.
+
+{% if not report.field.available %}
+_No field data for this window. Run `python -m cli ingest field` to fetch it
+from Grafana._
+{% elif report.field.mode == "stale" %}
+_These figures are stale{% if report.field.fetched_at %} — fetched {{ report.field.fetched_at.strftime("%Y-%m-%d") }}{% endif %}{% if report.field.window_from and report.field.window_to %},
+covering {{ report.field.window_from.strftime("%Y-%m-%d") }} to
+{{ report.field.window_to.strftime("%Y-%m-%d") }}{% endif %}. Re-run
+`python -m cli ingest field` for current numbers._
+{% else %}
+{% if report.field.window_from and report.field.window_to %}
+{{ report.field.window_from.strftime("%Y-%m-%d") }} to
+{{ report.field.window_to.strftime("%Y-%m-%d") }} ·
+{% endif %}
+{{ report.field.hosts | join(", ") }}
+{% endif %}
+
+**Engagement and real-user vitals**
+
+{% if report.field.available %}
+"Window" is the true whole-window figure - compare it against a target, a
+page group, or last week. "Latest interval" is the most recent bucket alone
+and is never comparable against a window figure.
+
+| Metric | Window | Latest interval |
+| --- | --- | --- |
+{% for row in field_headline %}
+| {{ row.label }} | {{ row.window }} | {{ row.latest }} |
+{% endfor %}
+{% else %}
+_No engagement data._
+{% endif %}
+
+**Where users got stuck**
+
+{% if report.field.symptoms %}
+{% for symptom in report.field.symptoms %}
+- **{{ symptom.severity }}** {{ symptom.text }}
+{% endfor %}
+{% else %}
+_No frustration signals crossed their thresholds._
+{% endif %}
+
+{% if field_segments.inp_buckets %}
+Interaction speed buckets (groups under 50 beacons omitted)
+
+| Interaction speed | Beacons | Avg frustration | % with rage clicks |
+| --- | --- | --- | --- |
+{% for row in field_segments.inp_buckets %}
+| {{ row.label }} | {{ row.beacons }} | {{ row.avg_frustration }} | {{ row.rage_session_pct }} |
+{% endfor %}
+{% endif %}
+
+**By device, market and page type**
+
+{% for caption, key in [
+    ("Device", "by_device"),
+    ("Market", "by_country"),
+    ("Page type", "by_pagetype")] %}
+{% set rows = field_segments[key] %}
+_{{ caption }}_
+
+{% if rows %}
+{% if key == "by_country" %}
+Top 15 markets by traffic (groups under 50 beacons omitted)
+
+{% elif key == "by_pagetype" %}
+Groups under 50 beacons omitted
+
+{% endif %}
+| {{ caption }} | Beacons | LCP p75 | INP p75 | CLS p75 | Frustration p75 |
+| --- | --- | --- | --- | --- | --- |
+{% for row in rows %}
+| {{ row.label }} | {{ row.beacons }} | {{ row.lcp_p75 }} | {{ row.inp_p75 }} | {{ row.cls_p75 }} | {{ row.frustration_p75 }} |
+{% endfor %}
+{% else %}
+_No {{ caption | lower }} breakdown available._
+{% endif %}
+
+{% endfor %}
+
+**What the CDN served**
+
+A low cache-hit percentage means real users waited for the origin to answer
+for content that could have been served from the edge.
+
+{% if field_segments.assets %}
+| Asset type | Requests | Avg size | Edge time | Origin time | Cache hit |
+| --- | --- | --- | --- | --- | --- |
+{% for row in field_segments.assets %}
+| {{ row.label }} | {{ row.request_count }} | {{ row.avg_size_kb }} | {{ row.edge_ms }} | {{ row.origin_ms }} | {{ row.cache_hit_pct }} |
+{% endfor %}
+{% else %}
+_No CDN breakdown available._
+{% endif %}
+
 ## Pages
 
 {% for page in report.pages %}
@@ -49,6 +150,27 @@ _No actions could be ranked for this campaign._
 {% endfor %}
 
 {{ page.summary }}
+
+**Real users on this page**
+
+{% if not page.field.available %}
+{% if not page.field.snapshot_taken %}
+_No field data for this window. Run `python -m cli ingest field` to fetch it
+from Grafana._
+{% else %}
+_This page is not mapped to an mPulse page group. Add it to
+`grafana.page_groups` in settings.yaml to compare it against real-user data._
+{% endif %}
+{% else %}
+The campaign above emulates one device on one connection. This is the same
+page as {{ field_beacons[page.name] }} real visits measured it ({{ page.field.page_group }}).
+
+| Metric | This campaign | Real users (p75) |
+| --- | --- | --- |
+{% for row in field_rows[page.name] %}
+| {{ row.label }} | {{ row.lab }} | {{ row.field }} |
+{% endfor %}
+{% endif %}
 
 **What is wrong**
 

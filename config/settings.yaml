@@ -39,6 +39,21 @@ thresholds:
   # of all — so it is configured here rather than hard-coded, like the rest.
   tbt_good_ms: 200
   tbt_fail_ms: 600
+  # Field (RUM) rules. A page group's bounce rate is flagged when it exceeds
+  # the site-wide rate by this many percentage points — a ratio would make a
+  # low-traffic group with 2% bounce look catastrophic at 4%.
+  field_bounce_excess_pp: 10.0
+  # Bounce excess (percentage points) at which a page group is a failure
+  # rather than a warning. Configured separately from the warn margin above
+  # so tuning one does not silently move the other.
+  field_bounce_excess_fail_pp: 20.0
+  # CDN cache-hit ratio below which an asset type is called out.
+  field_cache_hit_warn_pct: 70.0
+  # CDN cache-hit ratio below which an asset type is a failure, not a warning.
+  field_cache_hit_fail_pct: 35.0
+  # Frustration index (0-100) at which a segment or INP bucket is flagged.
+  field_frustration_warn: 30.0
+  field_frustration_fail: 60.0
 
 models:
   # text-embedding-004 was retired by Google — the API now answers it with
@@ -112,3 +127,16 @@ budget:
     daily_input_tokens: 100000
     # Embeddings generate no tokens.
     daily_output_tokens: 0
+
+grafana:
+  # Relative window, Grafana syntax. Matches the dashboard default.
+  window: 7d
+  # Per-request HTTP timeout.
+  timeout_s: 30
+  # pageGroupName -> targets.yaml page name. See design doc §6.2 — this
+  # mapping cannot be inferred and an unmapped page simply renders no field
+  # row.
+  page_groups:
+    Home: homepage
+    Plp: plp
+    Pdp: pdp

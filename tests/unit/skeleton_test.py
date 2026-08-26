@@ -335,3 +335,31 @@ def test_a_report_rendered_against_the_old_order_is_caught_as_drift():
     stale = [s for s in baseline if s != "plan"]
 
     assert diff_sections(stale, baseline)
+
+
+# --------------------------------------------------------------------------- #
+# Field section (grafana field ingestion)
+# --------------------------------------------------------------------------- #
+def test_baseline_contains_the_field_sections():
+    from report.skeleton import load_baseline
+
+    sections = load_baseline()
+    for name in ("field", "field.headline", "field.frustration",
+                 "field.segments", "field.assets", "page.field"):
+        assert name in sections, name
+
+
+def test_field_sits_after_plan_and_before_the_page_group():
+    from report.skeleton import load_baseline
+
+    sections = load_baseline()
+    assert sections.index("plan") < sections.index("field")
+    assert sections.index("field") < sections.index("page[]")
+
+
+def test_page_field_sits_inside_the_page_group():
+    from report.skeleton import load_baseline
+
+    sections = load_baseline()
+    assert sections.index("page.at-a-glance") < sections.index("page.field")
+    assert sections.index("page.field") < sections.index("page.findings")

@@ -299,3 +299,83 @@ def test_a_finding_without_a_consequence_still_says_something():
     md = render_md(report)
 
     assert "- **Hero video is the LCP element** 2140KB." in md
+
+
+# --------------------------------------------------------------------------- #
+# Field section (grafana field ingestion)
+# --------------------------------------------------------------------------- #
+def test_the_markdown_carries_all_five_field_blocks():
+    md = render_md(a_report())
+
+    assert "## What visitors actually experienced" in md
+    assert "**Engagement and real-user vitals**" in md
+    assert "**Where users got stuck**" in md
+    assert "**By device, market and page type**" in md
+    assert "**What the CDN served**" in md
+
+
+def test_the_markdown_states_the_segment_truncation_in_its_own_paragraph():
+    from analysis.reportmodel import FieldBlock, FieldSegments
+
+    report = a_report()
+    report.field = FieldBlock(available=True, mode="live", segments=FieldSegments(
+        by_country=[{"country": "US", "beacons": 600, "lcp_p75": 3000,
+                     "inp_p75": 200, "cls_p75": 0.05, "frustration_p75": 10}],
+        by_pagetype=[{"page_group": "PDP", "beacons": 600, "lcp_p75": 3000,
+                      "inp_p75": 200, "cls_p75": 0.05, "frustration_p75": 10}],
+        inp_buckets=[{"bucket": "1 - under 200 ms (good)", "beacons": 600,
+                      "avg_frustration": 5, "rage_session_pct": 1}],
+    ))
+    md = render_md(report)
+
+    assert "Top 15 markets by traffic (groups under 50 beacons omitted)" in md
+    assert "Groups under 50 beacons omitted" in md
+    # A caption glued to the table's first row (no blank line between them)
+    # collapses the table into one paragraph of pipe characters under GFM.
+    assert "omitted)\n| " not in md
+    assert re.search(r"omitted\)\n\n\|", md)
+
+
+def test_field_segment_tables_never_show_none_or_a_raw_float_in_markdown():
+    from analysis.reportmodel import FieldBlock, FieldSegments
+
+    report = a_report()
+    report.field = FieldBlock(
+        available=True, mode="live",
+        segments=FieldSegments(
+            by_device=[{"device": "mobile", "beacons": 800, "lcp_p75": 3300.0,
+                        "inp_p75": None, "cls_p75": 0.10999999999,
+                        "frustration_p75": 13.0}],
+            inp_buckets=[{"bucket": "1 - under 200 ms (good)", "beacons": 600,
+                          "avg_frustration": 5.0, "rage_session_pct": None}],
+            assets=[{"asset_type": "image", "request_count": 1200,
+                     "avg_size_kb": None, "edge_ms": 30.0, "origin_ms": None,
+                     "cache_hit_pct": 88.5}],
+        ),
+    )
+    md = render_md(report)
+
+    assert "None" not in md
+    assert not re.search(r"\d+\.\d{4,}", md)
+
+
+def test_page_field_with_no_snapshot_at_all_says_so_in_markdown():
+    from analysis.reportmodel import FieldBlock, FieldHeadline, PageFieldBlock
+
+    report = a_report()
+    report.field = FieldBlock(
+        available=True, mode="live", headline=FieldHeadline(bounce_pct_window=10.0),
+    )
+    report.pages[0].field = PageFieldBlock(available=False, snapshot_taken=False)
+    md = render_md(report)
+    assert "No field data for this window" in md
+    assert "not mapped to an mPulse page group" not in md
+
+
+def test_page_field_with_a_snapshot_but_no_mapping_says_not_mapped_in_markdown():
+    from analysis.reportmodel import PageFieldBlock
+
+    report = a_report()
+    report.pages[0].field = PageFieldBlock(available=False, snapshot_taken=True)
+    md = render_md(report)
+    assert "not mapped to an mPulse page group" in md

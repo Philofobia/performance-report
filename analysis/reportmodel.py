@@ -23,7 +23,7 @@ from analysis.trends import TrendSeries
 from config.load import Settings
 from normalize.schema import Run
 
-SCHEMA_VERSION = 2  # 2: adds Report.appendix (Phase 7B)
+SCHEMA_VERSION = 3  # 2: adds Report.appendix (Phase 7B); 3: adds Report.field
 
 #: Defined here rather than imported from analysis/__main__: importing the
 #: CLI module from the model layer would invert the dependency.
@@ -210,6 +210,103 @@ class PlannedAction(BaseModel):
     playbook_source: str = ""
 
 
+class FieldHeadline(BaseModel):
+    """The brand-wide real-user figures, printed against their targets.
+
+    ``sessions`` and ``rage_clicks_total`` are unambiguous sums - one figure
+    each. Every rate and percentile below carries two readings: ``*_window``
+    is the true whole-window figure (comparable against a target, a page
+    group, or last week); ``*_latest`` is the most recent interval bucket
+    only (useful for "how does it look right now", never comparable against
+    a window figure or another interval). See ``normalize.field.FieldVitals``
+    and ``SessionKpis`` for why the two cannot be collapsed into one number.
+    """
+
+    sessions: Optional[int] = None
+    rage_clicks_total: Optional[int] = None
+
+    bounce_pct_window: Optional[float] = None
+    bounce_pct_latest: Optional[float] = None
+    conversion_pct_window: Optional[float] = None
+    conversion_pct_latest: Optional[float] = None
+    avg_session_pages_window: Optional[float] = None
+    avg_session_pages_latest: Optional[float] = None
+
+    lcp_p75_window: Optional[float] = None
+    lcp_p75_latest: Optional[float] = None
+    inp_p75_window: Optional[float] = None
+    inp_p75_latest: Optional[float] = None
+    cls_p75_window: Optional[float] = None
+    cls_p75_latest: Optional[float] = None
+    ttfb_p75_window: Optional[float] = None
+    ttfb_p75_latest: Optional[float] = None
+    frustration_p75_window: Optional[float] = None
+    frustration_p75_latest: Optional[float] = None
+
+
+class FieldSegments(BaseModel):
+    """The breakdown tables, carried through verbatim."""
+
+    by_device: List[Dict[str, Any]] = Field(default_factory=list)
+    by_country: List[Dict[str, Any]] = Field(default_factory=list)
+    by_pagetype: List[Dict[str, Any]] = Field(default_factory=list)
+    inp_buckets: List[Dict[str, Any]] = Field(default_factory=list)
+    assets: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class FieldBlock(BaseModel):
+    """The report's field section.
+
+    ``available`` false is a rendered *state*, not an omission: a section that
+    disappears when Grafana is unreachable is exactly the drift
+    ``--skeleton-check`` exists to catch.
+    """
+
+    available: bool = False
+    mode: str = "unavailable"
+    window_from: Optional[datetime] = None
+    window_to: Optional[datetime] = None
+    fetched_at: Optional[datetime] = None
+    hosts: List[str] = Field(default_factory=list)
+    headline: FieldHeadline = Field(default_factory=FieldHeadline)
+    segments: FieldSegments = Field(default_factory=FieldSegments)
+    symptoms: List[SymptomModel] = Field(default_factory=list)
+    #: The session KPI series, carried through for the chart in Task 12.
+    #: Dumped rather than typed because the report model is a serialisation
+    #: boundary — the chart reads it as plain data.
+    series: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class PageFieldBlock(BaseModel):
+    """One page's real-user counterpart, joined via ``grafana.page_groups``.
+
+    ``available`` false covers two different causes the template must not
+    conflate: no field snapshot exists at all (Grafana unconfigured, or
+    never fetched), versus a snapshot exists but this page is absent from
+    ``grafana.page_groups`` (or its group carried no row). ``snapshot_taken``
+    is what distinguishes them — ``page_group`` alone cannot: it is also
+    ``None`` in the first case, but *can* be set and still unavailable in
+    the second (a configured group whose row never reached the traffic
+    floor a query requires), which would read as "mapped" if the template
+    tried to key off it instead.
+    """
+
+    available: bool = False
+    #: Whether a field snapshot existed at all when this page was joined —
+    #: see the class docstring. False only when no snapshot was ever fetched
+    #: (or Grafana is unconfigured); true whenever one existed, whatever the
+    #: join then found.
+    snapshot_taken: bool = False
+    page_group: Optional[str] = None
+    beacons: Optional[int] = None
+    lcp_p75: Optional[float] = None
+    inp_p75: Optional[float] = None
+    cls_p75: Optional[float] = None
+    bounce_pct: Optional[float] = None
+    frustration_p75: Optional[float] = None
+    rage_clicks: Optional[int] = None
+
+
 class PageBlock(BaseModel):
     name: str
     url: str
@@ -228,6 +325,8 @@ class PageBlock(BaseModel):
     impacts: List[ImpactModel]
     recommendations: List[RecommendationModel]
     projections: Dict[str, ProjectionModel]
+    #: Defaulted so a `report.json` written before this existed still validates.
+    field: PageFieldBlock = Field(default_factory=PageFieldBlock)
 
 
 class ComparisonRow(BaseModel):
@@ -314,12 +413,16 @@ class ReportMeta(BaseModel):
     #: screenshot that exists but will not decode is only discoverable when
     #: something decodes it, which is render time, so it is not counted here.
     degraded_appendix_entries: int = 0
+    #: "live" | "stale" | "unavailable" — see field_mode_for.
+    field_mode: str = "unavailable"
 
 
 class Report(BaseModel):
     schema_version: int = SCHEMA_VERSION
     cover: Cover
     summary: Summary
+    #: Defaulted so a `report.json` written before this existed still validates.
+    field: FieldBlock = Field(default_factory=FieldBlock)
     #: Every page's recommendations in one ranked order. Defaulted so a
     #: report.json written before this existed still validates.
     action_plan: List[PlannedAction] = Field(default_factory=list)
@@ -350,10 +453,129 @@ def _condition_row(run: Run) -> ConditionRow:
     )
 
 
+def field_mode_for(
+    snapshot: Optional[Any], *, generated_at: Optional[datetime], window: str
+) -> str:
+    """Whether the snapshot still describes the period it is read against.
+
+    Stale means ``window_to`` precedes ``generated_at`` by more than one window
+    length: a 7d snapshot fetched over 7 days ago no longer overlaps. It still
+    renders, with its fetch date stated, rather than silently handing the
+    reader last month's numbers.
+
+    Imports ``window_delta`` from ``normalize.field`` rather than
+    ``ingest.field``: ``analysis/``, ``rag/`` and ``report/`` import nothing
+    from ``ingest/`` today, and routing a "7d" parser through the ingestion
+    layer would create a new dependency edge for no reason. Task 2 already
+    put the function in ``normalize/field.py``, which this module already
+    depends on transitively.
+    """
+    if snapshot is None:
+        return "unavailable"
+    if generated_at is None:
+        return "live"
+    from normalize.field import window_delta
+
+    try:
+        span = window_delta(window)
+    except ValueError:
+        return "live"
+    return "stale" if (generated_at - snapshot.window_to) > span else "live"
+
+
+def _field_block(
+    snapshot: Optional[Any], settings: Settings, generated_at: Optional[datetime]
+) -> FieldBlock:
+    """The report's brand-wide field section, or its explicit absent state.
+
+    Never omitted: see ``FieldBlock``'s docstring for why ``available=False``
+    is itself the payload rather than a missing key.
+    """
+    mode = field_mode_for(
+        snapshot, generated_at=generated_at, window=settings.grafana.window
+    )
+    if snapshot is None:
+        return FieldBlock(available=False, mode=mode)
+
+    from rag.retrieve import detect_field_symptoms
+
+    return FieldBlock(
+        available=True,
+        mode=mode,
+        window_from=snapshot.window_from,
+        window_to=snapshot.window_to,
+        fetched_at=snapshot.fetched_at,
+        hosts=list(snapshot.hosts),
+        headline=FieldHeadline(
+            sessions=snapshot.sessions.session_count,
+            rage_clicks_total=snapshot.frustration.rage_clicks_total,
+            bounce_pct_window=snapshot.sessions.window.bounce_pct,
+            bounce_pct_latest=snapshot.sessions.latest.bounce_pct,
+            conversion_pct_window=snapshot.sessions.window.conversion_pct,
+            conversion_pct_latest=snapshot.sessions.latest.conversion_pct,
+            avg_session_pages_window=snapshot.sessions.window.avg_session_pages,
+            avg_session_pages_latest=snapshot.sessions.latest.avg_session_pages,
+            lcp_p75_window=snapshot.vitals.window.lcp_p75,
+            lcp_p75_latest=snapshot.vitals.latest.lcp_p75,
+            inp_p75_window=snapshot.vitals.window.inp_p75,
+            inp_p75_latest=snapshot.vitals.latest.inp_p75,
+            cls_p75_window=snapshot.vitals.window.cls_p75,
+            cls_p75_latest=snapshot.vitals.latest.cls_p75,
+            ttfb_p75_window=snapshot.vitals.window.ttfb_p75,
+            ttfb_p75_latest=snapshot.vitals.latest.ttfb_p75,
+            frustration_p75_window=snapshot.frustration.frustration_p75_window,
+            frustration_p75_latest=snapshot.frustration.frustration_p75_latest,
+        ),
+        series=[p.model_dump(mode="json") for p in snapshot.sessions.series],
+        segments=FieldSegments(
+            by_device=[r.model_dump(mode="json") for r in snapshot.by_device],
+            by_country=[r.model_dump(mode="json") for r in snapshot.by_country],
+            by_pagetype=[r.model_dump(mode="json") for r in snapshot.by_pagetype],
+            inp_buckets=[r.model_dump(mode="json") for r in snapshot.inp_buckets],
+            assets=[r.model_dump(mode="json") for r in snapshot.assets],
+        ),
+        symptoms=[
+            SymptomModel(code=s.code, text=s.text, severity=s.severity,
+                         metric=s.metric, value=s.value, target=s.target)
+            for s in detect_field_symptoms(snapshot, thresholds=settings.thresholds)
+        ],
+    )
+
+
+def _page_field_block(
+    snapshot: Optional[Any], settings: Settings, page_name: str
+) -> PageFieldBlock:
+    """Join one lab page to its mPulse page group, or say why it is absent.
+
+    The map (``grafana.page_groups``) runs mPulse page group -> lab page
+    name, so this looks the mapping up in reverse. Two distinct causes both
+    render ``available=False`` (see ``PageFieldBlock``'s docstring): no
+    snapshot exists at all, or one exists but this page is not mapped (or
+    its group's row never reached the traffic floor a query requires).
+    ``snapshot_taken`` is what tells the template which one it is looking at.
+    """
+    if snapshot is None:
+        return PageFieldBlock(available=False, snapshot_taken=False)
+    group = next(
+        (g for g, name in settings.grafana.page_groups.items() if name == page_name),
+        None,
+    )
+    row = snapshot.page_row(group) if group else None
+    if row is None:
+        return PageFieldBlock(available=False, snapshot_taken=True, page_group=group)
+    return PageFieldBlock(
+        available=True, snapshot_taken=True, page_group=group, beacons=row.beacons,
+        lcp_p75=row.lcp_p75, inp_p75=row.inp_p75, cls_p75=row.cls_p75,
+        bounce_pct=row.bounce_pct, frustration_p75=row.frustration_p75,
+        rage_clicks=row.rage_clicks,
+    )
+
+
 def _page_block(
     page: PageAnalysis,
     settings: Settings,
     trends: Sequence[TrendSeries] = (),
+    field: Optional[PageFieldBlock] = None,
 ) -> PageBlock:
     run = page.primary_run
     resources = sorted(
@@ -410,6 +632,7 @@ def _page_block(
             metric: ProjectionModel.of(projection)
             for metric, projection in sorted(page.projections.items())
         },
+        field=field if field is not None else PageFieldBlock(),
     )
 
 
@@ -511,6 +734,7 @@ def build_report(
     model: str,
     knowledge_digest: str = "",
     trends: Optional[Mapping[str, Sequence[TrendSeries]]] = None,
+    field: Optional[Any] = None,
 ) -> Report:
     """Assemble the Report JSON from per-page analyses.
 
@@ -519,6 +743,13 @@ def build_report(
 
     ``trends`` is keyed by page name. A page absent from it renders the trend
     section's empty state; no section is ever conditionally omitted.
+
+    ``field`` is a ``normalize.field.FieldSnapshot`` or ``None``. Typed as
+    ``Optional[Any]`` rather than imported at module scope for the same
+    reason ``_field_block`` is: the report model stays the thing that shapes
+    the JSON, not the thing that knows how field data was fetched. Absence
+    still produces a ``FieldBlock``/``PageFieldBlock`` with ``available=False``
+    on every page — see ``FieldBlock``'s docstring.
     """
     trends = trends or {}
     ordered = sorted(pages, key=lambda p: p.page_name)
@@ -526,8 +757,11 @@ def build_report(
 
     degraded = [p for p in ordered if p.mode != "llm"]
     appendix = _appendix(ordered, settings)
+    field_block = _field_block(field, settings, generated_at)
     page_blocks = [
-        _page_block(p, settings, trends.get(p.page_name, ())) for p in ordered
+        _page_block(p, settings, trends.get(p.page_name, ()),
+                    field=_page_field_block(field, settings, p.page_name))
+        for p in ordered
     ]
 
     # One ranked plan over every page, so "what do I fix first" is answered by
@@ -566,6 +800,7 @@ def build_report(
         comparison=_comparison(ordered, settings),
         methodology=_methodology(ordered, settings),
         appendix=appendix,
+        field=field_block,
         meta=ReportMeta(
             analysis_mode="rule_based" if degraded else "llm",
             degradation_reason=degraded[0].degradation_reason if degraded else None,
@@ -574,6 +809,7 @@ def build_report(
             dropped_recommendations=sum(p.dropped_recommendations for p in ordered),
             knowledge_digest=knowledge_digest,
             degraded_appendix_entries=sum(1 for e in appendix if e.degraded),
+            field_mode=field_block.mode,
         ),
     )
 

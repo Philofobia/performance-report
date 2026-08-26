@@ -25,10 +25,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 from normalize.schema import Run
 from store.vectordb import SearchHit
+
+if TYPE_CHECKING:
+    from normalize.field import FieldSnapshot
 
 CONTEXT_OPEN = "<<<CONTEXT_DOCUMENT"
 CONTEXT_CLOSE = "CONTEXT_DOCUMENT>>>"
@@ -187,6 +190,107 @@ def format_resources(run: Run, *, limit: int = 10) -> str:
     return "\n".join(lines)
 
 
+#: Rows shown per breakdown table in a prompt. The report prints the full
+#: tables; the model only needs enough to see a pattern.
+MAX_FIELD_ROWS = 6
+
+
+def format_field_measurements(
+    snapshot: "FieldSnapshot",
+    *,
+    page_group: Optional[str] = None,
+    max_rows: int = MAX_FIELD_ROWS,
+) -> str:
+    """Real-user data, stated as trusted measurement.
+
+    Trusted for the same reason browser measurements are: this system fetched
+    it itself, over an authenticated channel, from the operator's own
+    datasource. It is not retrieved third-party text.
+
+    String values that *originate* in the datasource still pass through
+    ``neutralize`` and are length-capped. They are low-risk, but they are data
+    this system did not author, and defanging them costs nothing.
+
+    Only ``page_group``'s own row is included, never every page group: the
+    budget caps input at 250k tokens/day and repeating nine panels across six
+    page prompts would spend a large share of it on duplication.
+    """
+    def line(label: str, value: Any, unit: str = "") -> Optional[str]:
+        return None if value is None else f"- {label}: {value}{unit}"
+
+    def label(text: str) -> str:
+        return truncate(neutralize(str(text)), 60)
+
+    sessions, vitals = snapshot.sessions, snapshot.vitals
+    rows: List[Optional[str]] = [
+        f"Window: {snapshot.window_from:%Y-%m-%d} to {snapshot.window_to:%Y-%m-%d}, "
+        f"hosts {', '.join(snapshot.hosts)}",
+        "",
+        # The window block comes first - it is the one that matters, the
+        # true whole-window figure (a session-count-weighted mean for the
+        # rates, an ungrouped ClickHouse aggregate for the percentiles -
+        # see normalize/field.py:SessionKpis and FieldVitals). "Latest
+        # interval" is the newest bucket alone and is never comparable
+        # against a window figure, so the two are printed and labelled
+        # separately rather than as one ambiguous number.
+        "Site-wide, real users, over the window:",
+        line("Sessions", sessions.session_count),
+        line("Bounce rate", sessions.window.bounce_pct, "%"),
+        line("Conversion rate", sessions.window.conversion_pct, "%"),
+        line("Pages per session", sessions.window.avg_session_pages),
+        line("LCP p75", vitals.window.lcp_p75, "ms"),
+        line("INP p75", vitals.window.inp_p75, "ms"),
+        line("CLS p75", vitals.window.cls_p75),
+        line("TTFB p75", vitals.window.ttfb_p75, "ms"),
+        "",
+        "Site-wide, real users, most recent interval (not a window figure):",
+        line("Bounce rate", sessions.latest.bounce_pct, "%"),
+        line("Conversion rate", sessions.latest.conversion_pct, "%"),
+        line("Pages per session", sessions.latest.avg_session_pages),
+        line("LCP p75", vitals.latest.lcp_p75, "ms"),
+        line("INP p75", vitals.latest.inp_p75, "ms"),
+        line("CLS p75", vitals.latest.cls_p75),
+        line("TTFB p75", vitals.latest.ttfb_p75, "ms"),
+    ]
+
+    row = snapshot.page_row(page_group) if page_group else None
+    if row is not None:
+        rows += [
+            "",
+            f"This page ({label(row.page_group)}), real users:",
+            line("Beacons", row.beacons),
+            line("LCP p75", row.lcp_p75, "ms"),
+            line("INP p75", row.inp_p75, "ms"),
+            line("CLS p75", row.cls_p75),
+            line("Entry bounce rate", row.bounce_pct, "%"),
+            line("Frustration index p75", row.frustration_p75),
+            line("Rage clicks", row.rage_clicks),
+        ]
+
+    slow_assets = [
+        a for a in snapshot.assets
+        if a.cache_hit_pct is not None or a.origin_ms is not None
+    ][:max_rows]
+    if slow_assets:
+        rows += ["", "CDN behaviour by asset type:"]
+        rows += [
+            f"- {label(a.asset_type)}: cache hit "
+            f"{'unknown' if a.cache_hit_pct is None else f'{a.cache_hit_pct}%'}, "
+            f"origin {'unknown' if a.origin_ms is None else f'{a.origin_ms}ms'}"
+            for a in slow_assets
+        ]
+
+    worst_countries = [c for c in snapshot.by_country if c.ttfb_p75][:max_rows]
+    if worst_countries:
+        rows += ["", "Slowest markets by TTFB p75:"]
+        rows += [
+            f"- {label(c.country)}: {c.ttfb_p75}ms over {c.beacons} beacons"
+            for c in worst_countries
+        ]
+
+    return "\n".join(r for r in rows if r is not None)
+
+
 def build_analysis_prompt(
     run: Run,
     hits: Sequence[SearchHit],
@@ -194,6 +298,8 @@ def build_analysis_prompt(
     symptoms: Optional[Sequence[Any]] = None,
     prior_findings: Sequence[SearchHit] = (),
     system_prompt: str = SYSTEM_PROMPT,
+    field: Optional["FieldSnapshot"] = None,
+    page_group: Optional[str] = None,
 ) -> GroundedPrompt:
     """Assemble the grounded analysis prompt.
 
@@ -207,6 +313,13 @@ def build_analysis_prompt(
     resources = format_resources(run)
     if resources:
         sections += ["", resources]
+
+    if field is not None:
+        sections += [
+            "",
+            "# REAL USERS (trusted, fetched by this system from Grafana/mPulse)",
+            format_field_measurements(field, page_group=page_group),
+        ]
 
     if symptoms:
         sections += ["", "# DETECTED SYMPTOMS (rule-based, from configured thresholds)"]

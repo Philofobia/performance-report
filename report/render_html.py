@@ -102,12 +102,16 @@ def build_charts(report: Report) -> Dict[str, Any]:
             "trends": [
                 charts.trend_chart(series.model_dump()) for series in page.trends
             ],
+            "lab_vs_field": charts.lab_vs_field_chart(
+                cwp, page.field.model_dump()
+            ),
         }
     return {
         "pages": pages,
         "comparison": charts.comparison_heat(
             [row.model_dump() for row in report.comparison]
         ),
+        "field_sessions": charts.field_sessions_chart(report.field.series),
     }
 
 
@@ -136,6 +140,160 @@ def glance_by_page(report) -> Dict[str, list]:
     }
 
 
+def _fmt(value: Optional[float], unit: str = "", decimals: int = 0) -> str:
+    """A metric cell, or an em dash. Never prints 0 for an absent value."""
+    if value is None:
+        return "—"
+    return f"{value:.{decimals}f}{unit}"
+
+
+def field_headline_rows(report) -> list:
+    """The brand-wide figures as label/window/latest triples, computed once.
+
+    Every rate and percentile carries two readings, both shown side by
+    side: ``window`` is the true whole-window figure (comparable against a
+    target, a page group, or last week); ``latest`` is the most recent
+    interval bucket only (never comparable against a window figure - see
+    ``normalize.field.FieldVitals`` and ``SessionKpis`` for why the two
+    cannot be collapsed into one number). ``Sessions`` and ``Rage clicks``
+    are unambiguous sums, so their ``latest`` cell is always the em dash.
+    """
+    h = report.field.headline
+    return [
+        {"label": "Sessions", "window": _fmt(h.sessions), "latest": "—"},
+        {"label": "Bounce rate",
+         "window": _fmt(h.bounce_pct_window, "%", 1),
+         "latest": _fmt(h.bounce_pct_latest, "%", 1)},
+        {"label": "Conversion rate",
+         "window": _fmt(h.conversion_pct_window, "%", 2),
+         "latest": _fmt(h.conversion_pct_latest, "%", 2)},
+        {"label": "Pages per session",
+         "window": _fmt(h.avg_session_pages_window, "", 2),
+         "latest": _fmt(h.avg_session_pages_latest, "", 2)},
+        {"label": "LCP p75", "window": _fmt(h.lcp_p75_window, "ms"),
+         "latest": _fmt(h.lcp_p75_latest, "ms")},
+        {"label": "INP p75", "window": _fmt(h.inp_p75_window, "ms"),
+         "latest": _fmt(h.inp_p75_latest, "ms")},
+        {"label": "CLS p75", "window": _fmt(h.cls_p75_window, "", 3),
+         "latest": _fmt(h.cls_p75_latest, "", 3)},
+        {"label": "TTFB p75", "window": _fmt(h.ttfb_p75_window, "ms"),
+         "latest": _fmt(h.ttfb_p75_latest, "ms")},
+        {"label": "Rage clicks", "window": _fmt(h.rage_clicks_total),
+         "latest": "—"},
+        {"label": "Frustration index p75",
+         "window": _fmt(h.frustration_p75_window, "", 1),
+         "latest": _fmt(h.frustration_p75_latest, "", 1)},
+    ]
+
+
+def field_rows_by_page(report) -> Dict[str, list]:
+    """Lab beside field, per page, keyed by page name.
+
+    The comparison is the point of the whole feature, so it is built here
+    rather than in two templates: an emulated number and a p75 field number
+    formatted differently in HTML and Markdown would undermine the one row
+    readers are meant to trust.
+    """
+    rows: Dict[str, list] = {}
+    for page in report.pages:
+        field = page.field
+        # PageBlock.metrics is a plain dict (the Run's metrics dumped whole),
+        # unpacked here rather than in the template - build_charts already
+        # does exactly this at report/render_html.py:88, because the template
+        # does not reach into structures.
+        cwp = page.metrics.get("cwp", {}) if isinstance(page.metrics, dict) else {}
+        rows[page.name] = [
+            {"label": "LCP",
+             "lab": _fmt(cwp.get("lcp_ms"), "ms"),
+             "field": _fmt(field.lcp_p75, "ms")},
+            {"label": "INP",
+             "lab": _fmt(cwp.get("inp_ms"), "ms"),
+             "field": _fmt(field.inp_p75, "ms")},
+            {"label": "CLS",
+             "lab": _fmt(cwp.get("cls"), "", 3),
+             "field": _fmt(field.cls_p75, "", 3)},
+            # No lab counterpart exists for these: a single scripted navigation
+            # cannot bounce, get frustrated, or rage-click. The em dash says
+            # "not measurable here", which is not the same as "zero".
+            {"label": "Entry bounce rate",
+             "lab": "—", "field": _fmt(field.bounce_pct, "%", 1)},
+            {"label": "Frustration index p75",
+             "lab": "—", "field": _fmt(field.frustration_p75, "", 1)},
+            {"label": "Rage clicks",
+             "lab": "—", "field": _fmt(field.rage_clicks)},
+        ]
+    return rows
+
+
+def field_beacons_by_page(report) -> Dict[str, str]:
+    """``page.field.beacons``, pre-formatted, keyed by page name.
+
+    Printed straight into the template (``{{ page.field.beacons }}``) an
+    absent count renders the literal string ``None`` instead of the em dash
+    every other cell uses — the same bug ``_fmt`` and this "compute once,
+    render twice" pattern exist to prevent elsewhere in this module.
+    """
+    return {page.name: _fmt(page.field.beacons) for page in report.pages}
+
+
+def _seg_row(row: Mapping, label_key: str) -> Dict[str, str]:
+    """One device/country/page-type breakdown row, cells pre-formatted.
+
+    Shared by all three tables: they carry identical columns (see
+    ``normalize.field._SegmentRow``), so one formatter keeps them from
+    drifting apart the way the raw-dict template loop let them.
+    """
+    return {
+        "label": row.get(label_key, ""),
+        "beacons": _fmt(row.get("beacons")),
+        "lcp_p75": _fmt(row.get("lcp_p75"), "ms"),
+        "inp_p75": _fmt(row.get("inp_p75"), "ms"),
+        "cls_p75": _fmt(row.get("cls_p75"), "", 3),
+        "frustration_p75": _fmt(row.get("frustration_p75"), "", 1),
+    }
+
+
+def field_segment_rows(report) -> Dict[str, list]:
+    """The five breakdown tables, cells pre-formatted, computed once.
+
+    ``report.field.segments.*`` is a list of plain dicts straight from
+    ``FieldSnapshot`` (see ``analysis/reportmodel.py``'s ``FieldSegments``
+    docstring: "carried through verbatim") — nothing upstream of this
+    formats them. Printing them unformatted in the template means an
+    unmeasured cell renders as the literal string ``None`` and a float
+    prints with its full binary-rounding tail; both are exactly what
+    ``_fmt`` and the em-dash rule exist to prevent, and reusing the same
+    ``_fmt`` here rather than re-deriving units per template is the same
+    "compute once, render twice" rule ``field_headline_rows`` follows.
+    """
+    seg = report.field.segments
+    return {
+        "by_device": [_seg_row(r, "device") for r in seg.by_device],
+        "by_country": [_seg_row(r, "country") for r in seg.by_country],
+        "by_pagetype": [_seg_row(r, "page_group") for r in seg.by_pagetype],
+        "inp_buckets": [
+            {
+                "label": row.get("bucket", ""),
+                "beacons": _fmt(row.get("beacons")),
+                "avg_frustration": _fmt(row.get("avg_frustration"), "", 1),
+                "rage_session_pct": _fmt(row.get("rage_session_pct"), "%", 1),
+            }
+            for row in seg.inp_buckets
+        ],
+        "assets": [
+            {
+                "label": row.get("asset_type", ""),
+                "request_count": _fmt(row.get("request_count")),
+                "avg_size_kb": _fmt(row.get("avg_size_kb"), "KB", 1),
+                "edge_ms": _fmt(row.get("edge_ms"), "ms"),
+                "origin_ms": _fmt(row.get("origin_ms"), "ms"),
+                "cache_hit_pct": _fmt(row.get("cache_hit_pct"), "%", 1),
+            }
+            for row in seg.assets
+        ],
+    }
+
+
 def render_html(
     report: Report, *, images: Optional[Mapping[str, "EmbeddedImage"]] = None
 ) -> str:
@@ -156,4 +314,8 @@ def render_html(
         images=images or {},
         stylesheet=stylesheet,
         glance=glance_by_page(report),
+        field_headline=field_headline_rows(report),
+        field_rows=field_rows_by_page(report),
+        field_segments=field_segment_rows(report),
+        field_beacons=field_beacons_by_page(report),
     )

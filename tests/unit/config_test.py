@@ -352,3 +352,39 @@ def test_the_blocking_time_thresholds_are_configurable_like_the_others():
 
     assert thresholds.tbt_good_ms == 200
     assert thresholds.tbt_fail_ms == 600
+
+
+def test_grafana_defaults_present():
+    from config.load import Settings
+
+    settings = Settings()
+    assert settings.grafana.window == "7d"
+    assert settings.grafana.timeout_s == 30
+    assert settings.grafana.page_groups == {}
+
+
+def test_grafana_block_loads_from_yaml(tmp_path):
+    from config.load import load_settings
+
+    (tmp_path / "settings.yaml").write_text(
+        "grafana:\n"
+        "  window: 24h\n"
+        "  timeout_s: 10\n"
+        "  page_groups:\n"
+        "    Pdp: pdp\n",
+        encoding="utf-8",
+    )
+    settings = load_settings(tmp_path / "settings.yaml")
+    assert settings.grafana.window == "24h"
+    assert settings.grafana.timeout_s == 10
+    assert settings.grafana.page_groups["Pdp"] == "pdp"
+
+
+def test_field_thresholds_default_to_dashboard_values():
+    from config.load import Thresholds
+
+    th = Thresholds()
+    assert th.field_bounce_excess_pp == 10.0
+    assert th.field_cache_hit_warn_pct == 70.0
+    assert th.field_frustration_warn == 30.0
+    assert th.field_frustration_fail == 60.0
