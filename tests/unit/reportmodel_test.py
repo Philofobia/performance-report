@@ -600,3 +600,51 @@ def test_unmapped_page_renders_the_not_available_state():
     )
     report = build(settings=settings, field=snapshot, generated_at=now)
     assert all(p.field.available is False for p in report.pages)
+    # A snapshot *was* fetched - it just has no row for this page - so the
+    # template must say "not mapped", not "no field data at all".
+    assert all(p.field.snapshot_taken is True for p in report.pages)
+
+
+def test_no_snapshot_at_all_is_distinguished_from_not_mapped():
+    """The two causes of `page.field.available is False` must not read the
+    same: no snapshot ever fetched (Grafana unconfigured) is a different
+    problem from a snapshot existing but this page having no page group.
+    """
+    report = build(field=None)
+    assert all(p.field.available is False for p in report.pages)
+    assert all(p.field.snapshot_taken is False for p in report.pages)
+
+
+def test_field_block_carries_real_symptoms_and_series_from_the_snapshot():
+    """Regression guard: gutting `_field_block`'s `symptoms=[...]` or
+    `series=[...]` to an empty list leaves the offline suite green, because
+    nothing asserts these are actually populated from the snapshot - only
+    that the block's other fields (headline, segments) are. Drives a
+    snapshot through data known to trip `detect_field_symptoms` and to carry
+    a session series, then checks both land on `report.field`.
+    """
+    from normalize.field import AssetRow, FieldSnapshot, SessionKpis, TimePoint
+
+    now = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    snapshot = FieldSnapshot(
+        snapshot_id="s", project="p", hosts=["a.com"],
+        window_from=now, window_to=now, fetched_at=now,
+        sessions=SessionKpis(
+            bounce_pct=40.0,
+            series=[
+                TimePoint(time=now, values={"bounce_pct": 40.0,
+                                             "conversion_pct": 2.0}),
+            ],
+        ),
+        # `_field_block` never passes `page_group` to `detect_field_symptoms`
+        # (site-wide, not scoped to one page), so the per-page bounce/
+        # frustration rules can never fire here - the brand-wide cache-hit
+        # rule is what actually reaches `report.field.symptoms`.
+        assets=[AssetRow(asset_type="Images", cache_hit_pct=40.0)],
+    )
+    report = build(field=snapshot, generated_at=now)
+
+    assert report.field.symptoms, "symptoms must be populated, not gutted"
+    assert any(s.code == "field_cache_low" for s in report.field.symptoms)
+    assert report.field.series, "series must be populated, not gutted"
+    assert report.field.series[0]["values"]["bounce_pct"] == 40.0

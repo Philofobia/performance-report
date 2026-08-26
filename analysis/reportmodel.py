@@ -211,18 +211,37 @@ class PlannedAction(BaseModel):
 
 
 class FieldHeadline(BaseModel):
-    """The brand-wide real-user figures, printed against their targets."""
+    """The brand-wide real-user figures, printed against their targets.
+
+    ``sessions`` and ``rage_clicks_total`` are unambiguous sums - one figure
+    each. Every rate and percentile below carries two readings: ``*_window``
+    is the true whole-window figure (comparable against a target, a page
+    group, or last week); ``*_latest`` is the most recent interval bucket
+    only (useful for "how does it look right now", never comparable against
+    a window figure or another interval). See ``normalize.field.FieldVitals``
+    and ``SessionKpis`` for why the two cannot be collapsed into one number.
+    """
 
     sessions: Optional[int] = None
-    bounce_pct: Optional[float] = None
-    conversion_pct: Optional[float] = None
-    avg_session_pages: Optional[float] = None
-    lcp_p75: Optional[float] = None
-    inp_p75: Optional[float] = None
-    cls_p75: Optional[float] = None
-    ttfb_p75: Optional[float] = None
     rage_clicks_total: Optional[int] = None
-    frustration_p75: Optional[float] = None
+
+    bounce_pct_window: Optional[float] = None
+    bounce_pct_latest: Optional[float] = None
+    conversion_pct_window: Optional[float] = None
+    conversion_pct_latest: Optional[float] = None
+    avg_session_pages_window: Optional[float] = None
+    avg_session_pages_latest: Optional[float] = None
+
+    lcp_p75_window: Optional[float] = None
+    lcp_p75_latest: Optional[float] = None
+    inp_p75_window: Optional[float] = None
+    inp_p75_latest: Optional[float] = None
+    cls_p75_window: Optional[float] = None
+    cls_p75_latest: Optional[float] = None
+    ttfb_p75_window: Optional[float] = None
+    ttfb_p75_latest: Optional[float] = None
+    frustration_p75_window: Optional[float] = None
+    frustration_p75_latest: Optional[float] = None
 
 
 class FieldSegments(BaseModel):
@@ -259,9 +278,25 @@ class FieldBlock(BaseModel):
 
 
 class PageFieldBlock(BaseModel):
-    """One page's real-user counterpart, joined via ``grafana.page_groups``."""
+    """One page's real-user counterpart, joined via ``grafana.page_groups``.
+
+    ``available`` false covers two different causes the template must not
+    conflate: no field snapshot exists at all (Grafana unconfigured, or
+    never fetched), versus a snapshot exists but this page is absent from
+    ``grafana.page_groups`` (or its group carried no row). ``snapshot_taken``
+    is what distinguishes them — ``page_group`` alone cannot: it is also
+    ``None`` in the first case, but *can* be set and still unavailable in
+    the second (a configured group whose row never reached the traffic
+    floor a query requires), which would read as "mapped" if the template
+    tried to key off it instead.
+    """
 
     available: bool = False
+    #: Whether a field snapshot existed at all when this page was joined —
+    #: see the class docstring. False only when no snapshot was ever fetched
+    #: (or Grafana is unconfigured); true whenever one existed, whatever the
+    #: join then found.
+    snapshot_taken: bool = False
     page_group: Optional[str] = None
     beacons: Optional[int] = None
     lcp_p75: Optional[float] = None
@@ -473,15 +508,23 @@ def _field_block(
         hosts=list(snapshot.hosts),
         headline=FieldHeadline(
             sessions=snapshot.sessions.session_count,
-            bounce_pct=snapshot.sessions.bounce_pct,
-            conversion_pct=snapshot.sessions.conversion_pct,
-            avg_session_pages=snapshot.sessions.avg_session_pages,
-            lcp_p75=snapshot.vitals.lcp_p75,
-            inp_p75=snapshot.vitals.inp_p75,
-            cls_p75=snapshot.vitals.cls_p75,
-            ttfb_p75=snapshot.vitals.ttfb_p75,
             rage_clicks_total=snapshot.frustration.rage_clicks_total,
-            frustration_p75=snapshot.frustration.frustration_p75,
+            bounce_pct_window=snapshot.sessions.window.bounce_pct,
+            bounce_pct_latest=snapshot.sessions.latest.bounce_pct,
+            conversion_pct_window=snapshot.sessions.window.conversion_pct,
+            conversion_pct_latest=snapshot.sessions.latest.conversion_pct,
+            avg_session_pages_window=snapshot.sessions.window.avg_session_pages,
+            avg_session_pages_latest=snapshot.sessions.latest.avg_session_pages,
+            lcp_p75_window=snapshot.vitals.window.lcp_p75,
+            lcp_p75_latest=snapshot.vitals.latest.lcp_p75,
+            inp_p75_window=snapshot.vitals.window.inp_p75,
+            inp_p75_latest=snapshot.vitals.latest.inp_p75,
+            cls_p75_window=snapshot.vitals.window.cls_p75,
+            cls_p75_latest=snapshot.vitals.latest.cls_p75,
+            ttfb_p75_window=snapshot.vitals.window.ttfb_p75,
+            ttfb_p75_latest=snapshot.vitals.latest.ttfb_p75,
+            frustration_p75_window=snapshot.frustration.frustration_p75_window,
+            frustration_p75_latest=snapshot.frustration.frustration_p75_latest,
         ),
         series=[p.model_dump(mode="json") for p in snapshot.sessions.series],
         segments=FieldSegments(
@@ -502,24 +545,26 @@ def _field_block(
 def _page_field_block(
     snapshot: Optional[Any], settings: Settings, page_name: str
 ) -> PageFieldBlock:
-    """Join one lab page to its mPulse page group, or say it is not mapped.
+    """Join one lab page to its mPulse page group, or say why it is absent.
 
     The map (``grafana.page_groups``) runs mPulse page group -> lab page
-    name, so this looks the mapping up in reverse. A page absent from the
-    map — or a snapshot that never fetched — renders the same "not
-    available" state; the reader does not need to know which.
+    name, so this looks the mapping up in reverse. Two distinct causes both
+    render ``available=False`` (see ``PageFieldBlock``'s docstring): no
+    snapshot exists at all, or one exists but this page is not mapped (or
+    its group's row never reached the traffic floor a query requires).
+    ``snapshot_taken`` is what tells the template which one it is looking at.
     """
     if snapshot is None:
-        return PageFieldBlock(available=False)
+        return PageFieldBlock(available=False, snapshot_taken=False)
     group = next(
         (g for g, name in settings.grafana.page_groups.items() if name == page_name),
         None,
     )
     row = snapshot.page_row(group) if group else None
     if row is None:
-        return PageFieldBlock(available=False, page_group=group)
+        return PageFieldBlock(available=False, snapshot_taken=True, page_group=group)
     return PageFieldBlock(
-        available=True, page_group=group, beacons=row.beacons,
+        available=True, snapshot_taken=True, page_group=group, beacons=row.beacons,
         lcp_p75=row.lcp_p75, inp_p75=row.inp_p75, cls_p75=row.cls_p75,
         bounce_pct=row.bounce_pct, frustration_p75=row.frustration_p75,
         rage_clicks=row.rage_clicks,

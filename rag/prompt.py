@@ -226,15 +226,31 @@ def format_field_measurements(
         f"Window: {snapshot.window_from:%Y-%m-%d} to {snapshot.window_to:%Y-%m-%d}, "
         f"hosts {', '.join(snapshot.hosts)}",
         "",
-        "Site-wide, real users:",
+        # The window block comes first - it is the one that matters, the
+        # true whole-window figure (a session-count-weighted mean for the
+        # rates, an ungrouped ClickHouse aggregate for the percentiles -
+        # see normalize/field.py:SessionKpis and FieldVitals). "Latest
+        # interval" is the newest bucket alone and is never comparable
+        # against a window figure, so the two are printed and labelled
+        # separately rather than as one ambiguous number.
+        "Site-wide, real users, over the window:",
         line("Sessions", sessions.session_count),
-        line("Bounce rate", sessions.bounce_pct, "%"),
-        line("Conversion rate", sessions.conversion_pct, "%"),
-        line("Pages per session", sessions.avg_session_pages),
-        line("LCP p75", vitals.lcp_p75, "ms"),
-        line("INP p75", vitals.inp_p75, "ms"),
-        line("CLS p75", vitals.cls_p75),
-        line("TTFB p75", vitals.ttfb_p75, "ms"),
+        line("Bounce rate", sessions.window.bounce_pct, "%"),
+        line("Conversion rate", sessions.window.conversion_pct, "%"),
+        line("Pages per session", sessions.window.avg_session_pages),
+        line("LCP p75", vitals.window.lcp_p75, "ms"),
+        line("INP p75", vitals.window.inp_p75, "ms"),
+        line("CLS p75", vitals.window.cls_p75),
+        line("TTFB p75", vitals.window.ttfb_p75, "ms"),
+        "",
+        "Site-wide, real users, most recent interval (not a window figure):",
+        line("Bounce rate", sessions.latest.bounce_pct, "%"),
+        line("Conversion rate", sessions.latest.conversion_pct, "%"),
+        line("Pages per session", sessions.latest.avg_session_pages),
+        line("LCP p75", vitals.latest.lcp_p75, "ms"),
+        line("INP p75", vitals.latest.inp_p75, "ms"),
+        line("CLS p75", vitals.latest.cls_p75),
+        line("TTFB p75", vitals.latest.ttfb_p75, "ms"),
     ]
 
     row = snapshot.page_row(page_group) if page_group else None

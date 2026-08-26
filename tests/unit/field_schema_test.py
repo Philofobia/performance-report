@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from normalize.field import FieldSnapshot, PageTypeRow, SessionKpis
+from normalize.field import FieldSnapshot, PageTypeRow, SessionKpis, SessionRates
 
 
 def _snapshot(**kwargs) -> FieldSnapshot:
@@ -22,26 +22,28 @@ def _snapshot(**kwargs) -> FieldSnapshot:
 
 def test_minimal_snapshot_validates_with_every_metric_none():
     snap = _snapshot()
-    assert snap.sessions.bounce_pct is None
-    assert snap.vitals.lcp_p75 is None
+    assert snap.sessions.window.bounce_pct is None
+    assert snap.sessions.latest.bounce_pct is None
+    assert snap.vitals.window.lcp_p75 is None
+    assert snap.vitals.latest.lcp_p75 is None
     assert snap.by_device == []
 
 
 def test_unmeasured_is_not_zero():
     """A panel that returned nothing must not read as a measured zero."""
     snap = _snapshot()
-    assert snap.sessions.bounce_pct is None
+    assert snap.sessions.window.bounce_pct is None
     assert snap.sessions.session_count is None
     # The distinction the whole model turns on: None formats as an em dash,
     # 0 formats as a number a reader would act on.
-    assert snap.sessions.bounce_pct != 0
+    assert snap.sessions.window.bounce_pct != 0
 
 
 def test_percentages_are_bounded():
     with pytest.raises(ValidationError):
-        _snapshot(sessions=SessionKpis(bounce_pct=101.0))
+        _snapshot(sessions=SessionKpis(window=SessionRates(bounce_pct=101.0)))
     with pytest.raises(ValidationError):
-        _snapshot(sessions=SessionKpis(conversion_pct=-1.0))
+        _snapshot(sessions=SessionKpis(window=SessionRates(conversion_pct=-1.0)))
 
 
 def test_window_must_not_be_inverted():

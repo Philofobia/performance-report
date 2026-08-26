@@ -113,11 +113,15 @@
   <div data-section="field.headline" class="block">
     <h3>Engagement and real-user vitals</h3>
     {% if report.field.available %}
+    <p class="serif">"Window" is the true whole-window figure - compare it
+      against a target, a page group, or last week. "Latest interval" is
+      the most recent bucket alone and is never comparable against a
+      window figure.</p>
     <table class="metrics glance">
-      <thead><tr><th>Metric</th><th>Measured</th></tr></thead>
+      <thead><tr><th>Metric</th><th>Window</th><th>Latest interval</th></tr></thead>
       <tbody>
       {% for row in field_headline %}
-        <tr><td>{{ row.label }}</td><td>{{ row.value }}</td></tr>
+        <tr><td>{{ row.label }}</td><td>{{ row.window }}</td><td>{{ row.latest }}</td></tr>
       {% endfor %}
       </tbody>
     </table>
@@ -250,12 +254,17 @@
   <div data-section="page.field" class="block">
     <h3>Real users on this page</h3>
     {% if not page.field.available %}
+    {% if not page.field.snapshot_taken %}
+    <p class="empty">No field data for this window. Run
+      <code>python -m cli ingest field</code> to fetch it from Grafana.</p>
+    {% else %}
     <p class="empty">This page is not mapped to an mPulse page group. Add it to
       <code>grafana.page_groups</code> in settings.yaml to compare it against
       real-user data.</p>
+    {% endif %}
     {% else %}
     <p class="serif">The campaign above emulates one device on one connection.
-      This is the same page as {{ page.field.beacons }} real visits measured it
+      This is the same page as {{ field_beacons[page.name] }} real visits measured it
       ({{ page.field.page_group }}).</p>
     <table class="metrics glance">
       <thead><tr><th>Metric</th><th>This campaign</th><th>Real users (p75)</th></tr></thead>

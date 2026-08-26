@@ -741,16 +741,22 @@ def _field_snapshot():
     from datetime import datetime, timezone
 
     from normalize.field import (
-        AssetRow, CountryRow, FieldSnapshot, PageTypeRow, SessionKpis, FieldVitals,
+        AssetRow, CountryRow, FieldSnapshot, PageTypeRow, SessionKpis,
+        SessionRates, FieldVitals, VitalsReading,
     )
 
     now = datetime(2026, 8, 24, tzinfo=timezone.utc)
     return FieldSnapshot(
         snapshot_id="s1", project="oakley", hosts=["www.oakley.com"],
         window_from=now, window_to=now, fetched_at=now,
-        sessions=SessionKpis(bounce_pct=41.0, conversion_pct=2.4,
-                             avg_session_pages=3.1, session_count=91000),
-        vitals=FieldVitals(lcp_p75=3900.0, inp_p75=240.0, cls_p75=0.12),
+        sessions=SessionKpis(
+            window=SessionRates(bounce_pct=41.0, conversion_pct=2.4,
+                                avg_session_pages=3.1),
+            session_count=91000,
+        ),
+        vitals=FieldVitals(
+            window=VitalsReading(lcp_p75=3900.0, inp_p75=240.0, cls_p75=0.12),
+        ),
         by_pagetype=[
             PageTypeRow(page_group="Pdp", beacons=1200, lcp_p75=4100.0,
                         bounce_pct=61.5, frustration_p75=42.0),
@@ -871,7 +877,8 @@ def test_absent_bounce_rate_renders_as_absent_not_zero():
     from rag.prompt import format_field_measurements
 
     snap = _field_snapshot()
-    snap.sessions.bounce_pct = None
+    snap.sessions.window.bounce_pct = None
+    snap.sessions.latest.bounce_pct = None
 
     text = format_field_measurements(snap)
 

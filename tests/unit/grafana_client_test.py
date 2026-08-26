@@ -108,6 +108,73 @@ def test_query_body_carries_one_entry_per_ref_id():
     assert body["queries"][0]["datasource"]["uid"] == "abc123"
 
 
+def test_query_body_carries_interval_max_points_and_format_per_query_type():
+    """Whole-branch review item 4: intervalMs/maxDataPoints were omitted and
+    format was sent as 1 (table) even for the three timeseries refIds. This
+    cannot be validated against a real Grafana offline - only that the
+    client sends what the design's §3.1 example shows.
+    """
+    client = _client([{"results": {}}])
+    client.query(
+        {"vitals": "SELECT 1", "sessions": "SELECT 2", "assets": "SELECT 3",
+         "headline": "SELECT 4"},
+        window="7d",
+    )
+    body = json.loads(client._opener.requests[0].data.decode("utf-8"))
+    by_ref = {q["refId"]: q for q in body["queries"]}
+
+    for ref_id, query in by_ref.items():
+        assert isinstance(query["intervalMs"], int) and query["intervalMs"] > 0
+        assert query["maxDataPoints"] > 0
+
+    # Timeseries panels: format 0. Table panels: format 1 (design §3.1/§3.2).
+    # `headline` is ungrouped (one row, no time column), so it is a table
+    # query like the five others, not a timeseries one.
+    assert by_ref["vitals"]["format"] == 0
+    assert by_ref["sessions"]["format"] == 0
+    assert by_ref["assets"]["format"] == 1
+    assert by_ref["headline"]["format"] == 1
+
+
+def test_interval_ms_is_not_absurdly_fine_over_a_long_window():
+    """A 7-day window must not bucket down to (near) individual rows."""
+    client = _client([{"results": {}}])
+    client.query({"vitals": "SELECT 1"}, window="7d")
+    body = json.loads(client._opener.requests[0].data.decode("utf-8"))
+    interval_ms = body["queries"][0]["intervalMs"]
+    # 7 days / 200 target buckets is on the order of tens of minutes; a
+    # generous upper bound rules out per-second-scale bucketing.
+    assert interval_ms >= 60_000
+
+
+def test_per_query_error_raises_naming_the_ref_id():
+    """Whole-branch review item 3: a rejected query used to parse to an
+    all-None row and store a silent 'live' snapshot of em dashes. Design §8
+    promises `ingest field` exits non-zero on a rejected query.
+    """
+    client = _client([{"results": {
+        "vitals": {"frames": [{
+            "schema": {"fields": [{"name": "time", "type": "time"}]},
+            "data": {"values": [[]]},
+        }]},
+        "assets": {"error": "table X does not exist", "status": 500},
+    }}])
+    with pytest.raises(GrafanaError) as exc:
+        client.query({"vitals": "SELECT 1", "assets": "SELECT 2"}, window="7d")
+    message = str(exc.value)
+    assert "assets" in message
+    assert "table X does not exist" in message
+
+
+def test_a_clean_mixed_response_with_no_errors_does_not_raise():
+    client = _client([{"results": {
+        "vitals": {"frames": []},
+        "assets": {"frames": []},
+    }}])
+    result = client.query({"vitals": "SELECT 1", "assets": "SELECT 2"}, window="7d")
+    assert set(result) == {"vitals", "assets"}
+
+
 def test_server_error_is_retried_once_then_succeeds():
     boom = HTTPError("u", 503, "unavailable", {}, None)
     client = _client([boom, {"results": {"ok": {}}}])

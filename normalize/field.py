@@ -28,18 +28,48 @@ class TimePoint(BaseModel):
     values: Dict[str, Optional[float]] = Field(default_factory=dict)
 
 
-class SessionKpis(BaseModel):
-    """Whole-window session aggregates, plus the series behind them."""
+class SessionRates(BaseModel):
+    """One reading of the three session rates. Used for two periods —
+    see ``SessionKpis``.
+    """
 
     bounce_pct: Pct = Field(default=None, ge=0, le=100)
     conversion_pct: Pct = Field(default=None, ge=0, le=100)
     avg_session_pages: Optional[float] = Field(default=None, ge=0)
+
+
+class SessionKpis(BaseModel):
+    """Session-level KPIs, in two distinct readings, plus the series behind
+    them.
+
+    ``window`` is the true whole-window figure: a mean over the series'
+    buckets weighted by each bucket's ``session_count``
+    (``ingest/grafana/parse.py:_weighted_mean``). This is mathematically
+    exact, not an approximation - ``sum(rate_i * n_i) / sum(n_i)`` is
+    ``sum(bounced_i) / sum(n_i)``, and a session is bucketed by its first
+    beacon, so nothing is double-counted across buckets. This is the figure
+    to compare against a target, a page group, or last week.
+
+    ``latest`` is the newest bucket alone - always partial, and, because a
+    session is bucketed by its *first* beacon, systematically bounce-heavy
+    (visitors who arrived minutes ago have not had time to view a second
+    page yet). Useful only for "how does it look right now", never
+    comparable against ``window`` or any other window figure.
+
+    ``session_count`` is unambiguous either way - a plain sum across
+    buckets, already a true window total.
+    """
+
+    window: SessionRates = Field(default_factory=SessionRates)
+    latest: SessionRates = Field(default_factory=SessionRates)
     session_count: Optional[int] = Field(default=None, ge=0)
     series: List[TimePoint] = Field(default_factory=list)
 
 
-class FieldVitals(BaseModel):
-    """Real-user Core Web Vitals. Compare against the lab numbers, not to them."""
+class VitalsReading(BaseModel):
+    """One set of Core Web Vitals percentiles. Used for two periods —
+    see ``FieldVitals``.
+    """
 
     lcp_p75: Optional[float] = Field(default=None, ge=0)
     lcp_p95: Optional[float] = Field(default=None, ge=0)
@@ -50,12 +80,44 @@ class FieldVitals(BaseModel):
     cls_p95: Optional[float] = Field(default=None, ge=0)
     ttfb_p75: Optional[float] = Field(default=None, ge=0)
     plt_p75: Optional[float] = Field(default=None, ge=0)
+
+
+class FieldVitals(BaseModel):
+    """Real-user Core Web Vitals. Compare against the lab numbers, not to them.
+
+    A percentile cannot be re-aggregated client-side - a mean of per-bucket
+    p75s is not the window's p75 - so unlike a sum or a rate, there was no
+    way to get a true window figure from the bucketed ``vitals`` panel
+    alone. ``window`` instead comes from a *separate, ungrouped* ClickHouse
+    query (refId ``headline`` - see ``ingest/grafana/queries.py``): the true
+    percentile over every beacon in the window, computed by ClickHouse in
+    one pass rather than approximated from a series.
+
+    ``latest`` is the most recent interval bucket from the ``vitals`` series
+    - useful for "is it bad right now", never comparable against ``window``.
+    The matching column on ``FieldSnapshot.by_device``/``by_country``/
+    ``by_pagetype`` is a third, *segment-scoped* whole-window percentile,
+    already a true SQL aggregate for its own device/market/page group.
+    """
+
+    window: VitalsReading = Field(default_factory=VitalsReading)
+    latest: VitalsReading = Field(default_factory=VitalsReading)
     series: List[TimePoint] = Field(default_factory=list)
 
 
 class Frustration(BaseModel):
+    """``rage_clicks_total`` is a true window sum - unambiguous either way.
+
+    ``frustration_p75_window`` is the true whole-window percentile, from the
+    same ungrouped ``headline`` query ``FieldVitals.window`` uses.
+    ``frustration_p75_latest`` is the most recent interval bucket from the
+    ``frustration`` series - see ``FieldVitals`` for why the two cannot be
+    collapsed into one field.
+    """
+
     rage_clicks_total: Optional[int] = Field(default=None, ge=0)
-    frustration_p75: Optional[float] = Field(default=None, ge=0, le=100)
+    frustration_p75_window: Optional[float] = Field(default=None, ge=0, le=100)
+    frustration_p75_latest: Optional[float] = Field(default=None, ge=0, le=100)
     series: List[TimePoint] = Field(default_factory=list)
 
 

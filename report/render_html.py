@@ -148,19 +148,41 @@ def _fmt(value: Optional[float], unit: str = "", decimals: int = 0) -> str:
 
 
 def field_headline_rows(report) -> list:
-    """The brand-wide figures as label/value pairs, computed once."""
+    """The brand-wide figures as label/window/latest triples, computed once.
+
+    Every rate and percentile carries two readings, both shown side by
+    side: ``window`` is the true whole-window figure (comparable against a
+    target, a page group, or last week); ``latest`` is the most recent
+    interval bucket only (never comparable against a window figure - see
+    ``normalize.field.FieldVitals`` and ``SessionKpis`` for why the two
+    cannot be collapsed into one number). ``Sessions`` and ``Rage clicks``
+    are unambiguous sums, so their ``latest`` cell is always the em dash.
+    """
     h = report.field.headline
     return [
-        {"label": "Sessions", "value": _fmt(h.sessions)},
-        {"label": "Bounce rate", "value": _fmt(h.bounce_pct, "%", 1)},
-        {"label": "Conversion rate", "value": _fmt(h.conversion_pct, "%", 2)},
-        {"label": "Pages per session", "value": _fmt(h.avg_session_pages, "", 2)},
-        {"label": "LCP p75", "value": _fmt(h.lcp_p75, "ms")},
-        {"label": "INP p75", "value": _fmt(h.inp_p75, "ms")},
-        {"label": "CLS p75", "value": _fmt(h.cls_p75, "", 3)},
-        {"label": "TTFB p75", "value": _fmt(h.ttfb_p75, "ms")},
-        {"label": "Rage clicks", "value": _fmt(h.rage_clicks_total)},
-        {"label": "Frustration index p75", "value": _fmt(h.frustration_p75, "", 1)},
+        {"label": "Sessions", "window": _fmt(h.sessions), "latest": "—"},
+        {"label": "Bounce rate",
+         "window": _fmt(h.bounce_pct_window, "%", 1),
+         "latest": _fmt(h.bounce_pct_latest, "%", 1)},
+        {"label": "Conversion rate",
+         "window": _fmt(h.conversion_pct_window, "%", 2),
+         "latest": _fmt(h.conversion_pct_latest, "%", 2)},
+        {"label": "Pages per session",
+         "window": _fmt(h.avg_session_pages_window, "", 2),
+         "latest": _fmt(h.avg_session_pages_latest, "", 2)},
+        {"label": "LCP p75", "window": _fmt(h.lcp_p75_window, "ms"),
+         "latest": _fmt(h.lcp_p75_latest, "ms")},
+        {"label": "INP p75", "window": _fmt(h.inp_p75_window, "ms"),
+         "latest": _fmt(h.inp_p75_latest, "ms")},
+        {"label": "CLS p75", "window": _fmt(h.cls_p75_window, "", 3),
+         "latest": _fmt(h.cls_p75_latest, "", 3)},
+        {"label": "TTFB p75", "window": _fmt(h.ttfb_p75_window, "ms"),
+         "latest": _fmt(h.ttfb_p75_latest, "ms")},
+        {"label": "Rage clicks", "window": _fmt(h.rage_clicks_total),
+         "latest": "—"},
+        {"label": "Frustration index p75",
+         "window": _fmt(h.frustration_p75_window, "", 1),
+         "latest": _fmt(h.frustration_p75_latest, "", 1)},
     ]
 
 
@@ -201,6 +223,17 @@ def field_rows_by_page(report) -> Dict[str, list]:
              "lab": "—", "field": _fmt(field.rage_clicks)},
         ]
     return rows
+
+
+def field_beacons_by_page(report) -> Dict[str, str]:
+    """``page.field.beacons``, pre-formatted, keyed by page name.
+
+    Printed straight into the template (``{{ page.field.beacons }}``) an
+    absent count renders the literal string ``None`` instead of the em dash
+    every other cell uses — the same bug ``_fmt`` and this "compute once,
+    render twice" pattern exist to prevent elsewhere in this module.
+    """
+    return {page.name: _fmt(page.field.beacons) for page in report.pages}
 
 
 def _seg_row(row: Mapping, label_key: str) -> Dict[str, str]:
@@ -251,9 +284,9 @@ def field_segment_rows(report) -> Dict[str, list]:
             {
                 "label": row.get("asset_type", ""),
                 "request_count": _fmt(row.get("request_count")),
-                "avg_size_kb": _fmt(row.get("avg_size_kb"), " KB", 1),
-                "edge_ms": _fmt(row.get("edge_ms"), " ms"),
-                "origin_ms": _fmt(row.get("origin_ms"), " ms"),
+                "avg_size_kb": _fmt(row.get("avg_size_kb"), "KB", 1),
+                "edge_ms": _fmt(row.get("edge_ms"), "ms"),
+                "origin_ms": _fmt(row.get("origin_ms"), "ms"),
                 "cache_hit_pct": _fmt(row.get("cache_hit_pct"), "%", 1),
             }
             for row in seg.assets
@@ -284,4 +317,5 @@ def render_html(
         field_headline=field_headline_rows(report),
         field_rows=field_rows_by_page(report),
         field_segments=field_segment_rows(report),
+        field_beacons=field_beacons_by_page(report),
     )

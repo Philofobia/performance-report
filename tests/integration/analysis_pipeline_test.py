@@ -584,10 +584,18 @@ def test_live_clients_share_the_embedding_cache(monkeypatch, tmp_path):
 # field data wiring (Task 11)
 # --------------------------------------------------------------------------- #
 def test_analysis_succeeds_with_no_snapshot_in_the_store(tmp_path, sample_runs):
-    """Analysis never fails because Grafana was down."""
-    from analysis.__main__ import run_analysis
+    """Analysis never fails because Grafana was down.
 
-    report = run_analysis(sample_runs, llm_disabled=True, history=[])
+    Uses an isolated ``tmp_path`` store like its siblings below: without
+    ``settings=`` this used to read the real ``data/processed/runs.sqlite``
+    and only passed because that store happened to have no snapshot.
+    """
+    from analysis.__main__ import run_analysis
+    from config.load import Settings
+
+    settings = Settings(storage={"sqlite_path": str(tmp_path / "runs.sqlite")})
+    report = run_analysis(sample_runs, settings=settings, llm_disabled=True,
+                          history=[])
     assert report.meta.field_mode == "unavailable"
     assert report.field.available is False
 
@@ -597,7 +605,7 @@ def test_analysis_uses_the_latest_stored_snapshot(tmp_path, sample_runs):
 
     from analysis.__main__ import load_field_snapshot
     from config.load import Settings
-    from normalize.field import FieldSnapshot, SessionKpis
+    from normalize.field import FieldSnapshot, SessionKpis, SessionRates
     from store import sql
 
     store_path = tmp_path / "runs.sqlite"
@@ -607,13 +615,13 @@ def test_analysis_uses_the_latest_stored_snapshot(tmp_path, sample_runs):
     sql.insert_snapshot(conn, FieldSnapshot(
         snapshot_id="s1", project=sample_runs[0].project.name,
         hosts=["a.com"], window_from=now, window_to=now, fetched_at=now,
-        sessions=SessionKpis(bounce_pct=44.0),
+        sessions=SessionKpis(window=SessionRates(bounce_pct=44.0)),
     ))
     conn.close()
 
     settings = Settings(storage={"sqlite_path": str(store_path)})
     loaded = load_field_snapshot(settings, sample_runs[0].project.name)
-    assert loaded.sessions.bounce_pct == 44.0
+    assert loaded.sessions.window.bounce_pct == 44.0
 
 
 def test_load_field_snapshot_returns_none_when_the_store_is_absent(tmp_path):
@@ -655,7 +663,7 @@ def test_no_field_flag_is_honoured_by_run_analysis(tmp_path, sample_runs):
 
     from analysis.__main__ import run_analysis
     from config.load import Settings
-    from normalize.field import FieldSnapshot, SessionKpis
+    from normalize.field import FieldSnapshot, SessionKpis, SessionRates
     from store import sql
 
     store_path = tmp_path / "runs.sqlite"
@@ -665,7 +673,7 @@ def test_no_field_flag_is_honoured_by_run_analysis(tmp_path, sample_runs):
     sql.insert_snapshot(conn, FieldSnapshot(
         snapshot_id="s1", project=sample_runs[0].project.name,
         hosts=["a.com"], window_from=now, window_to=now, fetched_at=now,
-        sessions=SessionKpis(bounce_pct=44.0),
+        sessions=SessionKpis(window=SessionRates(bounce_pct=44.0)),
     ))
     conn.close()
 
@@ -690,13 +698,13 @@ def test_page_field_symptoms_use_the_configured_thresholds_not_the_default(
 
     from analysis.__main__ import load_runs, run_analysis
     from config.load import Settings
-    from normalize.field import FieldSnapshot, PageTypeRow, SessionKpis
+    from normalize.field import FieldSnapshot, PageTypeRow, SessionKpis, SessionRates
 
     now = datetime(2026, 8, 24, tzinfo=timezone.utc)
     snapshot = FieldSnapshot(
         snapshot_id="s1", project="storefront", hosts=["a.com"],
         window_from=now, window_to=now, fetched_at=now,
-        sessions=SessionKpis(bounce_pct=30.0),
+        sessions=SessionKpis(window=SessionRates(bounce_pct=30.0)),
         by_pagetype=[PageTypeRow(page_group="home", bounce_pct=45.0)],
     )
     runs = load_runs(input_dir=input_dir)

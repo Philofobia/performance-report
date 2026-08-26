@@ -60,10 +60,14 @@ covering {{ report.field.window_from.strftime("%Y-%m-%d") }} to
 **Engagement and real-user vitals**
 
 {% if report.field.available %}
-| Metric | Measured |
-| --- | --- |
+"Window" is the true whole-window figure - compare it against a target, a
+page group, or last week. "Latest interval" is the most recent bucket alone
+and is never comparable against a window figure.
+
+| Metric | Window | Latest interval |
+| --- | --- | --- |
 {% for row in field_headline %}
-| {{ row.label }} | {{ row.value }} |
+| {{ row.label }} | {{ row.window }} | {{ row.latest }} |
 {% endfor %}
 {% else %}
 _No engagement data._
@@ -150,11 +154,16 @@ _No CDN breakdown available._
 **Real users on this page**
 
 {% if not page.field.available %}
+{% if not page.field.snapshot_taken %}
+_No field data for this window. Run `python -m cli ingest field` to fetch it
+from Grafana._
+{% else %}
 _This page is not mapped to an mPulse page group. Add it to
 `grafana.page_groups` in settings.yaml to compare it against real-user data._
+{% endif %}
 {% else %}
 The campaign above emulates one device on one connection. This is the same
-page as {{ page.field.beacons }} real visits measured it ({{ page.field.page_group }}).
+page as {{ field_beacons[page.name] }} real visits measured it ({{ page.field.page_group }}).
 
 | Metric | This campaign | Real users (p75) |
 | --- | --- | --- |

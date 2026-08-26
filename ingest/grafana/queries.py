@@ -1,4 +1,4 @@
-"""The eight panel queries, and the host validation that keeps them safe.
+"""The nine panel queries, and the host validation that keeps them safe.
 
 Grafana expands **datasource macros** (``$__timeFilter``, ``$__timeInterval``)
 server-side in the ClickHouse plugin, so those are left verbatim. It expands
@@ -156,6 +156,27 @@ SELECT $__timeInterval(timestamp) AS time,
 FROM {{table}}
 WHERE {_WHERE}
 GROUP BY time ORDER BY time""",
+
+    # No GROUP BY: a percentile is not re-aggregatable from per-bucket
+    # values (a mean of p75s is not the window's p75), so this is the one
+    # query in the set that gets the *true* whole-window figure straight
+    # from ClickHouse instead of reducing a series client-side. `sessions`,
+    # `vitals` and `frustration` above stay bucketed - Task 12's chart still
+    # needs a series - this is purely an addition beside them.
+    "headline": f"""
+SELECT count() AS beacons,
+       quantileIf(0.75)(largestContentfulPaint, {_LCP}) AS lcp_p75,
+       quantileIf(0.95)(largestContentfulPaint, {_LCP}) AS lcp_p95,
+       quantileIf(0.75)(interactionToNextPaint, {_INP}) AS inp_p75,
+       quantileIf(0.95)(interactionToNextPaint, {_INP}) AS inp_p95,
+       quantileIf(0.75)(cumulativeLayoutShift, {_CLS}) / 1000.0 AS cls_p75,
+       quantileIf(0.95)(cumulativeLayoutShift, {_CLS}) / 1000.0 AS cls_p95,
+       quantileIf(0.75)(firstByteTimer, {_TTFB}) AS ttfb_p75,
+       quantileIf(0.75)(pageLoadTime, {_PLT}) AS plt_p75,
+       quantileIf(0.75)(frustrationIndex, {_FRU}) AS frustration_p75,
+       sum(rageClicks) AS rage_clicks
+FROM {{table}}
+WHERE {_WHERE}""",
 
     # Merges the dashboard's two per-device panels: they differ only in which
     # columns they select from the same GROUP BY.

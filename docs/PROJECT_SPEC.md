@@ -242,7 +242,7 @@ stays `None`, so a zero bounce rate and an unmeasured one never render identical
 not reproducible and a report re-rendered later must still state the week it
 describes.
 
-**Fetch layer** (`ingest/grafana/`): `client.py` POSTs the eight ClickHouse queries in
+**Fetch layer** (`ingest/grafana/`): `client.py` POSTs the nine ClickHouse queries in
 `queries.py` to Grafana's `/api/ds/query` in one request (stdlib `urllib.request`, no
 new dependency); `parse.py` maps the column-major frame response to `FieldSnapshot` by
 field *name*, never position. The host filter (`pageDomainName IN (...)`) is derived
@@ -470,7 +470,7 @@ performance-projects/
 │  │  └─ webser.py                 # web-vitals + network capture helpers
 │  └─ grafana/
 │     ├─ client.py                 # POST /api/ds/query, bearer auth, retry on 5xx (§4.5)
-│     ├─ queries.py                # the eight ClickHouse query templates
+│     ├─ queries.py                # the nine ClickHouse query templates
 │     └─ parse.py                  # column-major frame → FieldSnapshot, by field name
 ├─ normalize/
 │  ├─ schema.py                    # canonical run object → Pydantic model + validators
@@ -518,7 +518,8 @@ performance-projects/
 │  └─ e2e/                         # real browser + real PDF (marked `e2e`)
 ├─ pyproject.toml / requirements.txt
 ├─ .env.example                    # template with placeholders — commit this
-├─ .env                            # real secrets (Google API key) — NEVER commit (gitignored)
+├─ .env                            # real secrets (Google API key, Akamai bot token,
+│                                   #   Grafana token) — NEVER commit (gitignored)
 ├─ .gitignore                      # ignores .env, data/vector, data/raw, data/reports, __pycache__
 └─ README.md
 ```
@@ -527,7 +528,7 @@ performance-projects/
 - The **Google AI API key** (free tier) was the only shared secret at MVP; `.env` has
   since grown an optional per-target bot-allowlist token
   ([CUSTOM_HEADERS.md](CUSTOM_HEADERS.md)) and, as of §4.5, `GRAFANA_TOKEN` for field
-  ingestion. None of the four must **ever** reach git even though the code is shared.
+  ingestion. None of the three must **ever** reach git even though the code is shared.
 - `.env.example` (committed) contains **placeholders only**, e.g.:
   ```env
   GOOGLE_API_KEY=your_google_api_key_here

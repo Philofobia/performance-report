@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from normalize.field import FieldSnapshot, PageTypeRow, SessionKpis
+from normalize.field import FieldSnapshot, PageTypeRow, SessionKpis, SessionRates
 from store import sql
 
 BASE = datetime(2026, 8, 24, 10, 0, tzinfo=timezone.utc)
@@ -31,13 +31,14 @@ def conn():
 
 def test_snapshot_round_trips_with_nested_rows(conn):
     original = _snap(
-        sessions=SessionKpis(bounce_pct=44.5, session_count=9100),
+        sessions=SessionKpis(window=SessionRates(bounce_pct=44.5),
+                             session_count=9100),
         by_pagetype=[PageTypeRow(page_group="Pdp", beacons=1200, lcp_p75=4100.0)],
     )
     sql.insert_snapshot(conn, original)
 
     loaded = sql.get_latest_snapshot(conn, "oakley")
-    assert loaded.sessions.bounce_pct == 44.5
+    assert loaded.sessions.window.bounce_pct == 44.5
     assert loaded.page_row("Pdp").lcp_p75 == 4100.0
     assert loaded.window_from == original.window_from
 
@@ -45,8 +46,8 @@ def test_snapshot_round_trips_with_nested_rows(conn):
 def test_unmeasured_stays_none_across_the_round_trip(conn):
     sql.insert_snapshot(conn, _snap())
     loaded = sql.get_latest_snapshot(conn, "oakley")
-    assert loaded.sessions.bounce_pct is None
-    assert loaded.vitals.lcp_p75 is None
+    assert loaded.sessions.window.bounce_pct is None
+    assert loaded.vitals.window.lcp_p75 is None
 
 
 def test_latest_is_by_fetched_at_not_insertion_order(conn):
@@ -71,9 +72,10 @@ def test_duplicate_id_raises_unless_replacing(conn):
     sql.insert_snapshot(conn, _snap())
     with pytest.raises(sql.StoreError):
         sql.insert_snapshot(conn, _snap())
-    sql.insert_snapshot(conn, _snap(sessions=SessionKpis(bounce_pct=1.0)),
-                        replace=True)
-    assert sql.get_latest_snapshot(conn, "oakley").sessions.bounce_pct == 1.0
+    sql.insert_snapshot(
+        conn, _snap(sessions=SessionKpis(window=SessionRates(bounce_pct=1.0))),
+        replace=True)
+    assert sql.get_latest_snapshot(conn, "oakley").sessions.window.bounce_pct == 1.0
 
 
 def test_list_snapshots_is_newest_first(conn):

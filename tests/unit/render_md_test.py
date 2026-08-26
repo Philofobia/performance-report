@@ -357,3 +357,25 @@ def test_field_segment_tables_never_show_none_or_a_raw_float_in_markdown():
 
     assert "None" not in md
     assert not re.search(r"\d+\.\d{4,}", md)
+
+
+def test_page_field_with_no_snapshot_at_all_says_so_in_markdown():
+    from analysis.reportmodel import FieldBlock, FieldHeadline, PageFieldBlock
+
+    report = a_report()
+    report.field = FieldBlock(
+        available=True, mode="live", headline=FieldHeadline(bounce_pct_window=10.0),
+    )
+    report.pages[0].field = PageFieldBlock(available=False, snapshot_taken=False)
+    md = render_md(report)
+    assert "No field data for this window" in md
+    assert "not mapped to an mPulse page group" not in md
+
+
+def test_page_field_with_a_snapshot_but_no_mapping_says_not_mapped_in_markdown():
+    from analysis.reportmodel import PageFieldBlock
+
+    report = a_report()
+    report.pages[0].field = PageFieldBlock(available=False, snapshot_taken=True)
+    md = render_md(report)
+    assert "not mapped to an mPulse page group" in md

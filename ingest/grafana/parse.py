@@ -26,7 +26,16 @@ from normalize.field import (
     InpBucketRow,
     PageTypeRow,
     SessionKpis,
+    SessionRates,
     TimePoint,
+    VitalsReading,
+)
+
+#: Columns shared by the ``vitals`` series and the ungrouped ``headline``
+#: query - both feed a :class:`normalize.field.VitalsReading`.
+_VITALS_KEYS = (
+    "lcp_p75", "lcp_p95", "inp_p75", "inp_p95",
+    "cls_p75", "cls_p95", "ttfb_p75", "plt_p75",
 )
 
 
@@ -120,6 +129,36 @@ def _sum(points: Sequence[TimePoint], key: str) -> Optional[int]:
     return int(sum(present)) if present else None
 
 
+def _weighted_mean(
+    points: Sequence[TimePoint], key: str, weight_key: str
+) -> Optional[float]:
+    """A true window figure for a rate column, weighted by its bucket weight.
+
+    ``_last`` reports the newest bucket's value, which for a rate like
+    ``bounce_pct`` is a point-in-time snapshot dressed up as a whole-window
+    aggregate — the final bucket is always partial, and (for ``sessions``
+    specifically) skewed toward sessions too young to have viewed a second
+    page. This computes the window figure the dashboard's own SQL would:
+    ``sum(value * weight) / sum(weight)`` over buckets that carry both.
+
+    Distinct from ``_sum``'s all-or-nothing rule: a bucket missing only the
+    rate, or only the weight, is skipped rather than poisoning every other
+    bucket's contribution. None only when *no* bucket carries both — the
+    same "never a confident number for something unmeasured" rule ``_sum``
+    already enforces.
+    """
+    total = 0.0
+    weight_total = 0.0
+    for point in points:
+        value = point.values.get(key)
+        weight = point.values.get(weight_key)
+        if value is None or not weight:
+            continue
+        total += value * weight
+        weight_total += weight
+    return (total / weight_total) if weight_total else None
+
+
 def _construct(model, panel: str, index: Optional[int], fields: Dict[str, Any]):
     """Build one model, or raise a ``ParseError`` naming what caused it.
 
@@ -157,27 +196,57 @@ def build_snapshot(
     session_points = _points(frame_rows(results.get("sessions")))
     vital_points = _points(frame_rows(results.get("vitals")))
     frustration_points = _points(frame_rows(results.get("frustration")))
+    # Ungrouped: one row (or none) for the whole window, not a series - see
+    # normalize.field.FieldVitals for why percentiles need this separate
+    # query rather than being re-aggregated from `vital_points`.
+    headline_rows = frame_rows(results.get("headline"))
+    headline_row: Dict[str, Any] = headline_rows[0] if headline_rows else {}
 
     sessions = _construct(SessionKpis, "sessions", None, dict(
-        bounce_pct=_last(session_points, "bounce_pct"),
-        conversion_pct=_last(session_points, "conversion_pct"),
-        avg_session_pages=_last(session_points, "avg_session_pages"),
+        # `window` is weighted by session_count, not `_last`: the newest
+        # bucket is always partial and, for a session bucketed by its
+        # *first* beacon, systematically bounce-heavy (visitors too recent
+        # to have viewed a second page yet). See _weighted_mean's docstring
+        # for why this weighted mean *is* the exact window figure, not an
+        # approximation of it.
+        window=_construct(SessionRates, "sessions.window", None, dict(
+            bounce_pct=_weighted_mean(
+                session_points, "bounce_pct", "session_count"
+            ),
+            conversion_pct=_weighted_mean(
+                session_points, "conversion_pct", "session_count"
+            ),
+            avg_session_pages=_weighted_mean(
+                session_points, "avg_session_pages", "session_count"
+            ),
+        )),
+        latest=_construct(SessionRates, "sessions.latest", None, dict(
+            bounce_pct=_last(session_points, "bounce_pct"),
+            conversion_pct=_last(session_points, "conversion_pct"),
+            avg_session_pages=_last(session_points, "avg_session_pages"),
+        )),
         session_count=_sum(session_points, "session_count"),
         series=session_points,
     ))
 
-    vitals = _construct(FieldVitals, "vitals", None, {
-        **{
-            key: _last(vital_points, key)
-            for key in ("lcp_p75", "lcp_p95", "inp_p75", "inp_p95",
-                        "cls_p75", "cls_p95", "ttfb_p75", "plt_p75")
-        },
-        "series": vital_points,
-    })
+    vitals = _construct(FieldVitals, "vitals", None, dict(
+        # The true whole-window percentile, from the ungrouped `headline`
+        # query - not re-aggregated from `vital_points` (a mean of p75s is
+        # not the window's p75).
+        window=_construct(VitalsReading, "headline", None, {
+            key: _num(headline_row, key) for key in _VITALS_KEYS
+        }),
+        # The most recent interval bucket only.
+        latest=_construct(VitalsReading, "vitals.latest", None, {
+            key: _last(vital_points, key) for key in _VITALS_KEYS
+        }),
+        series=vital_points,
+    ))
 
     frustration = _construct(Frustration, "frustration", None, dict(
         rage_clicks_total=_sum(frustration_points, "rage_clicks"),
-        frustration_p75=_last(frustration_points, "frustration_p75"),
+        frustration_p75_window=_num(headline_row, "frustration_p75"),
+        frustration_p75_latest=_last(frustration_points, "frustration_p75"),
         series=frustration_points,
     ))
 

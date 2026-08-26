@@ -16,9 +16,9 @@ TABLE = "tenant.mpulse"
 HOSTS = ["www.oakley.com", "m.oakley.com"]
 
 
-def test_all_eight_panels_are_defined():
+def test_all_nine_panels_are_defined():
     assert set(QUERIES) == {
-        "sessions", "vitals", "frustration", "by_device",
+        "sessions", "vitals", "frustration", "headline", "by_device",
         "by_country", "by_pagetype", "inp_buckets", "assets",
     }
 
@@ -104,10 +104,12 @@ def test_cls_quantiles_are_divided_by_1000():
     cls_quantile = re.compile(
         r"quantileIf\(0\.\d+\)\(cumulativeLayoutShift,[^)]*\)(\s*/\s*1000\.0)?"
     )
-    # vitals selects CLS p75 *and* p95 directly; by_device, by_country, and
-    # by_pagetype all get CLS via the shared _CWV_COLUMNS fragment (p75 only).
+    # vitals and headline each select CLS p75 *and* p95 directly; by_device,
+    # by_country, and by_pagetype all get CLS via the shared _CWV_COLUMNS
+    # fragment (p75 only).
     expected_occurrences = {
-        "vitals": 2, "by_device": 1, "by_country": 1, "by_pagetype": 1,
+        "vitals": 2, "headline": 2, "by_device": 1, "by_country": 1,
+        "by_pagetype": 1,
     }
     for ref_id, expected_count in expected_occurrences.items():
         matches = cls_quantile.findall(sql_by_ref[ref_id])

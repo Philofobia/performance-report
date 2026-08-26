@@ -50,7 +50,7 @@ def test_hosts_ignores_a_page_with_no_hostname():
     assert hosts_for(_Targets([_Page("not-a-url"), _Page("https://a.com/x")])) == ["a.com"]
 
 
-def test_fetch_issues_one_call_carrying_all_eight_queries():
+def test_fetch_issues_one_call_carrying_all_nine_queries():
     client = _StubClient()
     snapshot = fetch_snapshot(
         Settings(), project="oakley", hosts=["www.oakley.com"], client=client,
@@ -58,7 +58,7 @@ def test_fetch_issues_one_call_carrying_all_eight_queries():
     )
     refs, window = client.calls[0]
     assert len(client.calls) == 1
-    assert len(refs) == 8
+    assert len(refs) == 9
     assert window == "7d"
     assert snapshot.project == "oakley"
 

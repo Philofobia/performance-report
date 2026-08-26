@@ -18,10 +18,25 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 from urllib.error import HTTPError, URLError
 
+from normalize.field import window_delta
 from normalize.url_safety import UnSafeURLError, validate_url
 
 DATASOURCE_TYPE = "grafana-clickhouse-datasource"
 QUERY_PATH = "/api/ds/query"
+
+#: The three panels that return a time series (design §3.2). Every other
+#: refId is a table. Grafana's ClickHouse plugin reads this to decide how it
+#: shapes a frame's response, so getting it wrong for a given panel is a
+#: real correctness bug, not cosmetics.
+TIMESERIES_REF_IDS = frozenset({"sessions", "vitals", "frustration"})
+
+#: Bucket count a timeseries query targets. ``intervalMs`` is derived from
+#: the window so a request over a long window does not ask ClickHouse to
+#: bucket into (effectively) individual rows — see design §3.1's own example
+#: (``intervalMs: 3600000`` for a 7d window, ~168 hourly buckets).
+_TARGET_BUCKETS = 200
+#: Never bucket finer than one minute, however short the window.
+_MIN_INTERVAL_MS = 60_000
 
 #: Every variable this stage needs, with the one-line help its absence prints.
 _REQUIRED = {
@@ -105,6 +120,7 @@ class GrafanaClient:
 
     def query(self, sql_by_ref: Dict[str, str], *, window: str) -> Dict[str, Any]:
         """Execute every query; return the ``results`` map keyed by refId."""
+        interval_ms = _interval_ms_for(window)
         payload = {
             "from": f"now-{window}",
             "to": "now",
@@ -116,7 +132,11 @@ class GrafanaClient:
                         "uid": self._env.datasource_uid,
                     },
                     "rawSql": sql,
-                    "format": 1,
+                    # 0 = time series, 1 = table (design §3.1/§3.2). Sent per
+                    # query because the nine panels are a mix of both.
+                    "format": 0 if ref_id in TIMESERIES_REF_IDS else 1,
+                    "intervalMs": interval_ms,
+                    "maxDataPoints": _TARGET_BUCKETS,
                 }
                 for ref_id, sql in sorted(sql_by_ref.items())
             ],
@@ -130,7 +150,9 @@ class GrafanaClient:
                 "a proxy or login page in front of the API rather than Grafana "
                 "itself."
             ) from exc
-        return document.get("results", {})
+        results = document.get("results", {})
+        _raise_on_query_errors(results)
+        return results
 
     def _post(self, body: bytes) -> bytes:
         """POST with one retry on 5xx and on connection failure.
@@ -167,3 +189,40 @@ class GrafanaClient:
             f"Could not reach Grafana at {self._env.base_url} after 2 attempts: "
             f"{last}"
         )
+
+
+def _interval_ms_for(window: str) -> int:
+    """A bucket width that keeps a timeseries query near ``_TARGET_BUCKETS``.
+
+    With no ``intervalMs`` hint, ``$__timeInterval`` picks its own bucket
+    width — risking absurdly fine bucketing over a multi-day window. Falls
+    back to the floor on a window string this client cannot parse: a bad
+    ``GRAFANA_WINDOW`` should surface as a ClickHouse/config error, not a
+    crash inside request-shaping.
+    """
+    try:
+        window_ms = window_delta(window).total_seconds() * 1000
+    except ValueError:
+        return _MIN_INTERVAL_MS
+    return max(_MIN_INTERVAL_MS, int(window_ms / _TARGET_BUCKETS))
+
+
+def _raise_on_query_errors(results: Mapping[str, Any]) -> None:
+    """Fail loudly on a rejected query instead of storing an all-``None`` row.
+
+    A refId Grafana could not satisfy comes back as ``{"error": ..., "status":
+    500}`` with no ``frames`` — that parses cleanly to every field ``None``
+    and would otherwise be stored as a live snapshot of em dashes with no
+    hint anything went wrong (design §8: a rejected query must exit non-zero).
+    """
+    for ref_id, result in results.items():
+        if not isinstance(result, dict):
+            continue
+        error = result.get("error")
+        status = result.get("status")
+        failed = bool(error) or (isinstance(status, int) and status >= 400)
+        if failed:
+            detail = error or f"HTTP {status}"
+            raise GrafanaError(
+                f"Grafana rejected the {ref_id!r} query: {detail}"
+            )

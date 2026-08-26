@@ -25,6 +25,7 @@ from jinja2 import Environment, FileSystemLoader
 from analysis.reportmodel import Report
 from report.glossary import load_glossary
 from report.render_html import (
+    field_beacons_by_page,
     field_headline_rows,
     field_rows_by_page,
     field_segment_rows,
@@ -131,4 +132,5 @@ def render_md(report: Report, *, base_dir: Optional[Path] = None) -> str:
         report=report, glance=glance_by_page(report),
         field_headline=field_headline_rows(report),
         field_rows=field_rows_by_page(report),
-        field_segments=field_segment_rows(report))
+        field_segments=field_segment_rows(report),
+        field_beacons=field_beacons_by_page(report))
