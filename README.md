@@ -29,10 +29,12 @@ degrades the analysis to rules rather than overspending** · **playbook indexing
 wired into the analysis run, so retrieval has a corpus to retrieve from** · **a
 report written plain-language-first: one ranked cross-page plan, every metric shown
 against its target with a sentence explaining it, and the evidence grouped behind
-it**.
+it** · **real-user (RUM) data pulled from Grafana** — bounce, conversion, pages per
+session, rage clicks, frustration index, field Core Web Vitals and CDN cache
+behaviour, joined onto each tested page.
 
-**Missing:** no phase in the [Roadmap](#roadmap) is unbuilt. Two limitations are
-known and accepted rather than fixed, both written up where the code lives:
+**Missing:** no phase in the [Roadmap](#roadmap) is unbuilt. Four limitations are
+known and accepted rather than fixed, each written up where the code lives:
 
 - **Redirect SSRF is detected, not prevented.** A navigation that ends somewhere
   the guard rejects is refused, so nothing derived from it reaches the report or
@@ -42,6 +44,17 @@ known and accepted rather than fixed, both written up where the code lives:
 - **Campaigns are sequential.** Pages × conditions × runs, one navigation at a
   time. Parallelising would cut wall-clock time on large matrices and skew the
   measurements, since CPU throttling is per-session emulation.
+- **Field bounce per page group is entry-page bounce** — sessions that *started*
+  on that page group and viewed one page
+  ([`ingest/grafana/queries.py`](ingest/grafana/queries.py)). It is not the same
+  quantity as the site-wide bounce rate, and the two should not be subtracted
+  from one another casually.
+- **The `pageGroupName` → page-name map is configured, not inferred**
+  (`grafana.page_groups` in `config/settings.yaml`, joined in
+  [`analysis/reportmodel.py`](analysis/reportmodel.py)). An unmapped page prints
+  its field row as unavailable rather than guessing. `by_country` is also
+  `LIMIT 15` and several field tables drop groups under 50 beacons, so those
+  listings are partial by design — the report captions say so.
 
 Anything this README does not describe as working is not there.
 
@@ -220,6 +233,7 @@ One entry point covers the whole pipeline:
 ```bash
 python -m cli                       # the command table
 python -m cli ingest auto           # run a browser campaign
+python -m cli ingest field          # pull real-user data from Grafana
 python -m cli list-runs             # what is in the store
 python -m cli analyze               # runs  → report.json
 python -m cli report                # report.json → HTML + Markdown + PDF
@@ -276,6 +290,47 @@ python -m cli ingest manual \
 
 Units and ranges are enforced — out-of-range values are rejected with a clear error
 rather than silently stored.
+
+### Field (RUM) ingestion
+
+```bash
+python -m cli ingest field --project oakley   # fetch and store a snapshot
+python -m cli ingest field --hosts www.oakley.com,www.oakley.eu
+python -m cli ingest field --replace          # overwrite a snapshot with the same id
+```
+
+A third ingestion door beside `ingest auto` and `ingest manual`, fetching real-user
+data — bounce, conversion, pages per session, rage clicks, frustration index, field
+Core Web Vitals at p75/p95, and breakdowns by device, country and page type — from a
+Grafana dashboard backed by ClickHouse mPulse data, and persisting it to the
+`field_snapshots` table. The host filter is derived from `config/targets.yaml`'s page
+URLs, never configured separately, so lab and field data can never silently describe
+two different sites.
+
+Connection identity lives in `.env` (never committed — see `.env.example`):
+
+| Variable                 | Meaning                                                |
+| ------------------------ | ------------------------------------------------------- |
+| `GRAFANA_BASE_URL`       | The Grafana instance; must be a public https URL       |
+| `GRAFANA_TOKEN`          | Service-account token with Viewer rights, never logged  |
+| `GRAFANA_DATASOURCE_UID` | ClickHouse datasource uid, from the dashboard JSON      |
+| `GRAFANA_TABLE`          | Fully-qualified table the panels read                   |
+
+Query behaviour — the lookback window, per-request timeout, and the
+`pageGroupName` → page-name map — lives in `config/settings.yaml` under `grafana:`,
+reviewable in diffs because none of it is a secret.
+
+`ingest field` **exits non-zero** on any fetch failure — a missing `.env` variable
+names the variable and how to set it; a bad token, an unreachable host or a rejected
+query all fail the same way. Nothing about this stage is required: `analyze` never
+fails because Grafana is unconfigured or unreachable — it degrades to
+`meta.field_mode: unavailable` and the report says so — and `analyze --no-field`
+skips the lookup even if a snapshot is already stored.
+
+Two limitations are load-bearing enough to repeat here rather than leave only in
+[Missing](#where-the-project-is): field bounce per page group is *entry-page* bounce,
+not the site-wide bounce rate, and the `pageGroupName` → page-name map is configured
+by hand, not inferred — an unmapped page renders its field row as unavailable.
 
 ### The manual-entry form
 
@@ -567,7 +622,7 @@ offline suite stays browser-free; only the real PDF run is `e2e`-marked.
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 825 offline tests, no browser, no network
+pytest -m "not e2e"      # 1128 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 ```
 
@@ -637,6 +692,8 @@ affect day-to-day use:
 | 7b    | Screenshot / HAR appendix embedded in the PDF                        | Done     |
 | 7c    | Loopback-only web form for manual entry                              | Done     |
 | 7d    | CI regeneration of a real campaign report                            | Done     |
+| 7e    | Per-UTC-day request/token budget over the Google free tier           | Done     |
+| 7f    | Grafana field (RUM) ingestion, joined onto the lab report             | Done     |
 
 ## Documentation
 
