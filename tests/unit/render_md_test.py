@@ -28,6 +28,19 @@ def test_every_page_gets_its_own_subsection():
     assert "### plp" in markdown
 
 
+def test_a_partial_report_does_not_claim_no_model_was_used():
+    """The cover line is the only place the reader learns who wrote the words."""
+    markdown = render_md(a_report(mode="partial"))
+    assert "no model reasoned over these measurements" not in markdown
+    assert "some pages fell back" in markdown
+    assert "no_api_key" in markdown
+
+
+def test_a_wholly_rule_based_report_still_says_so_plainly():
+    markdown = render_md(a_report(mode="rule_based"))
+    assert "no model reasoned over these measurements" in markdown
+
+
 def test_metrics_render_as_a_table():
     markdown = render_md(a_report())
     assert "| Condition |" in markdown

@@ -35,6 +35,11 @@
       <dd>
         {%- if report.meta.analysis_mode == 'llm' -%}
           Retrieval-grounded model analysis (<span class="mono">{{ report.meta.model }}</span>)
+        {%- elif report.meta.analysis_mode == 'partial' -%}
+          Retrieval-grounded model analysis (<span class="mono">{{ report.meta.model }}</span>),
+          but some pages fell back to rule-based analysis
+          ({{ report.meta.degradation_reason }}) — those pages carry generic
+          playbook recommendations rather than ones written for them
         {%- else -%}
           Rule-based analysis — no model reasoned over these measurements
         {%- endif -%}

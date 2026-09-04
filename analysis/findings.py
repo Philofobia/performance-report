@@ -16,6 +16,7 @@ says which mode produced it, so nobody has to guess.
 """
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -378,6 +379,18 @@ def _rule_based_page(
 ) -> PageAnalysis:
     """Build a PageAnalysis from the no-model path."""
     from analysis.estimator import aggregate
+
+    # A page that quietly drops to boilerplate is how a mixed report ships:
+    # the reader cannot tell which pages a model wrote, so whoever ran the
+    # campaign has to hear about it while they can still re-run. `llm_disabled`
+    # is excluded because --no-llm degrades every page on purpose, and a
+    # warning per page would be noise around a choice already made.
+    if reason not in (None, "llm_disabled"):
+        print(
+            f"{primary.page.name}: no model analysis ({reason}) - this page "
+            "falls back to rule-based recommendations.",
+            file=sys.stderr,
+        )
 
     summary, findings, impacts, recommendations = rule_based_analysis(
         primary, symptoms, chunks

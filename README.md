@@ -31,7 +31,10 @@ report written plain-language-first: one ranked cross-page plan, every metric sh
 against its target with a sentence explaining it, and the evidence grouped behind
 it** · **real-user (RUM) data pulled from Grafana** — bounce, conversion, pages per
 session, rage clicks, frustration index, field Core Web Vitals and CDN cache
-behaviour, joined onto each tested page.
+behaviour, joined onto each tested page · **a per-page account of degradation**:
+transient API failures are retried rather than dropping a page to boilerplate, and a
+report where only some pages fell back says so on its cover instead of claiming the
+whole run was rule-based.
 
 **Missing:** no phase in the [Roadmap](#roadmap) is unbuilt. Four limitations are
 known and accepted rather than fixed, each written up where the code lives:
@@ -483,6 +486,16 @@ rule-based path: symptoms become
 findings, and playbooks are matched by their front-matter `symptoms:` instead of by
 embedding. `meta.analysis_mode` and `meta.degradation_reason` state exactly what
 produced the document, so a degraded report is never mistaken for a reasoned one.
+
+**Degradation is per page, and the cover says so.** A transient API error hits one
+call, so the common failure is a single page dropping to rules while the rest are
+model-written. That report is `meta.analysis_mode="partial"` — not `"llm"`, which
+would overclaim, and not `"rule_based"`, which used to print "no model reasoned over
+these measurements" on the cover of a report a model had largely written.
+`meta.degradation_reason` lists every distinct reason, not just the first page's, and
+each degraded page is named on stderr while the campaign runs. Transient failures —
+5xx, dropped connections, timeouts — are retried with the same backoff quota errors
+get, so most of them never reach the report at all.
 
 ---
 
