@@ -262,10 +262,31 @@ def test_meta_records_the_mode_and_cited_playbooks():
     assert report.meta.knowledge_digest == "abc123"
 
 
-def test_any_degraded_page_degrades_the_report_mode():
-    report = build([a_page("homepage", mode="llm"), a_page("plp", mode="rule_based")])
+def test_a_wholly_degraded_report_is_rule_based():
+    report = build([a_page("homepage", mode="rule_based"),
+                    a_page("plp", mode="rule_based")])
     assert report.meta.analysis_mode == "rule_based"
     assert report.meta.degradation_reason == "no_api_key"
+
+
+def test_a_partly_degraded_report_says_partial():
+    """Calling a mixed report rule-based prints a falsehood to the reader.
+
+    The cover line is generated from this field, and "no model reasoned over
+    these measurements" is simply untrue when one of the two pages was written
+    by the model.
+    """
+    report = build([a_page("homepage", mode="llm"), a_page("plp", mode="rule_based")])
+    assert report.meta.analysis_mode == "partial"
+    assert report.meta.degradation_reason == "no_api_key"
+
+
+def test_every_distinct_degradation_reason_is_reported():
+    """One reason hides the others when pages fail for different causes."""
+    quota = a_page("plp", mode="rule_based")
+    quota.degradation_reason = "quota_exhausted"
+    report = build([a_page("homepage", mode="rule_based"), quota])
+    assert report.meta.degradation_reason == "no_api_key, quota_exhausted"
 
 
 def test_methodology_lists_devices_networks_and_captures():

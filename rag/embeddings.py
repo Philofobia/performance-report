@@ -8,9 +8,11 @@ Three things the free tier forces us to handle properly:
 
 * **Missing key** — raise :class:`MissingApiKeyError` with setup guidance rather
   than failing deep inside an HTTP call with a confusing stack trace.
-* **Quota (429)** — retry with exponential backoff *and jitter*, then raise
-  :class:`QuotaExceededError`. Retrying a quota error forever just burns the
-  next window too.
+* **Quota (429) and transient 5xx** — retry with exponential backoff *and
+  jitter*. Quota that outlives its retries raises :class:`QuotaExceededError`;
+  a transient failure is re-raised as itself. Retrying a quota error forever
+  just burns the next window too, and retrying a malformed request never
+  helps at all.
 * **Re-embedding unchanged text** — a content-addressed cache keyed by
   ``(model, sha256(text))`` means re-running a campaign over unedited playbooks
   costs zero API calls.
@@ -91,6 +93,41 @@ def _is_quota_error(exc: BaseException) -> bool:
     )
 
 
+def _is_transient_error(exc: BaseException) -> bool:
+    """Whether a failure is worth sending again unchanged.
+
+    A 5xx, a dropped connection or a timeout is the server having a bad
+    moment: the identical request usually succeeds on the next attempt. A 4xx
+    is the opposite — we built the request wrong, and re-sending it changes
+    nothing — so a client status short-circuits to ``False`` before the
+    message fallback can match on a stray word.
+    """
+    for attr in ("status_code", "code", "status"):
+        value = getattr(exc, attr, None)
+        try:
+            status = int(value)
+        except (TypeError, ValueError):
+            pass
+        else:
+            if 500 <= status <= 599:
+                return True
+            if 400 <= status <= 499:
+                return False
+        if isinstance(value, str) and value.upper() in {
+            "UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED", "ABORTED"
+        }:
+            return True
+    text = f"{type(exc).__name__} {exc}".lower()
+    return any(
+        marker in text
+        for marker in (
+            "unavailable", "internal error", "deadline exceeded", "timeout",
+            "timed out", "connection reset", "connection aborted",
+            "remote end closed", "temporarily",
+        )
+    )
+
+
 def backoff_delays(
     attempts: int,
     *,
@@ -109,7 +146,7 @@ def backoff_delays(
     return delays
 
 
-def call_with_quota_backoff(
+def call_with_backoff(
     call: Callable[[], Any],
     *,
     max_retries: int,
@@ -117,16 +154,25 @@ def call_with_quota_backoff(
     sleep: Callable[[float], None] = time.sleep,
     jitter: Callable[[], float] = random.random,
 ) -> Any:
-    """Run ``call``, retrying **only** quota rejections, then give up cleanly.
+    """Run ``call``, retrying what a second attempt could fix, then give up.
 
     Both Google clients in this project need exactly this loop, and had it
-    twice, verbatim — including the rule that matters most: anything that is
-    not a quota error propagates immediately. Retrying a malformed request or a
-    bad key just spends the next window too.
+    twice, verbatim — including the rule that matters most: anything a retry
+    cannot fix propagates immediately. Retrying a malformed request or a bad
+    key just spends the next window too.
 
-    ``QuotaExceededError`` is raised with ``exhausted_message`` because the
-    useful advice differs by caller ("reduce the corpus size" vs. "re-run with
-    --no-llm"), and a generic message would send people to the wrong fix.
+    Two kinds of failure are worth another attempt: a quota rejection, once
+    the window has had time to move, and a transient server error — a 5xx, a
+    dropped connection, a timeout. The second kind used to propagate on the
+    first attempt, which degraded a single page of a report to rule-based
+    boilerplate over a blip that the very next request did not reproduce.
+
+    Only quota exhaustion ends as ``QuotaExceededError``, carrying
+    ``exhausted_message`` because the useful advice differs by caller ("reduce
+    the corpus size" vs. "re-run with --no-llm"). A transient failure that
+    outlives its retries is re-raised as itself, so callers classify it as the
+    model being unavailable rather than telling the reader to wait for a quota
+    window that was never the problem.
     """
     delays = backoff_delays(max_retries, jitter=jitter)
     last_exc: Optional[BaseException] = None
@@ -134,12 +180,14 @@ def call_with_quota_backoff(
         try:
             return call()
         except Exception as exc:
-            if not _is_quota_error(exc):
+            if not (_is_quota_error(exc) or _is_transient_error(exc)):
                 raise
             last_exc = exc
             if attempt >= max_retries:
                 break
             sleep(delays[attempt])
+    if last_exc is not None and not _is_quota_error(last_exc):
+        raise last_exc
     raise QuotaExceededError(exhausted_message) from last_exc
 
 
@@ -320,7 +368,7 @@ class GoogleEmbeddingClient:
                     )
                 raise
 
-        vectors = call_with_quota_backoff(
+        vectors = call_with_backoff(
             invoke,
             max_retries=self._max_retries,
             sleep=self._sleep,

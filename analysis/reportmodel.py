@@ -802,8 +802,22 @@ def build_report(
         appendix=appendix,
         field=field_block,
         meta=ReportMeta(
-            analysis_mode="rule_based" if degraded else "llm",
-            degradation_reason=degraded[0].degradation_reason if degraded else None,
+            # "rule_based" for a report where the model wrote two pages of
+            # three prints "no model reasoned over these measurements" on the
+            # cover, which is false. A campaign degrades one page at a time --
+            # a transient API error hits a single call -- so the mixed case is
+            # the common one, and it needs a name of its own.
+            analysis_mode=(
+                "llm" if not degraded
+                else "rule_based" if len(degraded) == len(ordered)
+                else "partial"
+            ),
+            # Every distinct reason, not just the first page's: pages fail for
+            # different causes in the same run, and naming one hides the rest
+            # from whoever has to decide whether the report is worth re-running.
+            degradation_reason=", ".join(
+                sorted({p.degradation_reason for p in degraded if p.degradation_reason})
+            ) or None,
             model=model,
             playbooks_cited=sorted({s for p in ordered for s in p.playbooks_cited}),
             dropped_recommendations=sum(p.dropped_recommendations for p in ordered),

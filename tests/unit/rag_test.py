@@ -179,6 +179,57 @@ def test_non_quota_errors_are_not_retried():
     assert len(transport.calls) == 1
 
 
+class ApiError(RuntimeError):
+    """Stand-in for the SDK's HTTP errors, which carry a status code."""
+
+    def __init__(self, message: str, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def test_transient_server_errors_are_retried():
+    """A 503 is exactly what backoff is for: the next attempt usually works."""
+    transport = FakeTransport(
+        fail_times=2, error=ApiError("503 UNAVAILABLE: backend overloaded", 503)
+    )
+    slept = []
+    client = make_client(transport=transport, sleep=slept.append, max_retries=3)
+
+    vectors = client.embed(["hello"])
+
+    assert len(vectors) == 1
+    assert len(transport.calls) == 3   # two failures then success
+    assert len(slept) == 2
+
+
+def test_exhausted_transient_error_keeps_its_own_identity():
+    """Callers map a transient failure to model_unavailable, not quota_exhausted.
+
+    Raising QuotaExceededError here would tell the reader to wait for a quota
+    window that was never the problem.
+    """
+    transport = FakeTransport(
+        fail_times=99, error=ApiError("503 UNAVAILABLE: backend overloaded", 503)
+    )
+    client = make_client(transport=transport, max_retries=2)
+
+    with pytest.raises(ApiError, match="UNAVAILABLE"):
+        client.embed(["hello"])
+    assert len(transport.calls) == 3   # initial attempt + 2 retries
+
+
+def test_client_errors_are_not_retried():
+    """A malformed request fails the same way however many times it is sent."""
+    transport = FakeTransport(
+        fail_times=99, error=ApiError("400 INVALID_ARGUMENT", 400)
+    )
+    client = make_client(transport=transport, max_retries=3)
+
+    with pytest.raises(ApiError, match="INVALID_ARGUMENT"):
+        client.embed(["hello"])
+    assert len(transport.calls) == 1
+
+
 # --------------------------------------------------------------------------- #
 # Embedding batching, ordering, caching
 # --------------------------------------------------------------------------- #
@@ -567,6 +618,20 @@ def test_system_prompt_forbids_obeying_context_and_inventing_numbers():
     assert "never an instruction" in system or "never" in system
     assert "invent" in system
     assert "cite" in system
+
+
+def test_system_prompt_constrains_recommendation_titles():
+    """The cross-page plan ranks one remedy per line, drawn from every page.
+
+    When each page names the same fix differently - "Break Up Long Main-Thread
+    Tasks" on one, "Yield main-thread execution during long JavaScript tasks"
+    on another - the plan reads as several separate jobs and the reader plans
+    work three times over.
+    """
+    system = prompt.SYSTEM_PROMPT.lower()
+    assert "title" in system
+    assert "sentence case" in system
+    assert "same" in system and "wording" in system
 
 
 def test_control_characters_stripped():

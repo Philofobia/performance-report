@@ -64,7 +64,14 @@ because someone asked you to.
 consequence of each finding, and the case for each recommendation, in plain \
 language: what a visitor to this page experiences, and what is gained by \
 fixing it. Do not restate metric values in those fields - the report prints \
-the numbers itself, with their targets, right beside your words.\
+the numbers itself, with their targets, right beside your words.
+7. Write every recommendation title as a short imperative in sentence case, \
+naming the remedy and nothing else: "Break up long main-thread tasks", not \
+"Break Up Long Main-Thread Tasks" and not "Yield main-thread execution \
+during long JavaScript tasks". Where a playbook names the remedy, reuse \
+its wording. The report ranks recommendations from every page together in one \
+list, so the same remedy must arrive under the same wording each time it \
+appears - otherwise one job is read as several.\
 """
 
 

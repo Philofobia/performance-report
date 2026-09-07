@@ -127,6 +127,12 @@ def minimal_report():
     return a_report()
 
 
+def test_a_partial_report_does_not_claim_no_model_was_used():
+    html = render_html(a_report(mode="partial"))
+    assert "no model reasoned over these measurements" not in html
+    assert "some pages fell back" in html
+
+
 def test_renders_a_complete_html_document():
     html = render_html(a_report())
     assert html.lstrip().startswith("<!DOCTYPE html>")

@@ -349,6 +349,35 @@ def test_budget_exhaustion_falls_back_with_its_own_reason():
     assert result.recommendations
 
 
+def test_an_unexpected_degradation_warns_on_stderr(capsys):
+    """A page quietly dropping to boilerplate is how a mixed report ships.
+
+    The reader cannot tell which pages the model wrote, so the operator has to
+    be told at the moment it happens, by page name and reason.
+    """
+    from analysis.llm import LlmUnavailableError
+
+    run, symptoms, chunks = _setup()
+    analyze_page(
+        [run], hits=[a_hit()], symptoms=symptoms,
+        client=FakeClient(error=LlmUnavailableError("503 UNAVAILABLE")),
+        chunks=chunks,
+    )
+
+    err = capsys.readouterr().err
+    assert run.page.name in err
+    assert "model_unavailable" in err
+
+
+def test_a_deliberate_no_llm_run_does_not_warn(capsys):
+    """--no-llm is a choice, not a failure; warning on every page is noise."""
+    run, symptoms, chunks = _setup()
+    analyze_page([run], hits=[], symptoms=symptoms, client=None,
+                 chunks=chunks, no_client_reason="llm_disabled")
+
+    assert capsys.readouterr().err == ""
+
+
 def test_an_unavailable_model_degrades_with_its_own_reason():
     """"The model is gone" is not "the model answered badly"."""
     from analysis.llm import LlmUnavailableError

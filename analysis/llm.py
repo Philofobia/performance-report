@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from rag.embeddings import (
     EmbeddingError,
     QuotaExceededError,
-    call_with_quota_backoff,
+    call_with_backoff,
     resolve_api_key,
 )
 from rag.prompt import GroundedPrompt
@@ -365,7 +365,7 @@ class GoogleAnalysisClient:
             return result
 
         try:
-            result = call_with_quota_backoff(
+            result = call_with_backoff(
                 invoke,
                 max_retries=self._max_retries,
                 sleep=self._sleep,

@@ -4,7 +4,7 @@
 
 Pages tested: {{ report.cover.pages|join(', ') }}
 
-Analysis: {% if report.meta.analysis_mode == 'llm' %}retrieval-grounded model analysis ({{ report.meta.model }}){% else %}rule-based analysis — no model reasoned over these measurements{% endif %}
+Analysis: {% if report.meta.analysis_mode == 'llm' %}retrieval-grounded model analysis ({{ report.meta.model }}){% elif report.meta.analysis_mode == 'partial' %}retrieval-grounded model analysis ({{ report.meta.model }}), but some pages fell back to rule-based analysis ({{ report.meta.degradation_reason }}) — those pages carry generic playbook recommendations rather than ones written for them{% else %}rule-based analysis — no model reasoned over these measurements{% endif %}
 
 ## Executive summary
 
