@@ -6,10 +6,10 @@ PyYAML==6.0.3             # verified in venv
 python-dotenv==1.2.3      # verified in venv
 numpy==2.5.3              # exact top-k cosine for RAG retrieval (store/vectordb.py);
                           # replaces chromadb - see PROJECT_SPEC.md 8, decision #6
-google-genai==2.22.0      # sole LLM + embeddings client (litellm dropped: 19 CVEs
+google-genai==2.23.0      # sole LLM + embeddings client (litellm dropped: 19 CVEs
                           # at the pinned version, unused, and spec-optional)
 jinja2==3.1.6             # verified in venv
-matplotlib==3.11.1        # 3.10.4 was never published; broke CI install
+matplotlib==3.11.2        # 3.10.4 was never published; broke CI install
                           # reportlab: removed in Phase 5. It was pinned as a PDF
                           # fallback and imported by nothing; PDFs come from Chromium
                           # print-to-PDF (report/render_pdf.py). Do not re-add without
