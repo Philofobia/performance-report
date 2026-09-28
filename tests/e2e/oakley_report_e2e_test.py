@@ -289,19 +289,6 @@ def test_pdf_names_the_campaign_and_the_page(campaign):
     assert campaign.report["cover"]["verdict"].upper() in text.upper()
 
 
-@pytest.mark.xfail(
-    os.name == "nt",
-    strict=True,
-    reason=(
-        "Known defect: on Windows the report's faces (Corbel, Constantia) have "
-        "old-style default figures, and body's `font-variant-numeric: "
-        "tabular-nums lining-nums` swaps each digit for an alternate glyph with "
-        "no cmap entry. Chromium's PDF writer then has no Unicode for it, so "
-        "digits extract as U+0000 — visible, but not searchable, copyable or "
-        "readable by a screen reader. Linux CI falls back to fonts without the "
-        "alternates and never sees it. Remove this marker with the fix."
-    ),
-)
 def test_pdf_numbers_match_report_json(campaign):
     """The comparison table prints each condition's LCP rounded to the ms.
 

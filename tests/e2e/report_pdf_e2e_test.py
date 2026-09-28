@@ -30,6 +30,30 @@ def test_real_chromium_produces_a_paginated_pdf():
     assert len(pdf) > 20_000
 
 
+def test_the_pdf_text_layer_carries_every_digit():
+    """A number the reader can see must be a number they can search and copy.
+
+    On Windows the report's faces (Corbel, Constantia) default to old-style
+    figures, and asking for lining/tabular ones substituted glyphs Chromium's
+    PDF writer could not map back to Unicode: the digits printed, but the text
+    layer held U+0000 for every one of them. Linux CI never saw it — it has
+    none of those fonts — so this checks the text layer on every platform.
+    """
+    import io
+
+    pypdf = pytest.importorskip("pypdf", reason="pypdf not installed (test extra)")
+
+    pdf = render_pdf(render_html(a_report(("homepage", "plp"))),
+                     page_factory=chromium_page_factory)
+    text = "\n".join(page.extract_text() or ""
+                     for page in pypdf.PdfReader(io.BytesIO(pdf)).pages)
+
+    assert "\x00" not in text, (
+        f"{text.count(chr(0))} characters in the PDF text layer have no Unicode")
+    assert "6200" in text           # LCP, in the sans tables and cards
+    assert "storefront-abc12345" in text
+
+
 def _a_realistic_screenshot(path):
     """A deterministic gradient PNG, not a flat colour swatch.
 
