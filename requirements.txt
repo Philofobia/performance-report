@@ -30,3 +30,6 @@ pytest==9.1.1             # verified in venv
 pytest-asyncio==1.4.0     # verified in venv
 pytest-mock==3.15.1       # verified in venv
 pytest-cov==7.1.0         # verified in venv
+pypdf==6.19.0             # reads the rendered PDF back in the live Oakley e2e
+                          # test (tests/e2e/oakley_report_e2e_test.py); pure
+                          # Python, no dependencies
