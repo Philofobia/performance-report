@@ -145,6 +145,54 @@ def _apply(value: float, amount: float, absolute: bool, floor: float) -> float:
     return max(0.0, floor, reduced)
 
 
+def _links(
+    candidates: Sequence[Candidate],
+    metrics: Mapping[str, Optional[float]],
+) -> List[tuple]:
+    """Every chain link as ``(candidate index, Projection)``, in chain order.
+
+    The one place the stacking arithmetic lives; ``project`` and
+    ``project_each`` are two views of its result.
+    """
+    # Bucket (index, source, range) by metric, keeping only measured metrics.
+    buckets: Dict[str, List[tuple]] = {}
+    for index, candidate in enumerate(candidates):
+        for rng in parse_impact_ranges(candidate.metadata):
+            measured = metrics.get(rng.metric)
+            if measured is None:
+                continue
+            buckets.setdefault(rng.metric, []).append((index, candidate.source, rng))
+
+    links: List[tuple] = []
+    for metric in sorted(buckets):
+        baseline = float(metrics[metric])
+        floor = baseline * (1.0 - MAX_TOTAL_REDUCTION)
+        # The index is the last tie-break: two tactics from one playbook have
+        # identical ranges and source, and must still be ordered the same way
+        # every run (§6.2).
+        entries = sorted(buckets[metric], key=lambda e: (-e[2].low, e[1], e[0]))
+
+        current_low = baseline
+        current_high = baseline
+        for position, (index, source, rng) in enumerate(entries):
+            decay = DECAY ** position
+            before = current_low
+            after_low = _apply(current_low, rng.low * decay, rng.absolute, floor)
+            after_high = _apply(current_high, rng.high * decay, rng.absolute, floor)
+            reduction = 0.0 if before <= 0 else (before - after_low) / before
+            links.append((index, Projection(
+                metric=metric,
+                before=before,
+                after_low=after_low,
+                after_high=after_high,
+                reduction_pct=reduction,
+                source=source,
+            )))
+            current_low, current_high = after_low, after_high
+
+    return links
+
+
 def project(
     candidates: Sequence[Candidate],
     metrics: Mapping[str, Optional[float]],
@@ -160,71 +208,51 @@ def project(
     nothing — the caller still lists it, with magnitude "unknown", per the
     system prompt's rule 3.
     """
-    # Bucket (source, range) pairs by metric, keeping only measured metrics.
-    buckets: Dict[str, List[tuple]] = {}
-    for candidate in candidates:
-        for rng in parse_impact_ranges(candidate.metadata):
-            measured = metrics.get(rng.metric)
-            if measured is None:
-                continue
-            buckets.setdefault(rng.metric, []).append((candidate.source, rng))
+    return [projection for _index, projection in _links(candidates, metrics)]
 
-    projections: List[Projection] = []
-    for metric in sorted(buckets):
-        baseline = float(metrics[metric])
-        floor = baseline * (1.0 - MAX_TOTAL_REDUCTION)
-        entries = sorted(buckets[metric], key=lambda pair: (-pair[1].low, pair[0]))
 
-        current_low = baseline
-        current_high = baseline
-        for position, (source, rng) in enumerate(entries):
-            decay = DECAY ** position
-            before = current_low
-            after_low = _apply(current_low, rng.low * decay, rng.absolute, floor)
-            after_high = _apply(current_high, rng.high * decay, rng.absolute, floor)
-            reduction = 0.0 if before <= 0 else (before - after_low) / before
-            projections.append(
-                Projection(
-                    metric=metric,
-                    before=before,
-                    after_low=after_low,
-                    after_high=after_high,
-                    reduction_pct=reduction,
-                    source=source,
-                )
-            )
-            current_low, current_high = after_low, after_high
+def project_each(
+    candidates: Sequence[Candidate],
+    metrics: Mapping[str, Optional[float]],
+) -> List[tuple]:
+    """``project``, attributed: one tuple of links per candidate, in order.
 
-    return projections
+    Each candidate owns exactly the links its own range produced. Grouping by
+    source instead — what this replaced — handed every tactic of a playbook
+    the whole chain that playbook's tactics built together, so two images.md
+    actions each claimed the effect of both.
+    """
+    owned: List[List[Projection]] = [[] for _ in candidates]
+    for index, projection in _links(candidates, metrics):
+        owned[index].append(projection)
+    return [tuple(links) for links in owned]
 
 
 def aggregate(
     projections: Sequence[Projection],
     metrics: Mapping[str, Optional[float]],
 ) -> Dict[str, Projection]:
-    """Collapse per-metric chains into one before/after each (§6 chart)."""
+    """Collapse per-metric chains into one before/after each (§6 chart).
+
+    The chain's end is found by value, not position: every link only ever
+    lowers the metric, so the end is the smallest ``after``. Callers flatten
+    projections in recommendation order, which is not chain order.
+    """
     out: Dict[str, Projection] = {}
     for metric in sorted({p.metric for p in projections}):
         chain = [p for p in projections if p.metric == metric]
         baseline = float(metrics[metric])
-        last = chain[-1]
-        reduction = 0.0 if baseline <= 0 else (baseline - last.after_low) / baseline
+        after_low = min(p.after_low for p in chain)
+        after_high = min(p.after_high for p in chain)
+        reduction = 0.0 if baseline <= 0 else (baseline - after_low) / baseline
         out[metric] = Projection(
             metric=metric,
             before=baseline,
-            after_low=last.after_low,
-            after_high=last.after_high,
+            after_low=after_low,
+            after_high=after_high,
             reduction_pct=reduction,
             source="aggregate",
         )
-    return out
-
-
-def by_source(projections: Sequence[Projection]) -> Dict[str, List[Projection]]:
-    """Group projections by the playbook that produced them."""
-    out: Dict[str, List[Projection]] = {}
-    for projection in projections:
-        out.setdefault(projection.source, []).append(projection)
     return out
 
 

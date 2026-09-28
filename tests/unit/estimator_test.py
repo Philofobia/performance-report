@@ -73,7 +73,6 @@ from analysis.estimator import (  # noqa: E402 - grouped with the code it tests
     MAX_TOTAL_REDUCTION,
     Projection,
     aggregate,
-    by_source,
     project,
     rank_key,
 )
@@ -186,17 +185,82 @@ def test_aggregate_of_nothing_is_empty():
     assert aggregate([], METRICS) == {}
 
 
-def test_by_source_groups_projections():
+def test_aggregate_finds_the_end_of_the_chain_in_any_order():
+    """Callers flatten projections in *recommendation* order, not chain order.
+
+    Recommendations are sorted by reduction percentage, so the last link of a
+    metric's chain can land anywhere in the flattened list. Taking whatever
+    came last reported a mid-chain value as the page's projected outcome.
+    """
     out = project(
         [
             _cand("images.md", expected_lcp_reduction_pct=[20, 40]),
-            _cand("caching.md", expected_ttfb_reduction_pct=[30, 80]),
+            _cand("fonts.md", expected_lcp_reduction_pct=[10, 30]),
         ],
         METRICS,
     )
-    grouped = by_source(out)
-    assert set(grouped) == {"images.md", "caching.md"}
-    assert grouped["images.md"][0].metric == "lcp_ms"
+    in_chain_order = aggregate(out, METRICS)["lcp_ms"]
+    reversed_order = aggregate(list(reversed(out)), METRICS)["lcp_ms"]
+
+    assert reversed_order == in_chain_order
+    assert reversed_order.after_low == pytest.approx(out[-1].after_low)
+    assert reversed_order.after_high == pytest.approx(out[-1].after_high)
+
+
+# --------------------------------------------------------------------------- #
+# Attribution: which link of a chain belongs to which recommendation
+# --------------------------------------------------------------------------- #
+from analysis.estimator import project_each  # noqa: E402
+
+
+def test_each_candidate_is_given_only_its_own_link():
+    """Two tactics from one playbook are two links, not two copies of both.
+
+    Grouping by source handed each images.md tactic the whole images.md chain,
+    so the report credited both actions with the combined effect of the two.
+    """
+    candidates = [
+        _cand("images.md", expected_lcp_reduction_pct=[15, 40]),
+        _cand("images.md", expected_lcp_reduction_pct=[15, 40]),
+    ]
+
+    first, second = project_each(candidates, METRICS)
+
+    assert len(first) == 1 and len(second) == 1
+    assert first[0].before == 6200.0
+    assert first[0].after_low == pytest.approx(6200 * 0.85)
+    assert second[0].before == pytest.approx(first[0].after_low)
+
+
+def test_project_each_is_aligned_with_its_candidates():
+    """One entry per candidate, in the caller's order, empty when unprojectable."""
+    candidates = [
+        _cand("prose-only.md", effort="low"),
+        _cand("caching.md", expected_ttfb_reduction_pct=[30, 80]),
+        _cand("images.md", expected_lcp_reduction_pct=[20, 40]),
+    ]
+
+    result = project_each(candidates, METRICS)
+
+    assert [tuple(p.source for p in links) for links in result] == [
+        (), ("caching.md",), ("images.md",),
+    ]
+
+
+def test_project_each_carries_exactly_what_project_computes():
+    """Attribution must not change a single number, only who owns it."""
+    candidates = [
+        _cand("images.md", expected_lcp_reduction_pct=[20, 40]),
+        _cand("fonts.md", expected_lcp_reduction_pct=[10, 30]),
+        _cand("images.md", expected_lcp_reduction_pct=[20, 40]),
+    ]
+
+    owned = sorted(
+        (p for links in project_each(candidates, METRICS) for p in links),
+        key=lambda p: -p.before,
+    )
+
+    assert owned == project(candidates, METRICS)
 
 
 def test_rank_key_orders_by_reduction_then_source_then_title():

@@ -57,15 +57,16 @@ def score_action(page: Any, recommendation: Any, *, glossary: Any,
                  thresholds: Any) -> float:
     """Expected payoff of one recommendation, in metric units, severity-weighted.
 
-    The gain is the *conservative* bound (``after_high``), and it is capped at
-    the gap to target: shaving 2000 ms off a metric that is only 100 ms over
-    buys 100 ms of value, not 2000.
+    The gain is the *conservative* bound (``after_low`` — see
+    ``estimator.Projection``; ``after_high`` is the optimistic edge), and it is
+    capped at the gap to target: shaving 2000 ms off a metric that is only
+    100 ms over buys 100 ms of value, not 2000.
     """
     if not recommendation.projections:
         return 0.0
     best = 0.0
     for projection in recommendation.projections:
-        gain = max(0.0, float(projection.before) - float(projection.after_high))
+        gain = max(0.0, float(projection.before) - float(projection.after_low))
         gap = _gap_to_target(page, projection.metric, float(projection.before),
                              thresholds, glossary)
         effective = min(gain, gap) if gap is not None else gain
@@ -79,7 +80,7 @@ def _primary_projection(recommendation: Any) -> Optional[Any]:
         return None
     return max(
         recommendation.projections,
-        key=lambda p: (float(p.before) - float(p.after_high), p.metric),
+        key=lambda p: (float(p.before) - float(p.after_low), p.metric),
     )
 
 
@@ -111,7 +112,7 @@ def rank_actions(pages: Sequence[Any], *, glossary: Any,
         if projection is not None:
             metric = projection.metric
             before = glossary.format_value(metric, projection.before)
-            after = glossary.format_value(metric, projection.after_high)
+            after = glossary.format_value(metric, projection.after_low)
             projected = f"{before} → {after}"
         plan.append(PlannedAction(
             rank=index,
