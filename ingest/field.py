@@ -107,6 +107,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    # Load .env (gitignored) before resolve_grafana_env reads the connection.
+    # Without this the four GRAFANA_* variables were only visible when the
+    # caller had exported them, so a correctly-configured project failed
+    # "GRAFANA_BASE_URL is not set". `ingest auto` and `analyze` do the same.
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(override=False)
+    except ImportError:  # pragma: no cover - python-dotenv is a pinned dependency
+        pass
+
     args = _build_parser().parse_args(argv)
     settings = load_settings(args.settings) if args.settings else load_settings()
 
