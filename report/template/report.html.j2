@@ -94,6 +94,48 @@
   {% endif %}
 </section>
 
+<section data-section="tickets" class="sheet">
+  <p class="eyebrow">Tickets</p>
+  <h2>What the captures show for each open ticket</h2>
+  {% if report.tickets %}
+  <p class="lede">Each ticket in <span class="mono">config/tickets.yaml</span>, checked
+    against the HAR captures supplied for this report. A ticket is confirmed only
+    when most runs of a capture show it; the evidence names the runs and requests.</p>
+  {% set groups = [
+      ('confirmed', 'Confirmed — act on these'),
+      ('not_seen', 'Not seen in these captures'),
+      ('no_data', 'No capture could answer'),
+      ('not_checkable', 'Cannot be checked from a page-load capture')] %}
+  {% for status, heading in groups %}
+  {% set group = report.tickets|selectattr('status', 'equalto', status)|list %}
+  {% if group %}
+  {# No data-section: a group renders only when it has tickets, and the
+     skeleton must not change with the data. #}
+  <div class="block">
+    <h3>{{ heading }} <span class="cond">{{ group|length }}</span></h3>
+    <ul class="tickets tickets--{{ status }}">
+      {% for ticket in group %}
+      <li>
+        <p class="rec-title"><span class="mono">{{ ticket.id }}</span> {{ ticket.title }}
+          <span class="plan-page">{{ ticket.sites|join(' / ') }}{% if ticket.observed_on %} · seen on {{ ticket.observed_on|join(', ') }}{% endif %}</span></p>
+        <p class="serif">{{ ticket.summary }}</p>
+        {% if ticket.evidence %}
+        <ul class="evidence-list">
+          {% for line in ticket.evidence %}<li class="mono">{{ line }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  {% endfor %}
+  {% else %}
+  <p class="empty">No HAR captures were supplied, so no ticket was checked. Pass them to
+    <span class="mono">analyze --har page/device=file.har</span>.</p>
+  {% endif %}
+</section>
+
 <section data-section="field" class="sheet">
   <p class="eyebrow">Real users</p>
   <h2>What visitors actually experienced</h2>
@@ -307,6 +349,30 @@
     </ul>
     {% else %}
     <p class="empty">No findings were produced for this page.</p>
+    {% endif %}
+  </div>
+
+  <div data-section="page.har" class="block">
+    <h3>In the HAR captures</h3>
+    {% if page.har %}
+    {% for capture in page.har %}
+    <p class="finding-title">{{ capture.device }} <span class="cond">{{ capture.source }} · {{ capture.runs }} runs{% if capture.lcp_ms is not none %} · median LCP {{ capture.lcp_ms|round|int }} ms{% endif %}{% if capture.cls is not none %} · CLS {{ '%.3f'|format(capture.cls) }}{% endif %}</span></p>
+    {% if capture.findings %}
+    <ul class="evidence-list">
+      {% for line in capture.findings %}<li class="mono">{{ line }}</li>{% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">Nothing beyond the tickets above.</p>
+    {% endif %}
+    {% if capture.test_artifacts %}
+    <p class="serif consequence">Not the site's problem: requests to
+      {{ capture.test_artifacts|join(', ') }} failed because the capture sent
+      {{ capture.rejected_headers|join(', ') or 'a custom header' }} to them, which forces a CORS
+      preflight those hosts refuse. Re-capture with the header sent to the site only.</p>
+    {% endif %}
+    {% endfor %}
+    {% else %}
+    <p class="empty">No HAR capture was supplied for this page.</p>
     {% endif %}
   </div>
 

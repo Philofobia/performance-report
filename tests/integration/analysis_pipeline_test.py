@@ -282,6 +282,46 @@ def test_a_model_written_summary_carries_no_summary_degradation(input_dir, vecto
     assert report.meta.summary_degradation is None
 
 
+def test_cli_checks_tickets_against_a_supplied_har(input_dir, tmp_path, monkeypatch):
+    """`--har page/device=path`: the report lists every ticket with what the
+    capture shows, and the page carries the capture's own findings."""
+    from tests.unit.har_checks_test import _hero_waits_for_script
+
+    pages, entries = [], []
+    for n in (1, 2, 3):
+        p, e = _hero_waits_for_script(f"page_{n}")
+        pages.append(p)
+        entries += e
+    har = tmp_path / "HOMEMOB.har"
+    har.write_text(json.dumps({"log": {"pages": pages, "entries": entries}}), encoding="utf-8")
+    catalog = tmp_path / "tickets.yaml"
+    catalog.write_text(
+        "site_hosts: {OO: [www.oakley.com]}\n"
+        "tickets:\n"
+        "  - {id: OAK-39155, title: hero, pages: [homepage], check: lcp_render_delay,\n"
+        "     params: {script: newHeroBanner.js}}\n"
+        "  - {id: OAK-39153, title: do not sell, reason: Needs a click.}\n",
+        encoding="utf-8")
+    out = tmp_path / "out"
+
+    assert main(["--input-dir", str(input_dir), "--output-dir", str(out), "--no-llm",
+                 "--no-field", "--har", f"homepage/mobile={har}",
+                 "--tickets", str(catalog)]) == 0
+
+    payload = json.loads(next(out.glob("*/report.json")).read_text(encoding="utf-8"))
+    assert [(t["id"], t["status"]) for t in payload["tickets"]] == [
+        ("OAK-39155", "confirmed"), ("OAK-39153", "not_checkable")]
+    homepage = next(p for p in payload["pages"] if p["name"] == "homepage")
+    assert homepage["har"][0]["source"] == "HOMEMOB.har"
+    assert homepage["har"][0]["runs"] == 3
+
+
+def test_cli_rejects_a_malformed_har_argument(input_dir, tmp_path, capsys):
+    assert main(["--input-dir", str(input_dir), "--output-dir", str(tmp_path / "o"),
+                 "--no-llm", "--no-field", "--har", "homepage=x.har"]) == 1
+    assert "page/device=path" in capsys.readouterr().err
+
+
 def test_group_by_page_is_sorted(input_dir):
     grouped = group_by_page(load_runs(input_dir=input_dir))
     assert list(grouped) == ["homepage", "plp"]

@@ -177,6 +177,28 @@ def rule_based_summary(pages: Sequence[PageAnalysis]) -> SimpleSummary:
                          top_actions=actions[:MAX_TOP_ACTIONS])
 
 
+def load_har_evidence(har_args: Sequence[str],
+                      tickets_path: Optional[str] = None) -> tuple:
+    """``--har`` values -> (captures, ticket outcomes); both empty with no HAR.
+
+    Tickets are evaluated only when a HAR was supplied: with nothing to check
+    against, every ticket would read "no data", which says nothing.
+    """
+    from analysis import har_checks, tickets as tk
+
+    captures = []
+    for value in har_args:
+        page, device, path = tk.parse_har_arg(value)
+        runs = har_checks.load_har(path)
+        if not runs:
+            raise ValueError(f"{path} holds no page loads")
+        captures.append(tk.Capture(page=page, device=device, runs=runs))
+    if not captures:
+        return [], []
+    catalog = tk.load_catalog(Path(tickets_path) if tickets_path else tk.TICKETS_FILE)
+    return captures, tk.evaluate(catalog, captures)
+
+
 def _degradation_reason(exc: Exception) -> str:
     """The same reason names ``analyze_page`` gives a page that fell back.
 
@@ -287,6 +309,8 @@ def run_analysis(
     history: Optional[Sequence[Any]] = None,
     field: Optional[Any] = None,
     no_field: bool = False,
+    har_captures: Sequence[Any] = (),
+    tickets: Sequence[Any] = (),
 ) -> Report:
     """Run the full analysis pipeline over a campaign's runs.
 
@@ -412,6 +436,7 @@ def run_analysis(
         generated_at=generated_at or datetime.now(timezone.utc),
         model=model, knowledge_digest=digest, trends=series, field=field,
         summary_degradation=summary_degradation,
+        har_captures=har_captures, tickets=tickets,
     )
 
 
@@ -528,6 +553,14 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Read runs from this SQLite database instead of a directory.")
     p.add_argument("--pages", default=None,
                    help="Comma-separated page names to analyse.")
+    p.add_argument("--har", action="append", default=[], metavar="PAGE/DEVICE=PATH",
+                   help="A HAR for one page and condition, e.g. "
+                        "homepage/mobile=HOMEMOB.har (WebPageTest exports carry the "
+                        "most). Repeat per file. Its findings and the tickets in "
+                        "--tickets are checked against it; the file is read, never "
+                        "copied.")
+    p.add_argument("--tickets", default=None,
+                   help="Ticket catalog (default config/tickets.yaml).")
     p.add_argument("--project", default=None,
                    help="Project to analyse, when the input holds more than one.")
     p.add_argument("--output-dir", default=None,
@@ -602,6 +635,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
+    try:
+        captures, outcomes = load_har_evidence(args.har, args.tickets)
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"Could not use the HAR captures: {exc}", file=sys.stderr)
+        return 1
+
     store = embed_client = llm_client = None
     if not args.no_llm:
         store, embed_client, llm_client = _build_live_clients(settings, budget)
@@ -611,7 +650,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         runs, store=store, embed_client=embed_client, llm_client=llm_client,
         settings=settings, use_priors=args.use_priors, top_k=args.top_k,
         page_analyses_out=collected, llm_disabled=args.no_llm,
-        no_field=args.no_field,
+        no_field=args.no_field, har_captures=captures, tickets=outcomes,
     )
 
     target = output_dir / report.cover.campaign_id

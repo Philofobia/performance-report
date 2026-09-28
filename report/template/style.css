@@ -381,6 +381,26 @@ p { margin: 0 0 2.5mm; }
 .finding-title { font-weight: 700; font-size: 10pt; margin-bottom: 1mm; }
 .evidence { color: var(--muted); font-size: 7.5pt; margin: 1mm 0 0; }
 
+/* Tickets and HAR findings: lists a developer acts on, one request per line. */
+.tickets { list-style: none; margin: 2mm 0 0; padding: 0; }
+.tickets > li {
+  padding: 0 0 2.5mm 4mm;
+  margin-bottom: 2.5mm;
+  border-left: 1.5pt solid var(--rule);
+  break-inside: avoid;
+}
+.tickets--confirmed > li { border-left-color: var(--fail); }
+.tickets--not_seen > li { border-left-color: var(--pass); }
+.evidence-list {
+  list-style: none;
+  margin: 1mm 0 0;
+  padding: 0;
+  font-size: 7pt;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.evidence-list > li { margin: 0.6mm 0; }
+
 .impacts {
   display: grid;
   grid-template-columns: 20mm 1fr;

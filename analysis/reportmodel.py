@@ -307,6 +307,38 @@ class PageFieldBlock(BaseModel):
     rage_clicks: Optional[int] = None
 
 
+class HarCaptureModel(BaseModel):
+    """One HAR supplied for a page (``analyze --har``), reduced to what it shows.
+
+    Only URLs (redacted) and timings - the HAR itself carries cookies and is
+    never copied into the report.
+    """
+
+    device: str
+    source: str
+    runs: int
+    lcp_ms: Optional[float] = None
+    cls: Optional[float] = None
+    findings: List[str] = Field(default_factory=list)
+    #: Hosts whose requests failed because the capture sent a custom header.
+    test_artifacts: List[str] = Field(default_factory=list)
+    rejected_headers: List[str] = Field(default_factory=list)
+
+
+class TicketModel(BaseModel):
+    """One open ticket and what the supplied captures show for it."""
+
+    id: str
+    title: str
+    sites: List[str] = Field(default_factory=list)
+    pages: List[str] = Field(default_factory=list)
+    #: "confirmed" | "not_seen" | "no_data" | "not_checkable"
+    status: str
+    summary: str
+    evidence: List[str] = Field(default_factory=list)
+    observed_on: List[str] = Field(default_factory=list)
+
+
 class PageBlock(BaseModel):
     name: str
     url: str
@@ -327,6 +359,8 @@ class PageBlock(BaseModel):
     projections: Dict[str, ProjectionModel]
     #: Defaulted so a `report.json` written before this existed still validates.
     field: PageFieldBlock = Field(default_factory=PageFieldBlock)
+    #: HARs supplied for this page; empty when none were.
+    har: List[HarCaptureModel] = Field(default_factory=list)
 
 
 class ComparisonRow(BaseModel):
@@ -431,6 +465,9 @@ class Report(BaseModel):
     #: Every page's recommendations in one ranked order. Defaulted so a
     #: report.json written before this existed still validates.
     action_plan: List[PlannedAction] = Field(default_factory=list)
+    #: Every ticket in config/tickets.yaml and what the supplied HARs show.
+    #: Empty when no HAR was supplied.
+    tickets: List[TicketModel] = Field(default_factory=list)
     pages: List[PageBlock]
     comparison: List[ComparisonRow]
     methodology: Methodology
@@ -729,6 +766,25 @@ def _appendix(pages: Sequence[PageAnalysis], settings: Settings) -> List[Appendi
     return sorted(entries, key=lambda e: (e.page, e.run_id, e.device, e.network))
 
 
+def _har_blocks(captures: Sequence[Any], page_name: str) -> List[HarCaptureModel]:
+    """The HARs supplied for one page, as concrete findings (analysis/har_checks)."""
+    from analysis import har_checks as hc
+
+    blocks: List[HarCaptureModel] = []
+    for capture in captures:
+        if capture.page != page_name or not capture.runs:
+            continue
+        summary = hc.summarize_runs(capture.runs)
+        blocks.append(HarCaptureModel(
+            device=capture.device, source=capture.runs[0].source,
+            runs=len(capture.runs), lcp_ms=summary["lcp_ms"], cls=summary["cls"],
+            findings=hc.untracked_findings(capture.runs),
+            test_artifacts=hc.header_artifacts(capture.runs),
+            rejected_headers=hc.rejected_headers(capture.runs),
+        ))
+    return sorted(blocks, key=lambda b: (b.device, b.source))
+
+
 def build_report(
     pages: Sequence[PageAnalysis],
     *,
@@ -741,6 +797,8 @@ def build_report(
     trends: Optional[Mapping[str, Sequence[TrendSeries]]] = None,
     field: Optional[Any] = None,
     summary_degradation: Optional[str] = None,
+    har_captures: Optional[Sequence[Any]] = None,
+    tickets: Optional[Sequence[Any]] = None,
 ) -> Report:
     """Assemble the Report JSON from per-page analyses.
 
@@ -771,6 +829,8 @@ def build_report(
                     field=_page_field_block(field, settings, p.page_name))
         for p in ordered
     ]
+    for block in page_blocks:
+        block.har = _har_blocks(har_captures or (), block.name)
 
     # One ranked plan over every page, so "what do I fix first" is answered by
     # expected payoff rather than by which page sorted first.
@@ -804,6 +864,7 @@ def build_report(
             ),
         ),
         action_plan=plan,
+        tickets=[TicketModel(**vars(t)) for t in tickets or ()],
         pages=page_blocks,
         comparison=_comparison(ordered, settings),
         methodology=_methodology(ordered, settings),

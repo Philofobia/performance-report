@@ -46,6 +46,7 @@ _GLOSSARY = load_glossary()
 MD_SECTIONS: Tuple[str, ...] = (
     "Executive summary",
     "What to do first",
+    "Tickets",
     "What visitors actually experienced",
     "Pages",
     "Cross-page comparison",

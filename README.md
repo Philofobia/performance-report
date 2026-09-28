@@ -40,7 +40,12 @@ document against `report.json` · **a plan whose numbers are the conservative
 projection from the measured value**, one step per action, with recommendations
 chosen by how badly the metric they fix is failing · **PDF numbers that can be
 searched and copied** on every platform · **one campaign per analysis**: one project,
-the newest run of each page × condition.
+the newest run of each page × condition · **open tickets checked against HAR
+captures**: every ticket in `config/tickets.yaml` is listed in the PDF as confirmed,
+not seen, or not checkable, with the runs and requests that show it, and each page
+lists the concrete problems its HARs contain · **the bot-allowlist header sent to the
+site only** — it used to reach every host, which broke the hero image and inflated
+LCP three- to fourfold.
 
 **Verified against the live site on 2026-09-28:** a three-page Oakley campaign,
 Grafana field data (1.38 M sessions over 7 days), model analysis of every page, a
@@ -521,6 +526,48 @@ detected symptom — the playbook for the worst-failing metric first, tactics in
 order the playbook lists them. Both used to be alphabetical, which on the live
 homepage left out the JavaScript playbook while blocking time was its worst metric.
 
+### Tickets and HAR evidence
+
+```bash
+python -m cli analyze --no-llm \
+  --har homepage/desktop=HOMEDEK.har --har homepage/mobile=HOMEMOB.har \
+  --har plp/desktop=PLPDEK.har       --har plp/mobile=PLPMOB.har \
+  --har pdp/desktop=PDPDEK.har       --har pdp/mobile=PDPMOB.har
+```
+
+Each `--har` is one page under one condition. **WebPageTest exports carry the most**
+— the LCP element and its URL, every request's initiator, render-blocking status,
+priority, each layout shift with its region, and the console — and hold several runs
+each; this project's own captures carry less, and a check that needs a field they lack
+says `no data` rather than guessing. The files are read, never copied: they carry
+cookies, and the report keeps only redacted URLs and timings.
+
+`config/tickets.yaml` is the list of open tickets: id, title, the site it was raised
+on (OO and OSI share one skeleton, so either site's captures can answer it), the
+pages it applies to, and the check in [`analysis/har_checks.py`](analysis/har_checks.py)
+that can confirm it. The PDF's **Tickets** section lists every one of them:
+
+| Status | Meaning |
+| --- | --- |
+| Confirmed | Most runs of a capture show it; the evidence names runs, requests and timings |
+| Not seen | The captures can show it, and they do not |
+| No capture could answer | No capture for its pages, or none carries the fields it needs |
+| Cannot be checked | No page-load capture can show it; the catalog says why |
+
+A ticket is never dropped from the list. Each page also gets **In the HAR captures**:
+the LCP element with its request, download and paint times, the slowest
+render-blocking requests, large layout shifts with their region, and failed requests.
+Failures the *capture* caused are named as such: a HAR taken with a custom header sent
+to every host shows CORS rejections of that header, and those are the test's, not the
+site's.
+
+The checks: `lcp_render_delay` (image downloaded long before it is painted; with
+`script:`, painted only after that script finishes), `preload_mismatch` (LCP image
+first fetched at another width), `duplicate_downloads`, `multiple_renditions`,
+`slide_in_shift` (one region shifting frame by frame), `service_worker`,
+`lcp_image_from_script`, `css_background_images` (with `match:` naming the images the
+ticket means — never icons).
+
 **It always produces a report.** No API key, a spent [token budget](#token-budget), an
 exhausted free-tier quota, or a model that returns unusable JSON twice all degrade to a
 rule-based path: symptoms become
@@ -680,7 +727,7 @@ offline suite stays browser-free; only the real PDF run is `e2e`-marked.
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 1181 offline tests, no browser, no network
+pytest -m "not e2e"      # 1222 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 pytest tests/e2e/oakley_report_e2e_test.py -v   # the live Oakley campaign, to a PDF
 ```
