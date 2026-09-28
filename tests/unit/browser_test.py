@@ -1530,7 +1530,7 @@ def test_cli_writes_one_json_per_run(monkeypatch, tmp_path, capsys):
     ])
     assert code == 0
     written = sorted(p.name for p in tmp_path.glob("*.json"))
-    assert written == ["pdp__mid-mobile__slow-4g.json"]
+    assert written == ["storefront__pdp__mid-mobile__slow-4g.json"]
     data = json.loads((tmp_path / written[0]).read_text(encoding="utf-8"))
     assert data["page"]["name"] == "pdp"
     assert data["meta"]["source"] == "automated"
@@ -1597,8 +1597,8 @@ def test_cli_keeps_the_runs_it_completed_before_a_failure(monkeypatch, tmp_path)
     code = automated.main(["--output-dir", str(out)])
     assert code == 1
     assert sorted(p.name for p in out.glob("*.json")) == [
-        "homepage__desktop__fast-3g.json",
-        "homepage__mid-mobile__slow-4g.json",
+        "storefront__homepage__desktop__fast-3g.json",
+        "storefront__homepage__mid-mobile__slow-4g.json",
     ]
 
 

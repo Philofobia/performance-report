@@ -95,8 +95,28 @@ def test_a_page_name_with_a_separator_cannot_escape_the_output_dir(tmp_path):
     assert "/" not in written[0].name and "\\" not in written[0].name
 
 
-def test_run_filename_is_page_device_network():
-    assert run_filename(make_run("run_a")) == "homepage__mid-mobile__slow-4g.json"
+def test_run_filename_is_project_page_device_network():
+    assert run_filename(make_run("run_a")) == (
+        "storefront__homepage__mid-mobile__slow-4g.json")
+
+
+def test_two_projects_measuring_the_same_page_name_do_not_overwrite(tmp_path):
+    """The CI campaign and the Oakley campaign both have a `homepage` under
+    mid-mobile/slow-4g. Without the project in the name, running one replaced
+    the other's JSON in data/processed."""
+    persist = RunPersister(output_dir=tmp_path / "processed")
+    oakley = make_run("run_a")
+    ci = make_run("run_b")
+    ci = ci.model_copy(update={"project": ci.project.model_copy(
+        update={"name": "ci-smoke"})})
+
+    persist(oakley)
+    persist(ci)
+
+    assert sorted(p.name for p in (tmp_path / "processed").glob("*.json")) == [
+        "ci-smoke__homepage__mid-mobile__slow-4g.json",
+        "storefront__homepage__mid-mobile__slow-4g.json",
+    ]
 
 
 # --- artifacts -------------------------------------------------------------- #

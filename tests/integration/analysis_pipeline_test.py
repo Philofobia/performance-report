@@ -171,6 +171,83 @@ def test_load_runs_reports_an_unreadable_file(tmp_path):
         load_runs(input_dir=directory)
 
 
+def _write(directory, name, payload):
+    (directory / name).write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _in_project(payload, project):
+    payload["project"]["name"] = project
+    return payload
+
+
+def test_runs_from_two_projects_are_refused_not_merged(input_dir):
+    """A CI campaign run locally left ci-smoke runs beside Oakley's, and the
+    report took its project name from whichever run sorted first."""
+    _write(input_dir, "ci.json", _in_project(run_payload("run_c1", "homepage"),
+                                              "ci-smoke"))
+
+    with pytest.raises(ValueError, match=r"ci-smoke.*storefront.*--project"):
+        load_runs(input_dir=input_dir)
+
+
+def test_project_selects_one_campaign_from_a_mixed_directory(input_dir):
+    _write(input_dir, "ci.json", _in_project(run_payload("run_c1", "homepage"),
+                                              "ci-smoke"))
+
+    assert [r.run_id for r in load_runs(input_dir=input_dir, project="ci-smoke")] == [
+        "run_c1"]
+    assert {r.project.name for r in load_runs(input_dir=input_dir,
+                                              project="storefront")} == {"storefront"}
+
+
+def test_an_unknown_project_is_an_error_naming_what_is_there(input_dir):
+    with pytest.raises(FileNotFoundError, match="storefront"):
+        load_runs(input_dir=input_dir, project="oakley")
+
+
+def test_the_newest_run_of_a_condition_supersedes_older_ones(input_dir, capsys):
+    """One file per (page x condition) is the contract, but a store holds every
+    campaign ever measured, and a directory can hold files from before a rename.
+    Analysing them together reported August's run beside today's as one
+    campaign, with the worst of the two chosen as the page's primary run."""
+    older = run_payload("run_h0", "homepage", lcp=9999)
+    older["meta"]["created_at"] = "2025-12-01T09:00:00Z"
+    _write(input_dir, "old-homepage.json", older)
+
+    runs = load_runs(input_dir=input_dir)
+
+    assert {r.run_id for r in runs} == {"run_h1", "run_h2", "run_p1"}
+    assert "1 older run" in capsys.readouterr().err
+
+
+def test_the_store_path_analyses_the_latest_campaign_not_all_history(tmp_path):
+    db = tmp_path / "runs.sqlite"
+    conn = sql.connect(db)
+    sql.init_schema(conn)
+    august = run_payload("run_old", "homepage")
+    august["meta"]["created_at"] = "2026-08-20T08:00:00Z"
+    sql.insert_run(conn, Run.model_validate(august))
+    sql.insert_run(conn, Run.model_validate(run_payload("run_new", "homepage")
+                                            | {"meta": {"created_at": "2026-09-28T07:00:00Z",
+                                                        "source": "automated"}}))
+    conn.close()
+
+    assert [r.run_id for r in load_runs(from_store=db)] == ["run_new"]
+
+
+def test_cli_selects_a_project(input_dir, tmp_path, capsys):
+    _write(input_dir, "ci.json", _in_project(run_payload("run_c1", "homepage"),
+                                              "ci-smoke"))
+
+    assert main(["--input-dir", str(input_dir), "--output-dir", str(tmp_path / "out"),
+                 "--no-llm", "--no-field"]) == 1
+    assert "--project" in capsys.readouterr().err
+
+    assert main(["--input-dir", str(input_dir), "--output-dir", str(tmp_path / "out"),
+                 "--no-llm", "--no-field", "--project", "ci-smoke"]) == 0
+    assert "ci-smoke" in capsys.readouterr().out
+
+
 def test_group_by_page_is_sorted(input_dir):
     grouped = group_by_page(load_runs(input_dir=input_dir))
     assert list(grouped) == ["homepage", "plp"]

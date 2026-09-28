@@ -41,13 +41,65 @@ class SimpleSummary:
     top_actions: List[str]
 
 
+def _one_project(runs: List[Run], project: Optional[str], where: Any) -> List[Run]:
+    """The runs of exactly one project — named, or the only one present.
+
+    Never merged: a report takes its name, campaign id and history from its
+    project, and a directory holding a CI campaign beside Oakley's produced a
+    report named after whichever run happened to sort first.
+    """
+    counts: Dict[str, int] = {}
+    for run in runs:
+        counts[run.project.name] = counts.get(run.project.name, 0) + 1
+    listing = ", ".join(f"{name} ({counts[name]})" for name in sorted(counts))
+
+    if project is not None:
+        if project not in counts:
+            raise FileNotFoundError(
+                f"No runs for project {project!r} in {where}; found: {listing}")
+        return [r for r in runs if r.project.name == project]
+    if len(counts) > 1:
+        raise ValueError(
+            f"Runs from more than one project in {where}: {listing}. "
+            "Pass --project to choose one.")
+    return runs
+
+
+def _latest_per_condition(runs: List[Run]) -> List[Run]:
+    """The newest run of each (page x device x network); say what was dropped.
+
+    One run per condition is what a campaign writes, but the store holds every
+    campaign ever measured, and a directory can hold files from before a
+    rename. Taken together they were analysed as one campaign: August beside
+    today, with the worse of the two chosen as the page's primary run.
+    """
+    latest: Dict[tuple, Run] = {}
+    for run in runs:
+        key = (run.page.name, run.condition.device, run.condition.network)
+        held = latest.get(key)
+        if held is None or (run.meta.created_at, run.run_id) > (
+                held.meta.created_at, held.run_id):
+            latest[key] = run
+    superseded = len(runs) - len(latest)
+    if superseded:
+        noun = "run" if superseded == 1 else "runs"
+        print(f"Analysing the newest run of each condition; {superseded} older "
+              f"{noun} of the same conditions set aside.", file=sys.stderr)
+    return list(latest.values())
+
+
 def load_runs(
     *,
     input_dir: Optional[Any] = None,
     from_store: Optional[Any] = None,
     pages: Optional[Sequence[str]] = None,
+    project: Optional[str] = None,
 ) -> List[Run]:
-    """Load runs from a directory of normalized JSON, or from SQLite."""
+    """Load one campaign's runs from a directory of JSON, or from SQLite.
+
+    One campaign means one project (``project``, or the only one present) and
+    the newest run of each page x condition.
+    """
     runs: List[Run] = []
     if from_store is not None:
         from store import sql
@@ -74,14 +126,17 @@ def load_runs(
                 raise ValueError(f"Could not read run JSON {path}: {exc}") from exc
             runs.append(Run.model_validate(payload))
 
+    where = from_store if from_store is not None else input_dir
+    if runs:
+        runs = _one_project(runs, project, where)
+
     if pages:
         wanted = {p.strip() for p in pages if p.strip()}
         runs = [r for r in runs if r.page.name in wanted]
 
     if not runs:
-        where = from_store if from_store is not None else input_dir
         raise FileNotFoundError(f"No runs found in {where}")
-    return sorted(runs, key=lambda r: r.run_id)
+    return sorted(_latest_per_condition(runs), key=lambda r: r.run_id)
 
 
 def group_by_page(runs: Sequence[Run]) -> Dict[str, List[Run]]:
@@ -448,6 +503,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Read runs from this SQLite database instead of a directory.")
     p.add_argument("--pages", default=None,
                    help="Comma-separated page names to analyse.")
+    p.add_argument("--project", default=None,
+                   help="Project to analyse, when the input holds more than one.")
     p.add_argument("--output-dir", default=None,
                    help="Where to write <campaign-id>/report.json.")
     p.add_argument("--no-llm", action="store_true",
@@ -511,6 +568,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             ),
             from_store=args.from_store,
             pages=pages,
+            project=args.project,
         )
     except FileNotFoundError as exc:
         print(f"No runs to analyse: {exc}", file=sys.stderr)

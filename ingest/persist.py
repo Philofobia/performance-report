@@ -31,7 +31,11 @@ from store.sql import insert_run
 
 
 def run_filename(run: Run) -> str:
-    """The run's JSON filename: one file per (page x condition).
+    """The run's JSON filename: one file per (project x page x condition).
+
+    The project leads because two campaigns share one output directory by
+    default: the CI campaign and the Oakley one both measure a ``homepage``
+    under mid-mobile/slow-4g, and without it each overwrote the other's run.
 
     Every segment is passed through :func:`store.artifacts.safe_segment`. A
     page legitimately named ``checkout/step-2`` in ``targets.yaml`` would
@@ -39,7 +43,8 @@ def run_filename(run: Run) -> str:
     at all.
     """
     return (
-        f"{safe_segment(run.page.name)}"
+        f"{safe_segment(run.project.name)}"
+        f"__{safe_segment(run.page.name)}"
         f"__{safe_segment(run.condition.device)}"
         f"__{safe_segment(run.condition.network)}.json"
     )
