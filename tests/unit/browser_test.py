@@ -757,6 +757,39 @@ def test_tbt_zero_when_no_long_tasks_occurred():
     assert webser.compute_tbt_ms([], fcp_ms=500) == 0.0
 
 
+def test_tbt_stops_at_the_first_five_second_quiet_window():
+    """TBT runs from FCP to Time to Interactive, not to whenever we stop looking.
+
+    On the live Oakley homepage, with consent working, trackers keep firing long
+    tasks for 20-30 s after load; counting them all read 10.7 s of blocking
+    against 0.4-0.65 s in WebPageTest, which stops at TTI like Lighthouse.
+    """
+    tasks = [
+        {"start": 1000, "duration": 150},   # 100 blocking
+        {"start": 3000, "duration": 250},   # 200 blocking; ends 3250
+        # 5 s quiet from 3250: interactive. Everything later is after TTI.
+        {"start": 9000, "duration": 1000},
+        {"start": 20000, "duration": 2000},
+    ]
+    assert webser.compute_tbt_ms(tasks, fcp_ms=500) == 300.0
+
+
+def test_tbt_keeps_counting_while_tasks_keep_coming():
+    """No quiet window before observation ended: every task counts, as before."""
+    tasks = [{"start": 1000 + i * 3000, "duration": 150} for i in range(5)]
+    assert webser.compute_tbt_ms(tasks, fcp_ms=500) == 500.0
+
+
+def test_tbt_excludes_our_own_synthetic_interaction():
+    """The runner presses a key and clicks to measure INP; the handlers that
+    runs are our doing, not the page's load."""
+    tasks = [
+        {"start": 1000, "duration": 150},   # 100 blocking
+        {"start": 4000, "duration": 400},   # at/after the interaction: excluded
+    ]
+    assert webser.compute_tbt_ms(tasks, fcp_ms=500, until_ms=4000) == 100.0
+
+
 def test_tbt_tolerates_malformed_entries():
     tasks = [{"start": "x", "duration": "y"}, {"start": 900, "duration": 150}]
     assert webser.compute_tbt_ms(tasks, fcp_ms=500) == 100.0

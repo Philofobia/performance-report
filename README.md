@@ -434,6 +434,16 @@ The details that make the numbers trustworthy:
   the Event Timing API's 16 ms threshold and no entry is emitted; the run then fails
   validation rather than reporting the floor as if it were a measurement. **TBT** is
   therefore also collected as the always-available lab responsiveness metric.
+- **TBT runs from FCP to Time to Interactive**, as in Lighthouse and WebPageTest: long
+  tasks after the first five-second quiet window are not load-time blocking, and
+  neither are the tasks our own synthetic interaction causes. It used to sum every long
+  task until collection; with consent working, trackers fire for 20–30 s after load,
+  and that read 10.7 s where WebPageTest reads 0.4–0.65 s. TTI here is the CPU
+  criterion only — the network one needs request timing the collector does not keep.
+- **Desktop is measured on Lighthouse's desktop network** (10 Mbps, 40 ms). It was
+  fast-3g (1.6 Mbps), which put a working 1 MB hero at 12 s of LCP — true for that link,
+  not for desktop visitors, whom WebPageTest and the field put at ~2 s. Mobile stays on
+  slow-4G with a 4× CPU slowdown, Lighthouse's mobile default.
 - **Lighthouse is opt-in.** A faithful programmatic audit needs a Node process wired to
   the page's CDP websocket. CDP already yields the same main-thread breakdown natively,
   so Lighthouse category scores are populated only if you inject `run_lighthouse_fn`.

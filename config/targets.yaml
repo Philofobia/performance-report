@@ -16,14 +16,14 @@ pages:
     url: https://www.oakley.com/en-us
     tests:
       - { device: mid-mobile, network: slow-4g, runs: 3 }
-      - { device: desktop, network: fast-3g, runs: 3 }
+      - { device: desktop, network: lighthouse-desktop, runs: 3 }
   - name: plp
     url: https://www.oakley.com/en-us/category/sunglasses
     tests:
       - { device: mid-mobile, network: slow-4g, runs: 3 }
-      - { device: desktop, network: fast-3g, runs: 3 }
+      - { device: desktop, network: lighthouse-desktop, runs: 3 }
   - name: pdp
     url: https://www.oakley.com/en-us/product/W0OO9102?variant=888392335937
     tests:
       - { device: mid-mobile, network: slow-4g, runs: 3 }
-      - { device: desktop, network: fast-3g, runs: 3 }
+      - { device: desktop, network: lighthouse-desktop, runs: 3 }

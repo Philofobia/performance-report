@@ -192,7 +192,7 @@ class RunDefaults(BaseModel):
     mobile_device: str = "mid-mobile"
     mobile_network: str = "slow-4g"
     desktop_device: str = "desktop"
-    desktop_network: str = "fast-3g"
+    desktop_network: str = "lighthouse-desktop"
 
 
 class Thresholds(BaseModel):
