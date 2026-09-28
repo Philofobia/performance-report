@@ -248,6 +248,40 @@ def test_cli_selects_a_project(input_dir, tmp_path, capsys):
     assert "ci-smoke" in capsys.readouterr().out
 
 
+class _SummaryRefused(FakeLlm):
+    """Every page analysed; the summary call refused, as a 429 did live."""
+
+    def summarize(self, payload):
+        from rag.embeddings import QuotaExceededError
+
+        self.summary_calls += 1
+        raise QuotaExceededError("429 RESOURCE_EXHAUSTED")
+
+
+def test_a_summary_that_fell_back_to_rules_is_not_reported_as_model_written(
+        input_dir, vector_store):
+    """Live Oakley: three pages written by the model, then a 429 on the summary.
+    The executive summary was the rule-based text, and the cover still said
+    `llm` with no degradation reason."""
+    report = run_analysis(load_runs(input_dir=input_dir), store=vector_store,
+                          embed_client=FakeEmbeddings(), llm_client=_SummaryRefused(),
+                          history=[], no_field=True)
+
+    assert all(p.verdict for p in report.pages)
+    assert report.meta.analysis_mode == "partial"
+    assert report.meta.summary_degradation == "quota_exhausted"
+    assert report.meta.degradation_reason is None   # no *page* fell back
+
+
+def test_a_model_written_summary_carries_no_summary_degradation(input_dir, vector_store):
+    report = run_analysis(load_runs(input_dir=input_dir), store=vector_store,
+                          embed_client=FakeEmbeddings(), llm_client=FakeLlm(),
+                          history=[], no_field=True)
+
+    assert report.meta.analysis_mode == "llm"
+    assert report.meta.summary_degradation is None
+
+
 def test_group_by_page_is_sorted(input_dir):
     grouped = group_by_page(load_runs(input_dir=input_dir))
     assert list(grouped) == ["homepage", "plp"]

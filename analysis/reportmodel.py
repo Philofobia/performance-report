@@ -415,6 +415,11 @@ class ReportMeta(BaseModel):
     degraded_appendix_entries: int = 0
     #: "live" | "stale" | "unavailable" — see field_mode_for.
     field_mode: str = "unavailable"
+    #: Why the executive summary is the rule-based one although every page was
+    #: model-written — the summary call failed. ``degradation_reason`` names
+    #: *pages* only, so without this a 429 on the last call left a report whose
+    #: cover said the model wrote a summary it did not.
+    summary_degradation: Optional[str] = None
 
 
 class Report(BaseModel):
@@ -735,11 +740,14 @@ def build_report(
     knowledge_digest: str = "",
     trends: Optional[Mapping[str, Sequence[TrendSeries]]] = None,
     field: Optional[Any] = None,
+    summary_degradation: Optional[str] = None,
 ) -> Report:
     """Assemble the Report JSON from per-page analyses.
 
     ``summary`` is anything with ``problem``, ``key_finding`` and
     ``top_actions`` — an ``LlmSummary`` or the rule-based stand-in.
+    ``summary_degradation`` is the reason the summary is the stand-in when
+    every page was model-written, and makes the report ``partial``.
 
     ``trends`` is keyed by page name. A page absent from it renders the trend
     section's empty state; no section is ever conditionally omitted.
@@ -808,8 +816,8 @@ def build_report(
             # a transient API error hits a single call -- so the mixed case is
             # the common one, and it needs a name of its own.
             analysis_mode=(
-                "llm" if not degraded
-                else "rule_based" if len(degraded) == len(ordered)
+                "llm" if not degraded and not summary_degradation
+                else "rule_based" if degraded and len(degraded) == len(ordered)
                 else "partial"
             ),
             # Every distinct reason, not just the first page's: pages fail for
@@ -824,6 +832,7 @@ def build_report(
             knowledge_digest=knowledge_digest,
             degraded_appendix_entries=sum(1 for e in appendix if e.degraded),
             field_mode=field_block.mode,
+            summary_degradation=summary_degradation,
         ),
     )
 

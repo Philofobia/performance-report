@@ -177,6 +177,26 @@ def rule_based_summary(pages: Sequence[PageAnalysis]) -> SimpleSummary:
                          top_actions=actions[:MAX_TOP_ACTIONS])
 
 
+def _degradation_reason(exc: Exception) -> str:
+    """The same reason names ``analyze_page`` gives a page that fell back.
+
+    Most specific first: ``BudgetExhaustedError`` and ``QuotaExceededError``
+    are both ``EmbeddingError``s, and "we chose not to spend" must not read as
+    a bad response.
+    """
+    from analysis.llm import InvalidModelOutputError, LlmUnavailableError
+    from rag.embeddings import MissingApiKeyError, QuotaExceededError
+
+    for kind, reason in ((BudgetExhaustedError, "budget_exhausted"),
+                         (QuotaExceededError, "quota_exhausted"),
+                         (MissingApiKeyError, "no_api_key"),
+                         (LlmUnavailableError, "model_unavailable"),
+                         (InvalidModelOutputError, "invalid_model_output")):
+        if isinstance(exc, kind):
+            return reason
+    return "invalid_model_output"
+
+
 def _summary_payload(pages: Sequence[PageAnalysis]) -> str:
     """What the summary call sees: only text this system already produced.
 
@@ -359,6 +379,7 @@ def run_analysis(
         ))
 
     summary: Any = rule_based_summary(analyses)
+    summary_degradation: Optional[str] = None
     if llm_client is not None and analyses and all(p.mode == "llm" for p in analyses):
         from analysis.llm import AnalysisError
         from rag.embeddings import EmbeddingError
@@ -367,8 +388,11 @@ def run_analysis(
             summary = _top_up_actions(
                 llm_client.summarize(_summary_payload(analyses)), analyses
             )
-        except (AnalysisError, EmbeddingError):
+        except (AnalysisError, EmbeddingError) as exc:
             summary = rule_based_summary(analyses)
+            summary_degradation = _degradation_reason(exc)
+            print(f"Executive summary: no model summary ({summary_degradation}) - "
+                  "the report carries the rule-based one.", file=sys.stderr)
 
     if page_analyses_out is not None:
         page_analyses_out.extend(analyses)
@@ -387,6 +411,7 @@ def run_analysis(
         analyses, project=project, settings=settings, summary=summary,
         generated_at=generated_at or datetime.now(timezone.utc),
         model=model, knowledge_digest=digest, trends=series, field=field,
+        summary_degradation=summary_degradation,
     )
 
 

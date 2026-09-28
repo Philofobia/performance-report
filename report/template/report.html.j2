@@ -35,6 +35,10 @@
       <dd>
         {%- if report.meta.analysis_mode == 'llm' -%}
           Retrieval-grounded model analysis (<span class="mono">{{ report.meta.model }}</span>)
+        {%- elif report.meta.analysis_mode == 'partial' and report.meta.summary_degradation and not report.meta.degradation_reason -%}
+          Retrieval-grounded model analysis (<span class="mono">{{ report.meta.model }}</span>)
+          of every page, but the executive summary fell back to rule-based
+          analysis ({{ report.meta.summary_degradation }})
         {%- elif report.meta.analysis_mode == 'partial' -%}
           Retrieval-grounded model analysis (<span class="mono">{{ report.meta.model }}</span>),
           but some pages fell back to rule-based analysis

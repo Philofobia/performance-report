@@ -133,6 +133,23 @@ def test_a_partial_report_does_not_claim_no_model_was_used():
     assert "some pages fell back" in html
 
 
+def _summary_fell_back(report):
+    """Every page model-written; the executive summary refused (a live 429)."""
+    report.meta = report.meta.model_copy(update={
+        "degradation_reason": None, "summary_degradation": "quota_exhausted"})
+    return report
+
+
+def test_a_summary_written_by_rules_is_named_on_the_cover():
+    """Every page model-written, the summary not: the cover must not blame pages."""
+    html = render_html(_summary_fell_back(a_report(mode="partial")))
+
+    assert "executive summary" in html
+    assert "quota_exhausted" in html
+    assert "some pages fell back" not in html
+    assert "no model reasoned over these measurements" not in html
+
+
 def test_renders_a_complete_html_document():
     html = render_html(a_report())
     assert html.lstrip().startswith("<!DOCTYPE html>")
