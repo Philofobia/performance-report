@@ -33,10 +33,21 @@ it** · **real-user (RUM) data pulled from Grafana** — bounce, conversion, pag
 session, rage clicks, frustration index, field Core Web Vitals and CDN cache
 behaviour, joined onto each tested page · **a per-page account of degradation**:
 transient API failures are retried rather than dropping a page to boilerplate, and a
-report where only some pages fell back says so on its cover instead of claiming the
-whole run was rule-based.
+report where only some pages fell back — or whose executive summary did — says so on
+its cover instead of claiming more than the model wrote · **a live Oakley test that
+runs the real campaign to a PDF and reads the PDF back**, checking the numbers in the
+document against `report.json` · **a plan whose numbers are the conservative
+projection from the measured value**, one step per action, with recommendations
+chosen by how badly the metric they fix is failing · **PDF numbers that can be
+searched and copied** on every platform · **one campaign per analysis**: one project,
+the newest run of each page × condition.
 
-**Missing:** no phase in the [Roadmap](#roadmap) is unbuilt. Four limitations are
+**Verified against the live site on 2026-09-28:** a three-page Oakley campaign,
+Grafana field data (1.38 M sessions over 7 days), model analysis of every page, a
+25-page PDF with the skeleton check passing. Until that day `ingest field` did not
+read `.env`, so no Oakley report before it carried field data.
+
+**Missing:** no phase in the [Roadmap](#roadmap) is unbuilt. Six limitations are
 known and accepted rather than fixed, each written up where the code lives:
 
 - **Redirect SSRF is detected, not prevented.** A navigation that ends somewhere
@@ -58,6 +69,16 @@ known and accepted rather than fixed, each written up where the code lives:
   its field row as unavailable rather than guessing. `by_country` is also
   `LIMIT 15` and several field tables drop groups under 50 beacons, so those
   listings are partial by design — the report captions say so.
+- **Projected ranges belong to a playbook, not a tactic.** Front matter declares one
+  range per playbook (`expected_ttfb_reduction_pct` in `caching.md`), so every tactic
+  in it projects onto that metric — "Reduce request count" is shown as a TTFB change.
+  Per-tactic ranges would need a front-matter format per section
+  ([`analysis/estimator.py`](analysis/estimator.py)).
+- **The daily request budget is an estimate, and Google's own limit can be lower.**
+  On 2026-09-28 the model answered `503 high demand` repeatedly — each retry is a
+  metered request, so one three-page report cost 12 requests, not 4 — and then `429`
+  after 22 requests, under the configured 60. Read your real limits in AI Studio
+  ([Token budget](#token-budget)).
 
 Anything this README does not describe as working is not there.
 
@@ -265,7 +286,9 @@ python -m cli ingest auto --targets config/ci-targets.yaml   # a different campa
 so you can explore without editing YAML.
 
 **Each (page × condition) is persisted the moment it finishes**, three ways: the
-normalized run JSON to `--output-dir` (default `data/processed`), the captures into
+normalized run JSON to `--output-dir` (default `data/processed`, one
+`<project>__<page>__<device>__<network>.json` per condition — the project leads so two
+campaigns sharing the directory cannot overwrite each other), the captures into
 the run-scoped artifact store under `settings.storage.raw_dir`, and a row in the
 SQLite run store — which is what `list-runs` reads and what trends accumulate from.
 Persisting per condition rather than at the end is deliberate: a campaign that dies
@@ -451,7 +474,8 @@ rule. Full reasoning in [PROJECT_SPEC.md §8.1](docs/PROJECT_SPEC.md).
 renders. It is the last stage that computes anything; the template only formats.
 
 ```bash
-python -m cli analyze                                # every run in data/processed
+python -m cli analyze                                # the campaign in data/processed
+python -m cli analyze --project oakley               # when it holds more than one project
 python -m cli analyze --pages homepage,plp
 python -m cli analyze --from-store data/processed/runs.sqlite
 python -m cli analyze --no-llm                       # rule-based only, no model calls
@@ -463,6 +487,13 @@ Output lands in `data/reports/<campaign-id>/report.json`. The campaign id is der
 from the run ids, not the clock, so re-analysing the same runs writes the same file.
 A `--from-store` path that does not exist is an error, not an empty result — SQLite
 would otherwise create the file and the typo would read as "no runs yet".
+
+**One analysis is one campaign.** Input holding runs from more than one project is
+refused with the projects listed — a CI run or a manual entry beside Oakley's used to
+be merged into the Oakley report — and `--project` chooses one. Only the newest run
+of each page × device × network is analysed; stderr says how many older ones were set
+aside. That is what makes `--from-store` usable: the store holds every campaign ever
+measured, and all of it used to be analysed as one.
 
 **One call per page, plus one for the summary.** Each page is analysed at its worst
 condition — a recommendation derived from the easy desktop run is the wrong
@@ -478,7 +509,13 @@ not repaired, and the drop is counted in `meta.dropped_recommendations`.
 Stacked fixes on one metric are discounted (each subsequent fix at 80% of its stated
 effect) and capped at 70% total, because the second image fix cannot re-win bytes the
 first already removed. Reports show the conservative low bound alongside the playbook's
-full band.
+full band. Each recommendation carries only its own step of that chain, so two tactics
+from one playbook show two consecutive steps, not both claiming the whole effect.
+
+Without a model, recommendations come from the playbooks whose front matter names a
+detected symptom — the playbook for the worst-failing metric first, tactics in the
+order the playbook lists them. Both used to be alphabetical, which on the live
+homepage left out the JavaScript playbook while blocking time was its worst metric.
 
 **It always produces a report.** No API key, a spent [token budget](#token-budget), an
 exhausted free-tier quota, or a model that returns unusable JSON twice all degrade to a
@@ -493,7 +530,11 @@ model-written. That report is `meta.analysis_mode="partial"` — not `"llm"`, wh
 would overclaim, and not `"rule_based"`, which used to print "no model reasoned over
 these measurements" on the cover of a report a model had largely written.
 `meta.degradation_reason` lists every distinct reason, not just the first page's, and
-each degraded page is named on stderr while the campaign runs. Transient failures —
+each degraded page is named on stderr while the campaign runs. The executive summary is
+one more model call and can fail on its own — a `429` on the last call is the usual
+way — so a report whose pages were all model-written but whose summary is the
+rule-based one is `partial` too, with the reason in `meta.summary_degradation` and the
+cover naming the summary rather than any page. Transient failures —
 5xx, dropped connections, timeouts — are retried with the same backoff quota errors
 get, so most of them never reach the report at all.
 
@@ -635,9 +676,24 @@ offline suite stays browser-free; only the real PDF run is `e2e`-marked.
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 1128 offline tests, no browser, no network
+pytest -m "not e2e"      # 1181 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
+pytest tests/e2e/oakley_report_e2e_test.py -v   # the live Oakley campaign, to a PDF
 ```
+
+The Oakley test is the one that proves the deliverable rather than the parts: it runs
+`ingest auto` → `analyze --no-llm --no-field` → `report --skeleton-check` against the
+homepage in a temporary working directory — your `data/` and run history are untouched
+— then opens the PDF with `pypdf` and checks what it *says*: every section, the
+campaign id, the page URL, each condition's LCP matching `report.json`, one screenshot
+per capture, a real page rather than an Akamai block page, and the bot token absent
+from every artifact written. It needs `AKAMAI_BOT_TOKEN` in `.env` and skips without
+it, so CI skips it. About a minute.
+
+The PDF's text layer is checked on every platform
+(`tests/e2e/report_pdf_e2e_test.py`): on Windows the report's faces once put U+0000 in
+place of every digit, printed but unsearchable, and Linux CI — with none of those
+fonts — could not have noticed.
 
 The Playwright surface and every metric collector are injected, so the offline suite
 runs entirely against fakes. CI additionally enforces ≥80% coverage, runs `pip-audit`
