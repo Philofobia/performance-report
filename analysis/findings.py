@@ -291,9 +291,29 @@ def build_recommendations(
 
 _SEVERITY_RANK = {"fail": 0, "warn": 1}
 
+#: LCP elements an image playbook can speed up.
+_IMAGE_ELEMENTS = ("IMG", "IMAGE", "SVG", "VIDEO", "PICTURE")
+
+
+def applicable_metadata(metadata: Mapping[str, Any], run: Run) -> Mapping[str, Any]:
+    """A playbook's front matter, minus ranges this run's page cannot realise.
+
+    An image playbook's LCP range assumes the LCP element is an image. On the
+    Oakley PLP (mobile) it was the OneTrust consent banner, and the plan still
+    promised "Serve modern formats: 7716 ms -> 6559 ms" - an image fix cannot
+    move a text banner's paint. When the element is known and is not an
+    image, the LCP range is dropped; the tactic stays, with its other ranges.
+    """
+    element = (run.metrics.cwp.lcp_element or "").strip().upper()
+    if (str(metadata.get("category", "")).strip() == "images" and element
+            and not element.startswith(_IMAGE_ELEMENTS)):
+        return {k: v for k, v in metadata.items()
+                if not str(k).startswith("expected_lcp_")}
+    return metadata
+
 
 def _playbook_relevance(
-    tactics: Sequence[Chunk], symptoms: Sequence[Symptom]
+    tactics: Sequence[Chunk], symptoms: Sequence[Symptom], run: Run
 ) -> tuple:
     """How urgently this page needs a playbook — smaller sorts first.
 
@@ -307,7 +327,8 @@ def _playbook_relevance(
     and images all six and never reached javascript.md: on the live Oakley
     homepage, whose worst measurement was blocking time.
     """
-    projected = {r.metric for r in parse_impact_ranges(tactics[0].metadata)}
+    projected = {r.metric for r in
+                 parse_impact_ranges(applicable_metadata(tactics[0].metadata, run))}
     claimed = set(_symptom_list(tactics[0]))
     own = [s for s in symptoms if s.code in claimed and s.metric in projected]
     if not own:
@@ -338,7 +359,7 @@ def _rule_based_recommendations(
 
     ranked = sorted(
         per_source,
-        key=lambda source: (_playbook_relevance(per_source[source], symptoms), source),
+        key=lambda source: (_playbook_relevance(per_source[source], symptoms, run), source),
     )
     selected: List[Chunk] = []
     for source in ranked:
@@ -346,7 +367,8 @@ def _rule_based_recommendations(
     selected = selected[:MAX_RULE_BASED_RECOMMENDATIONS]
 
     candidates = [
-        Candidate(source=chunk.source, metadata=chunk.metadata) for chunk in selected
+        Candidate(source=chunk.source, metadata=applicable_metadata(chunk.metadata, run))
+        for chunk in selected
     ]
     projections = project_each(candidates, _metrics_map(run))
 
@@ -565,7 +587,8 @@ def analyze_page(
 
     metrics = _metrics_map(primary)
     candidates = [
-        Candidate(source=rec.playbook_source, metadata=allowed[rec.playbook_source])
+        Candidate(source=rec.playbook_source,
+                  metadata=applicable_metadata(allowed[rec.playbook_source], primary))
         for rec in kept
     ]
     projections = project_each(candidates, metrics)

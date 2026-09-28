@@ -229,6 +229,34 @@ def test_tactics_are_taken_in_the_playbooks_own_order():
     assert sorted(chosen, key=in_document_order.index) == in_document_order[:len(chosen)]
 
 
+def test_image_advice_does_not_promise_an_lcp_the_image_does_not_set():
+    """PLP mobile: the LCP element was the OneTrust banner, and the plan still
+    promised 'Serve modern formats: 7716 ms -> 6559 ms'. An image fix cannot
+    move the paint time of a text banner."""
+    run = make_run(lcp=7716, cls=0.02, inp=150)
+    run.metrics.cwp.lcp_element = "DIV#onetrust-policy-text"
+    symptoms = retrieve.detect_symptoms(run, Thresholds())
+    chunks = knowledge.load_knowledge_dir("data/knowledge")
+
+    recommendations = rule_based_analysis(run, symptoms, chunks)[3]
+
+    image_lcp = [p for r in recommendations if r.playbook_source == "images.md"
+                 for p in r.projections if p.metric == "lcp_ms"]
+    assert image_lcp == []
+
+
+def test_image_advice_still_projects_lcp_when_the_lcp_is_an_image():
+    run = make_run(lcp=6200, cls=0.02, inp=150)
+    run.metrics.cwp.lcp_element = "IMG.oo_hp_cm_bglayer …/hero-m.jpg"
+    symptoms = retrieve.detect_symptoms(run, Thresholds())
+    chunks = knowledge.load_knowledge_dir("data/knowledge")
+
+    recommendations = rule_based_analysis(run, symptoms, chunks)[3]
+
+    assert any(p.metric == "lcp_ms" for r in recommendations
+               if r.playbook_source == "images.md" for p in r.projections)
+
+
 def test_rule_based_analysis_on_a_healthy_run_says_so():
     run = make_run(lcp=1500, cls=0.01, inp=80)
     run.metrics.cwp.fcp_ms = 1200

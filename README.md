@@ -747,7 +747,7 @@ offline suite stays browser-free; only the real PDF run is `e2e`-marked.
 ## Testing
 
 ```bash
-pytest -m "not e2e"      # 1222 offline tests, no browser, no network
+pytest -m "not e2e"      # 1235 offline tests, no browser, no network
 pytest -m e2e            # real Chromium against live pages
 pytest tests/e2e/oakley_report_e2e_test.py -v   # the live Oakley campaign, to a PDF
 ```
