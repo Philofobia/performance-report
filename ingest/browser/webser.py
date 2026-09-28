@@ -54,6 +54,10 @@ COLLECTOR_SCRIPT = """
       // A load time but no render time: startTime is the image's *download*,
       // not its paint (older Chromium, cross-origin, no Timing-Allow-Origin).
       state.lcp_paint_missing = !(e.renderTime > 0) && e.loadTime > 0;
+      const el = e.element;
+      const cls = el && typeof el.className === 'string' ? el.className.trim().split(/\\s+/)[0] : '';
+      const tail = e.url ? ' …/' + e.url.split('?')[0].split('/').pop() : '';
+      state.lcp_element = el ? (el.tagName + (el.id ? '#' + el.id : cls ? '.' + cls : '') + tail).slice(0, 300) : null;
       if (e.size > state.lcp_timed_max_size) state.lcp_timed_max_size = e.size;
     } else if (e.size > state.lcp_untimed_max_size) {
       state.lcp_untimed_max_size = e.size;
@@ -93,6 +97,7 @@ READ_SCRIPT = """
     longtasks: s.longtasks || [],
     interaction_at: s.interaction_at === undefined ? null : s.interaction_at,
     lcp_paint_missing: s.lcp_paint_missing === true,
+    lcp_element: s.lcp_element || null,
     lcp_timed_max_size: s.lcp_timed_max_size || 0,
     lcp_untimed_max_size: s.lcp_untimed_max_size || 0
   };
@@ -245,6 +250,8 @@ def collect_web_vitals(page) -> Dict[str, Any]:
                                    until_ms=raw.get("interaction_at"))
     # Not a measurement — a qualifier on lcp_ms. See lcp_underestimated().
     out["lcp_underestimated"] = lcp_underestimated(raw)
+    element = raw.get("lcp_element")
+    out["lcp_element"] = str(element)[:300] if element else None
     return out
 
 

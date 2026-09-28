@@ -429,13 +429,21 @@
         {% endfor %}
         </tbody>
       </table>
+      {% if page.conditions|selectattr('lcp_element')|list %}
+        <ul class="evidence-list">
+          {% for row in page.conditions if row.lcp_element %}
+          <li class="mono">LCP element, {{ row.device }} / {{ row.network }}: {{ row.lcp_element }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
       {% if page.conditions|selectattr('lcp_underestimated')|list %}
         <p class="qualifier-note">
           † LCP is a <strong>lower bound</strong> for this condition. The largest
           element on the page was a cross-origin resource served without a
           <code>Timing-Allow-Origin</code> header, so the browser exposed no render
-          time for it. The figure shown is the largest element that <em>did</em>
-          report a time; the real LCP is later by an unknown margin.
+          time for it — at most its download time. The figure shown is the latest
+          time the browser <em>did</em> report; the real LCP is later by an
+          unknown margin.
         </p>
       {% endif %}
     </div>

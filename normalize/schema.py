@@ -63,6 +63,10 @@ class CwpMetrics(BaseModel):
     #: browser exposed no render time for it. Defaulted so runs recorded
     #: before this qualifier existed still validate.
     lcp_underestimated: bool = False
+    #: Which element ``lcp_ms`` belongs to - tag, class, end of its URL. A
+    #: number that disagrees with WebPageTest needs this to explain itself: on
+    #: PLP mobile the LCP was the OneTrust consent banner, not the product grid.
+    lcp_element: Optional[str] = Field(default=None, max_length=300)
     target_lcp_ms: Optional[float] = Field(default=None, ge=0)
     target_cls: Optional[float] = Field(default=None, ge=0)
     target_inp_ms: Optional[float] = Field(default=None, ge=0)

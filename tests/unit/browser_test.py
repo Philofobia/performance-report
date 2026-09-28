@@ -1171,6 +1171,21 @@ def test_merge_median_metrics_ors_lcp_underestimated_across_runs():
     assert merged["cwp"]["lcp_ms"] == 2000
 
 
+def test_the_lcp_element_comes_from_the_median_run():
+    """Which element the median LCP belongs to - not a median of strings.
+
+    PLP mobile read 7.9 s where WebPageTest read ~2 s; only the element
+    (the OneTrust consent banner) explains why.
+    """
+    merged = automated.merge_median_metrics([
+        {"cwp": {"lcp_ms": 2100, "lcp_element": "IMG.preview_image …/qt.png"}},
+        {"cwp": {"lcp_ms": 7872, "lcp_element": "DIV.onetrust-policy-text"}},
+        {"cwp": {"lcp_ms": 7900, "lcp_element": "DIV.onetrust-policy-text"}},
+    ])
+    assert merged["cwp"]["lcp_ms"] == 7872
+    assert merged["cwp"]["lcp_element"] == "DIV.onetrust-policy-text"
+
+
 def test_merge_median_metrics_lcp_underestimated_false_when_no_run_flagged():
     merged = automated.merge_median_metrics([
         {"cwp": {"lcp_ms": 1000, "cls": 0.1, "inp_ms": 10}},

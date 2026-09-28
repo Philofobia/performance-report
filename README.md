@@ -440,6 +440,16 @@ The details that make the numbers trustworthy:
   task until collection; with consent working, trackers fire for 20–30 s after load,
   and that read 10.7 s where WebPageTest reads 0.4–0.65 s. TTI here is the CPU
   criterion only — the network one needs request timing the collector does not keep.
+- **Every LCP names its element** — tag, class, end of its URL — in the report's
+  condition table. A number that disagrees with WebPageTest has to explain itself: on
+  the Oakley PLP (mobile) the LCP was the OneTrust consent banner, painted at ~7.3 s
+  and larger than the small product images — real for a first visit, and invisible
+  to WebPageTest captures whose consent script the bot header had broken. A consent
+  banner as LCP element is reported as its own finding.
+- **An LCP with no paint time is a lower bound.** Without `Timing-Allow-Origin`, older
+  Chromium gives a cross-origin image only its download time; that value is flagged
+  `†`, not reported as a paint. The venv must run the pinned Playwright (1.62): at
+  1.48 the Oakley hero read its download time, hiding the delay OAK-39155 is about.
 - **Desktop is measured on Lighthouse's desktop network** (10 Mbps, 40 ms). It was
   fast-3g (1.6 Mbps), which put a working 1 MB hero at 12 s of LCP — true for that link,
   not for desktop visitors, whom WebPageTest and the field put at ~2 s. Mobile stays on

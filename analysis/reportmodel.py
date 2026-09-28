@@ -163,6 +163,8 @@ class ConditionRow(BaseModel):
     #: browser exposed no render time for it. A separate field rather than a
     #: `metrics` key — the dict is float-typed, and a qualifier is not a metric.
     lcp_underestimated: bool = False
+    #: The element ``metrics["lcp_ms"]`` belongs to, when the run recorded it.
+    lcp_element: Optional[str] = None
 
 
 class FindingModel(BaseModel):
@@ -492,6 +494,7 @@ def _condition_row(run: Run) -> ConditionRow:
         },
         # Without this the table would present a lower bound as a measurement.
         lcp_underestimated=cwp.lcp_underestimated,
+        lcp_element=cwp.lcp_element,
     )
 
 

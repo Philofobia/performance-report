@@ -197,6 +197,15 @@ def test_the_har_block_lists_findings_and_names_what_the_test_caused():
     assert "Not the site's problem" in html and "x-akamai-bot" in html
 
 
+def test_the_lcp_element_is_named_under_the_conditions_table():
+    report = a_report()
+    report.pages[0].conditions[0].lcp_element = "DIV.onetrust-policy-text"
+
+    html = render_html(report)
+
+    assert "LCP element, mid-mobile / slow-4g: DIV.onetrust-policy-text" in html
+
+
 def test_without_har_captures_the_sections_say_how_to_supply_them():
     html = render_html(a_report())
 
