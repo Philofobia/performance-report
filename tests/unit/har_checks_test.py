@@ -319,9 +319,30 @@ def test_untracked_findings_list_render_blocking_and_large_shifts(tmp_path):
 
     findings = hc.untracked_findings(three_runs(tmp_path, build))
 
-    assert any("render-blocking" in f and "main.min.css 170 ms" in f for f in findings)
+    header = findings.index(next(f for f in findings if "render-blocking" in f))
+    assert findings[header + 1].strip() == "https://www.oakley.com/main.min.css 170 ms"
     assert any("Layout shift 0.055 at 5181 ms" in f and "y=317" in f for f in findings)
     assert any(f.startswith("LCP 2034 ms across 3 runs") for f in findings)
+
+
+def test_images_competing_with_the_lcp_image_at_high_priority_are_listed(tmp_path):
+    """The live OO homepage fetches a placeholder "empty" hero at High priority
+    alongside the real one - bandwidth the LCP image does not get."""
+    empty = "https://media.oakley.com/cms/1879572/portrait_ratio375x600/750/ww-empty-l1-hero-m.png"
+
+    def build(pid):
+        return page(pid, lcp=2034, lcp_url=HERO), [
+            entry(HERO, 775, 948, page=pid),
+            entry(empty, 794, 951, page=pid, ctype="image/png"),
+            entry("https://media.oakley.com/tile.jpg", 1840, 1963, page=pid, priority="Low"),
+        ]
+
+    findings = hc.untracked_findings(three_runs(tmp_path, build))
+
+    header = findings.index(next(f for f in findings if "compete" in f))
+    assert findings[header].startswith("1 other image(s) compete")
+    assert "ww-empty-l1-hero-m.png 794–951 ms" in findings[header + 1]
+    assert not any("tile.jpg" in f for f in findings)
 
 
 def test_evidence_urls_are_redacted(tmp_path):

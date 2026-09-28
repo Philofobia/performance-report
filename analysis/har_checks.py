@@ -168,8 +168,25 @@ def load_har(path: Path) -> List[HarRun]:
 # Helpers
 # --------------------------------------------------------------------------- #
 def _short(url: str, limit: int = 110) -> str:
+    """A redacted URL short enough for a list line, shortened in the middle.
+
+    The host and the last path segment (with its query) are what identify a
+    request - ``media.oakley.com/…/ww-empty-l1-hero-m.png`` - so those are
+    kept, and the opaque middle of the path goes first.
+    """
     text = redact_url(url)
-    return text if len(text) <= limit else text[:limit - 1] + "…"
+    if len(text) <= limit:
+        return text
+    parts = urlsplit(text)
+    segments = [s for s in parts.path.split("/") if s]
+    query = f"?{parts.query}" if parts.query else ""
+    # As many trailing segments as fit: several themes each ship a main.min.css,
+    # and ".../theme-oakleyhome/css/main.min.css" is the one a developer can find.
+    for keep in range(len(segments), 0, -1):
+        short = f"{parts.hostname}/…/{'/'.join(segments[-keep:])}{query}"
+        if len(short) <= limit:
+            return short
+    return short[:limit - 1] + "…"
 
 
 def _asset(url: str) -> str:
@@ -516,13 +533,24 @@ def untracked_findings(runs: Sequence[HarRun]) -> List[str]:
                      f"{mid.lcp_ms:.0f} ms — {_short(image.url, 80)}")
         out.append(line)
 
+        if image is not None:
+            rivals = [r for r in mid.requests
+                      if r.is_image and r.url != image.url
+                      and (r.priority or "").lower() in ("high", "veryhigh")
+                      and r.start_ms < image.end_ms]
+            if rivals:
+                out.append(f"{len(rivals)} other image(s) compete with the LCP image at "
+                           f"high priority ({mid.label}):")
+                out += [f"  {_short(r.url, 90)} {r.start_ms:.0f}–{r.end_ms:.0f} ms"
+                        for r in rivals[:4]]
+
     blocking = [r for r in first.requests
                 if r.render_blocking in ("blocking", "in_body_parser_blocking")]
     if blocking:
         slowest = sorted(blocking, key=lambda r: -(r.end_ms - r.start_ms))[:5]
-        out.append(f"{len(blocking)} render-blocking requests ({first.label}); slowest: "
-                   + "; ".join(f"{_short(r.url, 70)} {r.end_ms - r.start_ms:.0f} ms"
-                               for r in slowest))
+        out.append(f"{len(blocking)} render-blocking requests ({first.label}); "
+                   f"the slowest {len(slowest)}:")
+        out += [f"  {_short(r.url, 90)} {r.end_ms - r.start_ms:.0f} ms" for r in slowest]
 
     late = [(run, s) for run in runs for s in run.layout_shifts
             if s.get("score", 0) >= 0.02]
@@ -533,8 +561,8 @@ def untracked_findings(runs: Sequence[HarRun]) -> List[str]:
 
     failed = [r for r in first.requests if r.status >= 400]
     if failed:
-        out.append(f"{len(failed)} failed requests ({first.label}): "
-                   + "; ".join(f"{r.status} {_short(r.url, 70)}" for r in failed[:5]))
+        out.append(f"{len(failed)} failed requests ({first.label}):")
+        out += [f"  {r.status} {_short(r.url, 90)}" for r in failed[:5]]
     return out
 
 
