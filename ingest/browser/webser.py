@@ -51,6 +51,9 @@ COLLECTOR_SCRIPT = """
   observe('largest-contentful-paint', (e) => {
     if (e.startTime > 0) {
       state.lcp_ms = e.startTime;
+      // A load time but no render time: startTime is the image's *download*,
+      // not its paint (older Chromium, cross-origin, no Timing-Allow-Origin).
+      state.lcp_paint_missing = !(e.renderTime > 0) && e.loadTime > 0;
       if (e.size > state.lcp_timed_max_size) state.lcp_timed_max_size = e.size;
     } else if (e.size > state.lcp_untimed_max_size) {
       state.lcp_untimed_max_size = e.size;
@@ -89,6 +92,7 @@ READ_SCRIPT = """
     ttfb_ms: nav ? nav.responseStart : null,
     longtasks: s.longtasks || [],
     interaction_at: s.interaction_at === undefined ? null : s.interaction_at,
+    lcp_paint_missing: s.lcp_paint_missing === true,
     lcp_timed_max_size: s.lcp_timed_max_size || 0,
     lcp_untimed_max_size: s.lcp_untimed_max_size || 0
   };
@@ -208,6 +212,12 @@ def lcp_underestimated(raw: Dict[str, Any]) -> bool:
     candidate is *larger* than every candidate that did report a time, the
     element that actually decides the page's LCP was never timed, and the value
     we can report is the largest timed element — a lower bound.
+
+    Also true when the winning candidate had a load time but no render time
+    (``lcp_paint_missing``): its ``startTime`` is when the image *downloaded*,
+    not when it was painted. Chromium 130 did this for the cross-origin Oakley
+    hero, reporting 1192 ms for an image painted — per OAK-39155 — about a
+    second later; Chromium 151 exposes the paint (1344 ms).
     """
     def _size(key: str) -> float:
         try:
@@ -215,6 +225,8 @@ def lcp_underestimated(raw: Dict[str, Any]) -> bool:
         except (TypeError, ValueError):
             return 0.0
 
+    if raw.get("lcp_paint_missing") is True:
+        return True
     return _size("lcp_untimed_max_size") > _size("lcp_timed_max_size")
 
 

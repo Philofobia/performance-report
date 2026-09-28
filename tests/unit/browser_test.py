@@ -628,6 +628,17 @@ def test_lcp_not_underestimated_when_largest_candidate_is_timed():
     ) is False
 
 
+def test_lcp_is_a_lower_bound_when_the_winner_reports_download_not_paint():
+    """Chromium 130 gave the cross-origin Oakley hero renderTime 0 and a
+    loadTime: startTime fell back to the download (1192 ms), not the paint -
+    which OAK-39155 puts about a second later. Chromium 151 exposes the paint
+    (1344 ms). Whatever the browser, a value without a paint time is a floor."""
+    assert webser.lcp_underestimated(
+        {"lcp_timed_max_size": 1024650, "lcp_paint_missing": True}) is True
+    assert webser.lcp_underestimated(
+        {"lcp_timed_max_size": 1024650, "lcp_paint_missing": False}) is False
+
+
 def test_lcp_not_underestimated_when_no_untimed_candidates():
     assert webser.lcp_underestimated({"lcp_timed_max_size": 9010}) is False
     assert webser.lcp_underestimated({}) is False
