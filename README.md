@@ -243,8 +243,12 @@ pages:
     url: https://www.oa.com/en-us
 ```
 
-Headers are applied at the browser-context level, so they cover the document _and_
-every sub-resource. This is **fully opt-in**: declare none and nothing changes. Use
+Headers reach every request to the page's own site and its subdomains — the document,
+and `media.`/`assets2.oakley.com` images — and **no third party**. They used to be set
+on the whole browser context; that sent the token to every host, forced CORS
+preflights that failed, and lost every `media.oakley.com` image, so the hero never
+painted and LCP read 6–9 s instead of ~2 s. This is **fully opt-in**: declare none and
+nothing changes. Use
 `--no-headers` to run without them, and see [CUSTOM_HEADERS.md](docs/CUSTOM_HEADERS.md)
 for scoping rules and how to confirm the token was accepted.
 

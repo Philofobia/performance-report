@@ -218,11 +218,40 @@ def test_measurements_are_of_the_real_page_not_a_block_page(campaign):
 
 
 def test_the_main_document_answered_200(campaign):
-    """The appendix lists each capture's requests; the document is among them."""
+    """Read from the capture itself: the appendix lists only the heaviest
+    requests, and once the site's images load the document is not among them."""
     for entry in campaign.report["appendix"]:
-        document = [r for r in entry["requests"] if r["url"] == PAGE_URL]
+        har = json.loads((campaign.workdir / entry["har"]).read_text(encoding="utf-8"))
+        document = [e for e in har["log"]["entries"] if e["request"]["url"] == PAGE_URL]
         assert document, f"{entry['device']}: main document missing from the HAR"
-        assert document[0]["status"] == 200
+        assert document[0]["response"]["status"] == 200
+
+
+def test_the_sites_own_images_load(campaign):
+    """media.oakley.com carries the hero. When the bot header went to every
+    host, CORS preflights failed and every one of these images was lost - the
+    hero never painted and LCP fell back to late text."""
+    for entry in campaign.report["appendix"]:
+        har = json.loads((campaign.workdir / entry["har"]).read_text(encoding="utf-8"))
+        media = [e for e in har["log"]["entries"]
+                 if "media.oakley.com" in e["request"]["url"]]
+        failed = [e for e in media if e["response"]["status"] <= 0
+                  or e["response"]["status"] >= 400]
+        assert media, f"{entry['device']}: no media.oakley.com requests at all"
+        assert not failed, (f"{entry['device']}: {len(failed)} of {len(media)} "
+                            "media.oakley.com requests failed")
+
+
+def test_the_bot_token_never_reaches_a_third_party(campaign):
+    """The allowlist token belongs to the site. The HAR is scrubbed on its way
+    into the store, so check the header *name* on each request instead."""
+    for entry in campaign.report["appendix"]:
+        har = json.loads((campaign.workdir / entry["har"]).read_text(encoding="utf-8"))
+        leaked = [e["request"]["url"] for e in har["log"]["entries"]
+                  if "oakley.com" not in (e["request"]["url"].split("/")[2])
+                  and any(h["name"].lower() == "x-akamai-bot"
+                          for h in e["request"]["headers"])]
+        assert not leaked, f"bot header sent to third parties: {leaked[:3]}"
 
 
 def test_core_web_vitals_are_present(campaign):

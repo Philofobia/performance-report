@@ -15,11 +15,12 @@ asked for. See :class:`UnsafeRedirectError` for what that catches and
 prevention.
 
 **Optional custom request headers.** ``extra_http_headers`` (e.g. a bot-allowlist
-token for a site behind Akamai) is applied at *context* level, so it covers the
-document and every sub-resource — scripts, images, XHR — which is precisely what
-a bot filter inspects. It is entirely opt-in: when no headers are supplied the
-key is not added to the context kwargs at all, and the context is built exactly
-as it was before the feature existed.
+token for a site behind Akamai) is added to every request to the page's own site
+and its subdomains — document, scripts, images, XHR — and to no other host
+(``install_site_headers``). Context-wide headers once reached third parties,
+forced CORS preflights that failed, and broke the very images LCP is measured
+on. It is entirely opt-in: with no headers, no request is intercepted and the
+context is built exactly as it was before the feature existed.
 
 Mockability: the Playwright surface (browser/context/page/CDP session) and the
 measurement collectors are injected. Tests supply fakes + canned metrics, so no
@@ -28,7 +29,8 @@ real browser is ever launched in offline tests.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
+from urllib.parse import urlsplit
 
 from config.load import Device, Network
 from normalize import url_safety
@@ -157,6 +159,50 @@ def network_throttle_params(network: Network) -> Dict[str, Any]:
     }
 
 
+def header_scope(page_url: str) -> str:
+    """The site a page's request headers may reach: its host, minus ``www.``.
+
+    ``www.oakley.com`` scopes to ``oakley.com``, which admits
+    ``media.oakley.com`` and ``assets2.oakley.com`` — Akamai fronts those too
+    and blocks their images without the token. Deliberately not a registrable-
+    domain guess: stripping more than ``www.`` would turn
+    ``shop.example.co.uk`` into ``co.uk`` and send the token to every site
+    under it. Too narrow fails loudly (a blocked image); too broad leaks.
+    """
+    host = (urlsplit(page_url).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def in_header_scope(request_url: str, scope: str) -> bool:
+    """Whether ``request_url`` is ``scope`` itself or one of its subdomains."""
+    host = (urlsplit(request_url).hostname or "").lower()
+    return bool(scope) and (host == scope or host.endswith("." + scope))
+
+
+def install_site_headers(page, page_url: str, headers: Mapping[str, str]) -> None:
+    """Add ``headers`` to the site's own requests, and to nothing else.
+
+    Context-wide ``extra_http_headers`` sent the bot-allowlist token to every
+    host on the page. A non-safelisted header on a cross-origin fetch, XHR or
+    ``crossorigin`` image forces a CORS preflight, and hosts that do not allow
+    it fail the request: on the live Oakley homepage every media.oakley.com
+    image failed, the hero never painted, and LCP fell back to late text —
+    6-9 s against ~2 s in WebPageTest and in the field. It also handed the
+    token to forter, google, doubleclick and every other third party.
+
+    Headers added at interception are applied below the CORS layer, so they
+    trigger no preflight, and cookies are preserved. The cost is interception
+    latency on first-party requests only; a header-less run installs nothing.
+    """
+    scope = header_scope(page_url)
+    extra = dict(headers)
+
+    def _add(route) -> None:
+        route.continue_(headers={**route.request.headers, **extra})
+
+    page.route(lambda request_url: in_header_scope(request_url, scope), _add)
+
+
 def apply_cpu_throttle(cdp, device: Device) -> None:
     """Apply the device's CPU throttle rate via CDP."""
     cdp.send("Emulation.setCPUThrottlingRate", {"rate": device.cpu_throttle})
@@ -235,11 +281,8 @@ class BrowserRunner:
 
         run_token = run_id or "run"
         ctx_kwargs = device_context_kwargs(device)
-
-        # Opt-in: only add the key when headers were actually supplied, so a
-        # header-less run builds an identical context to before this existed.
-        if extra_http_headers:
-            ctx_kwargs["extra_http_headers"] = dict(extra_http_headers)
+        # Never context-wide: see ``install_site_headers``.
+        site_headers = dict(extra_http_headers or {})
 
         har_path: Optional[str] = None
         if artifacts_dir:
@@ -283,6 +326,9 @@ class BrowserRunner:
                     pass
 
             page.on("response", _on_response)
+
+            if site_headers:
+                install_site_headers(page, url, site_headers)
 
             if self._setup_page is not None:
                 self._setup_page(page)

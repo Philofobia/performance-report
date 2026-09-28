@@ -138,6 +138,10 @@ class FakePage:
         self.listeners.setdefault(event, []).append(handler)
         self.log.append(f"on:{event}")
 
+    def route(self, matcher, handler):
+        self.routes = getattr(self, "routes", []) + [(matcher, handler)]
+        self.log.append("route")
+
     def add_init_script(self, script):
         self.init_scripts.append(script)
         self.log.append("add_init_script")
@@ -1163,12 +1167,31 @@ def test_make_automated_run_carries_representative_artifacts():
 # --------------------------------------------------------------------------- #
 # Optional custom request headers (opt-in; see tests/unit/headers_test.py)
 # --------------------------------------------------------------------------- #
-def test_headers_are_applied_at_context_level(public_dns):
-    """Context-level headers cover the document AND every sub-resource.
+class _FakeRoute:
+    def __init__(self, url, headers):
+        self.request = type("Req", (), {"url": url, "headers": dict(headers)})()
+        self.continued_with = None
 
-    Playwright applies ``extra_http_headers`` set on a context to every request
-    made by every page in it. Setting them per-navigation would leave scripts,
-    images and XHR unprotected — exactly the requests a bot filter blocks.
+    def continue_(self, **kwargs):
+        self.continued_with = kwargs
+
+
+def _header_route(browser):
+    _, ctx = browser.contexts[0]
+    routes = getattr(ctx.pages[0], "routes", [])
+    assert len(routes) == 1, "expected exactly one header route"
+    return routes[0]
+
+
+def test_headers_are_never_set_on_the_whole_context(public_dns):
+    """Context-wide headers went to every host, third parties included.
+
+    A non-safelisted header on a cross-origin fetch, XHR or crossorigin image
+    forces a CORS preflight; hosts that do not allow it fail the request. On
+    the live Oakley homepage that blocked every media.oakley.com image, the
+    hero never painted, and LCP fell back to late text: 6-9 s measured against
+    ~2 s in WebPageTest and in the field. It also handed the allowlist token to
+    forter, google, doubleclick and every other third party on the page.
     """
     browser = FakeBrowser()
     runner = make_runner(browser)
@@ -1177,7 +1200,55 @@ def test_headers_are_applied_at_context_level(public_dns):
         extra_http_headers={"X-Akamai-Bot": "tok"},
     )
     ctx_kwargs, _ = browser.contexts[0]
-    assert ctx_kwargs["extra_http_headers"] == {"X-Akamai-Bot": "tok"}
+    assert "extra_http_headers" not in ctx_kwargs
+
+
+def test_the_header_reaches_the_site_and_its_subdomains_only(public_dns):
+    browser = FakeBrowser()
+    make_runner(browser).run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK,
+        extra_http_headers={"X-Akamai-Bot": "tok"},
+    )
+    matcher, _ = _header_route(browser)
+
+    for url in ("https://www.oakley.com/en-us", "https://media.oakley.com/hero.jpg",
+                "https://assets2.oakley.com/p.png", "https://oakley.com/"):
+        assert matcher(url), url
+    for url in ("https://cdn0.forter.com/x.js", "https://evil-oakley.com/",
+                "https://oakley.com.evil.net/", "https://www.google.com/collect"):
+        assert not matcher(url), url
+
+
+def test_the_routed_request_keeps_its_headers_and_gains_the_token(public_dns):
+    browser = FakeBrowser()
+    make_runner(browser).run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK,
+        extra_http_headers={"X-Akamai-Bot": "tok"},
+    )
+    _, handler = _header_route(browser)
+    route = _FakeRoute("https://media.oakley.com/hero.jpg", {"accept": "image/avif"})
+
+    handler(route)
+
+    assert route.continued_with == {"headers": {"accept": "image/avif",
+                                                "X-Akamai-Bot": "tok"}}
+
+
+def test_the_header_route_is_installed_before_navigation(public_dns):
+    browser = FakeBrowser()
+    make_runner(browser).run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK,
+        extra_http_headers={"X-Akamai-Bot": "tok"},
+    )
+    assert browser.log.index("route") < browser.log.index("goto")
+
+
+def test_no_headers_installs_no_route(public_dns):
+    """Interception costs latency; a header-less run must not pay it."""
+    browser = FakeBrowser()
+    make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    _, ctx = browser.contexts[0]
+    assert not getattr(ctx.pages[0], "routes", [])
 
 
 def test_no_headers_omits_extra_http_headers_key_entirely(public_dns):
