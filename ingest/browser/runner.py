@@ -34,7 +34,7 @@ from urllib.parse import urlsplit
 
 from config.load import Device, Network
 from normalize import url_safety
-from ingest.browser import cdp_metrics, webser, lighthouse
+from ingest.browser import cdp_metrics, webser
 
 
 # Statuses a bot filter (Akamai et al.) returns when it rejects a request.
@@ -120,15 +120,6 @@ def assert_safe_chain(response, *, requested: str) -> None:
                 f"the SSRF guard rejects: {exc}"
             ) from exc
 
-
-def _no_lighthouse(url: str, cdp: object) -> dict:
-    """Default: no Lighthouse audit.
-
-    Main-thread data comes from CDP directly (``cdp_metrics``), so the Node
-    Lighthouse bridge is opt-in rather than required. Pass ``run_lighthouse_fn``
-    to populate the optional Lighthouse category scores.
-    """
-    return {}
 
 # Default CDP emulation for a given device (Playwright context.new_context kwargs).
 def device_context_kwargs(device: Device) -> Dict[str, Any]:
@@ -231,7 +222,6 @@ class BrowserRunner:
         trigger_interaction_fn: Optional[Callable[[object], None]] = None,
         setup_page_fn: Optional[Callable[[object], None]] = None,
         collect_cdp_metrics_fn: Optional[Callable[[object], dict]] = None,
-        run_lighthouse_fn: Optional[Callable[[str, object], dict]] = None,
         navigation_timeout_ms: int = 30_000,
         network_idle_timeout_ms: int = 5_000,
         lcp_timeout_ms: int = 3_000,
@@ -249,8 +239,6 @@ class BrowserRunner:
         self._wait_for_lcp = webser.wait_for_lcp
         self._wait_for_inp = webser.wait_for_inp
         self._collect_cdp_metrics = collect_cdp_metrics_fn or cdp_metrics.collect_cdp_metrics
-        # Lighthouse is opt-in: CDP supplies the main-thread breakdown natively.
-        self._run_lighthouse = run_lighthouse_fn or _no_lighthouse
         self._navigation_timeout_ms = navigation_timeout_ms
         self._network_idle_timeout_ms = network_idle_timeout_ms
         self._lcp_timeout_ms = lcp_timeout_ms
@@ -270,7 +258,7 @@ class BrowserRunner:
         """Run one (url, device, network) measurement and return raw measurements.
 
         Returns a dict with ``cwp``, ``main_thread``, ``network``,
-        ``resource_timings``, ``lighthouse``, ``captures`` and ``guard`` keys.
+        ``resource_timings``, ``captures`` and ``guard`` keys.
 
         ``extra_http_headers`` is optional; when falsy, nothing about context
         construction changes. Raises :class:`BlockedResponseError` if the main
@@ -400,7 +388,6 @@ class BrowserRunner:
             collected = self._collect_metrics(page) or {}
             # DevTools main-thread counters, read directly over CDP.
             main_thread = self._collect_cdp_metrics(cdp) or {}
-            lh_scores = self._run_lighthouse(url, cdp) or {}
 
             if artifacts_dir:
                 out = Path(artifacts_dir)
@@ -424,7 +411,6 @@ class BrowserRunner:
             "main_thread": main_thread,
             "network": collected.get("network", {}),
             "resource_timings": collected.get("resource_timings", []),
-            "lighthouse": lh_scores,
             "guard": {
                 "main_status": main_status,
                 "blocked_requests": blocked["count"],

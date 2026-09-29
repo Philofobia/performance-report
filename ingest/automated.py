@@ -65,12 +65,10 @@ def median_int(values: List[Optional[float]]) -> Optional[int]:
 def merge_median_metrics(measurements: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """Median of each numeric metric across N raw measurement dicts."""
     cwp_runs = [m.get("cwp", {}) for m in measurements]
-    lh_runs = [m.get("lighthouse", {}) for m in measurements]
     net_runs = [m.get("network", {}) for m in measurements]
     mt_runs = [m.get("main_thread", {}) for m in measurements]
 
     cwp_keys = ("lcp_ms", "cls", "inp_ms", "fcp_ms", "ttfb_ms", "tbt_ms")
-    lh_keys = ("performance", "accessibility", "best_practices", "seo")
     net_float_keys = ("total_transfer_kb",)
     net_int_keys = ("request_count", "render_blocking_css")
     mt_float_keys = ("script_ms", "layout_ms", "style_ms", "task_ms", "js_heap_kb")
@@ -95,8 +93,6 @@ def merge_median_metrics(measurements: List[Dict[str, Any]]) -> Dict[str, Dict[s
 
     return {
         "cwp": cwp_merged,
-        # Lighthouse category scores are integers 0-100.
-        "lighthouse": _merge(lh_runs, int_keys=lh_keys),
         "network": _merge(net_runs, float_keys=net_float_keys, int_keys=net_int_keys),
         "main_thread": _merge(mt_runs, float_keys=mt_float_keys, int_keys=mt_int_keys),
     }

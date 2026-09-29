@@ -137,21 +137,21 @@ def test_load_real_networks_file_has_devtools_tiers():
     assert {"online", "fast-3g", "slow-4g", "slow-3g", "offline"} <= names
 
 
-def test_desktop_is_measured_on_lighthouses_desktop_network():
+def test_desktop_is_measured_on_the_desktop_broadband_network():
     """Desktop on fast-3g (1.6 Mbps) put a working 1 MB hero at 12 s of LCP.
 
     Correct for the link, meaningless for desktop visitors: the project's own
     WebPageTest desktop runs use 20 Mbps and read ~2 s, as does the field.
-    Lighthouse's desktop preset - 10 Mbps, 40 ms RTT, no CPU slowdown - is
-    the recognised default, and what the real config now uses.
+    Desktop broadband - 10 Mbps, 40 ms RTT, no CPU slowdown - is the
+    recognised desktop default, and what the real config now uses.
     """
-    preset = {n.name: n for n in cl.load_networks().networks}["lighthouse-desktop"]
+    preset = {n.name: n for n in cl.load_networks().networks}["desktop-broadband"]
     assert (preset.downlink_mbps, preset.latency_ms) == (10.0, 40)
 
-    assert cl.load_settings().run_defaults.desktop_network == "lighthouse-desktop"
+    assert cl.load_settings().run_defaults.desktop_network == "desktop-broadband"
     for page in cl.load_config().pages:
         desktop = [t for t in page.tests if t.device == "desktop"]
-        assert desktop and all(t.network == "lighthouse-desktop" for t in desktop), page.name
+        assert desktop and all(t.network == "desktop-broadband" for t in desktop), page.name
 
 
 def test_load_config_full_resolves(files):

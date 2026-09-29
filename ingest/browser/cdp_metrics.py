@@ -1,7 +1,6 @@
 """Main-thread metrics straight from the Chrome DevTools Protocol.
 
-This is the DevTools-native alternative to the Lighthouse Node bridge: the same
-counters the DevTools Performance panel reports, read over CDP
+The counters the DevTools Performance panel reports, read over CDP
 ``Performance.getMetrics`` — no Node process, no CLI, no extra dependency.
 
 What it gives us that CWV alone does not: *where the main-thread time went*

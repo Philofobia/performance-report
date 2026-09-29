@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from normalize.schema import LighthouseScores, Run
+from normalize.schema import Run
 from webui import form
 
 
@@ -96,12 +96,6 @@ def test_constraints_are_read_from_the_schema_not_hardcoded():
     """
     cls_field = next(f for f in form.FIELDS if f.name == "cls")
     assert form.constraints(cls_field) == {"min": 0, "step": "any"}
-
-
-def test_lighthouse_constraints_track_the_schema():
-    perf = next(f for f in form.FIELDS if f.name == "performance")
-    limits = form.constraints(perf)
-    assert limits["max"] == LighthouseScores.model_fields["performance"].metadata[-1].le
 
 
 def test_fields_without_a_schema_constraint_return_nothing():

@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from config.load import Device, Network, PageTarget, PageTest, ProjectConfig, Settings
 from ingest import automated
-from ingest.browser import cdp_metrics, lighthouse, webser
+from ingest.browser import cdp_metrics, webser
 from ingest.browser import runner as runner_mod
 from ingest.browser.runner import (
     BlockedResponseError,
@@ -251,19 +251,11 @@ def public_dns(monkeypatch):
     monkeypatch.setattr(url_safety, "_lookup", lambda host: {"8.8.8.8"})
 
 
-def make_runner(browser, collect=None, lh_cdp=None, **kwargs):
+def make_runner(browser, collect=None, **kwargs):
     def collect_fn(page):
         return sample_collect(page) if collect is None else collect(page)
 
-    def lh_fn(url, cdp):
-        return {"performance": 80, "seo": 90} if lh_cdp is None else lh_cdp(url, cdp)
-
-    return BrowserRunner(
-        browser,
-        collect_metrics_fn=collect_fn,
-        run_lighthouse_fn=lh_fn,
-        **kwargs,
-    )
+    return BrowserRunner(browser, collect_metrics_fn=collect_fn, **kwargs)
 
 
 # --------------------------------------------------------------------------- #
@@ -326,11 +318,9 @@ def test_run_condition_returns_full_measurement_shape(public_dns):
     browser = FakeBrowser()
     result = make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
     assert set(result) == {
-        "cwp", "main_thread", "network", "resource_timings", "lighthouse",
-        "captures", "guard",
+        "cwp", "main_thread", "network", "resource_timings", "captures", "guard",
     }
     assert result["cwp"]["lcp_ms"] == 6200
-    assert result["lighthouse"]["performance"] == 80
 
 
 def test_run_condition_applies_device_emulation_to_context(public_dns):
@@ -773,7 +763,7 @@ def test_tbt_stops_at_the_first_five_second_quiet_window():
 
     On the live Oakley homepage, with consent working, trackers keep firing long
     tasks for 20-30 s after load; counting them all read 10.7 s of blocking
-    against 0.4-0.65 s in WebPageTest, which stops at TTI like Lighthouse.
+    against 0.4-0.65 s in WebPageTest, which stops at TTI.
     """
     tasks = [
         {"start": 1000, "duration": 150},   # 100 blocking
@@ -818,7 +808,7 @@ def test_collect_web_vitals_derives_tbt():
 
 
 # --------------------------------------------------------------------------- #
-# CDP main-thread metrics (DevTools-native, no Lighthouse Node bridge)
+# CDP main-thread metrics (DevTools-native)
 # --------------------------------------------------------------------------- #
 CDP_PAYLOAD = {"metrics": [
     {"name": "ScriptDuration", "value": 1.2345},       # seconds
@@ -913,53 +903,6 @@ def test_runner_collects_cdp_main_thread_metrics(public_dns):
     assert result["main_thread"] == {"script_ms": 1234.5, "dom_nodes": 1500}
 
 
-def test_lighthouse_is_optional_by_default(public_dns):
-    """Default path must not require the Node bridge (it would raise)."""
-    browser = FakeBrowser()
-    runner = BrowserRunner(browser, collect_metrics_fn=sample_collect)
-    result = runner.run_condition("https://example.com/", DEVICE, NETWORK)
-    assert result["lighthouse"] == {}
-
-
-# --------------------------------------------------------------------------- #
-# lighthouse
-# --------------------------------------------------------------------------- #
-def test_category_scores_maps_fractions_to_0_100():
-    lhr = {"categories": {
-        "performance": {"score": 0.54},
-        "accessibility": {"score": 0.88},
-        "best-practices": {"score": 0.79},
-        "seo": {"score": 0.9},
-    }}
-    assert lighthouse.category_scores(lhr) == {
-        "performance": 54, "accessibility": 88, "best_practices": 79, "seo": 90
-    }
-
-
-def test_category_scores_missing_categories_are_none():
-    assert lighthouse.category_scores({}) == {
-        "performance": None, "accessibility": None, "best_practices": None, "seo": None
-    }
-
-
-def test_category_scores_null_score_is_none_not_zero():
-    scores = lighthouse.category_scores({"categories": {"performance": {"score": None}}})
-    assert scores["performance"] is None
-
-
-def test_run_lighthouse_uses_injected_runner():
-    scores = lighthouse.run_lighthouse(
-        "https://example.com/", object(),
-        runner=lambda url, cdp: {"categories": {"seo": {"score": 1.0}}},
-    )
-    assert scores["seo"] == 100
-
-
-def test_default_lighthouse_runner_raises_actionable_error():
-    with pytest.raises(lighthouse.LighthouseUnavailableError, match="bridge"):
-        lighthouse.run_lighthouse("https://example.com/", object())
-
-
 # --------------------------------------------------------------------------- #
 # campaign: medians, planning, run emission
 # --------------------------------------------------------------------------- #
@@ -981,17 +924,14 @@ def test_merge_median_metrics_keeps_count_fields_integral():
     measurements = [
         {"cwp": {"lcp_ms": 1000, "cls": 0.1, "inp_ms": 100},
          "network": {"request_count": 10, "render_blocking_css": 1},
-         "lighthouse": {"performance": 50},
          "main_thread": {"dom_nodes": 100, "script_ms": 10.0}},
         {"cwp": {"lcp_ms": 2000, "cls": 0.2, "inp_ms": 200},
          "network": {"request_count": 21, "render_blocking_css": 2},
-         "lighthouse": {"performance": 61},
          "main_thread": {"dom_nodes": 201, "script_ms": 20.0}},
     ]
     merged = automated.merge_median_metrics(measurements)
     assert isinstance(merged["network"]["request_count"], int)
     assert merged["network"]["request_count"] == 16
-    assert isinstance(merged["lighthouse"]["performance"], int)
     assert isinstance(merged["main_thread"]["dom_nodes"], int)
     assert merged["main_thread"]["script_ms"] == 15.0  # floats keep precision
 
@@ -1015,17 +955,16 @@ def test_even_run_count_still_validates_against_schema():
 
 def test_merge_median_metrics_across_runs():
     measurements = [
-        {"cwp": {"lcp_ms": 1000, "cls": 0.1}, "lighthouse": {"performance": 50},
+        {"cwp": {"lcp_ms": 1000, "cls": 0.1},
          "network": {"request_count": 10}},
-        {"cwp": {"lcp_ms": 3000, "cls": 0.3}, "lighthouse": {"performance": 70},
+        {"cwp": {"lcp_ms": 3000, "cls": 0.3},
          "network": {"request_count": 30}},
-        {"cwp": {"lcp_ms": 2000, "cls": 0.2}, "lighthouse": {"performance": 60},
+        {"cwp": {"lcp_ms": 2000, "cls": 0.2},
          "network": {"request_count": 20}},
     ]
     merged = automated.merge_median_metrics(measurements)
     assert merged["cwp"]["lcp_ms"] == 2000
     assert merged["cwp"]["cls"] == 0.2
-    assert merged["lighthouse"]["performance"] == 60
     assert merged["network"]["request_count"] == 20
 
 
@@ -1389,7 +1328,6 @@ class RecordingRunner:
         n = len(self.calls)
         return {
             "cwp": {"lcp_ms": 1000 * n, "cls": 0.1, "inp_ms": 100},
-            "lighthouse": {"performance": 50},
             "network": {"request_count": 10},
             "resource_timings": [],
             "captures": {"screenshot": f"{run_id}.png"},
