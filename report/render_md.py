@@ -36,6 +36,7 @@ from report.render_html import (
 
 TEMPLATE_DIR = Path(__file__).parent / "template"
 MD_TEMPLATE = "report.md.j2"
+TICKETS_TEMPLATE = "proposed-tickets.md.j2"
 
 # The `##` heading sequence, mirroring the HTML skeleton minus the chart-only
 # blocks. Asserted by the tests, so a template edit that drops a section fails
@@ -47,6 +48,7 @@ MD_SECTIONS: Tuple[str, ...] = (
     "Executive summary",
     "What to do first",
     "Tickets",
+    "New tickets",
     "What visitors actually experienced",
     "Pages",
     "Cross-page comparison",
@@ -135,3 +137,8 @@ def render_md(report: Report, *, base_dir: Optional[Path] = None) -> str:
         field_rows=field_rows_by_page(report),
         field_segments=field_segment_rows(report),
         field_beacons=field_beacons_by_page(report))
+
+
+def render_proposed_tickets(report: Report) -> str:
+    """The HAR-found ticket drafts alone, each ready to paste into a tracker."""
+    return _env().get_template(TICKETS_TEMPLATE).render(report=report)

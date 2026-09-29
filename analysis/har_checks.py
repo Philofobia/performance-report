@@ -98,8 +98,6 @@ class HarRun:
     images: List[Dict[str, Any]] = field(default_factory=list)
     dpr: float = 1.0
     js_vulns: List[Dict[str, Any]] = field(default_factory=list)
-    #: ``_imgs-in-viewport``: the markup of each image in the first viewport.
-    viewport_images: List[Dict[str, Any]] = field(default_factory=list)
     #: CORS preflights that did not answer 2xx - dropped from ``requests``,
     #: kept here because a failed one explains a failed request.
     failed_preflights: List[Request] = field(default_factory=list)
@@ -260,7 +258,6 @@ def load_har(path: Path) -> List[HarRun]:
             images=_json_list(page.get("_Images")),
             dpr=_number(viewport.get("dpr")) or 1.0,
             js_vulns=_json_list(page.get("_jsLibsVulns")),
-            viewport_images=_json_list(page.get("_imgs-in-viewport")),
             failed_preflights=[p for p in preflights if not 200 <= p.status < 300],
             cross_origin_headers=_cross_origin_headers(entries, page_url),
         ))
