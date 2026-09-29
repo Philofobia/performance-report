@@ -21,7 +21,6 @@ from pydantic import ValidationError
 from normalize.schema import (
     Condition,
     CwpMetrics,
-    LighthouseScores,
     NetworkMetrics,
 )
 
@@ -55,7 +54,6 @@ GROUPS: Tuple[str, ...] = (
     "What's wrong",
     "Core Web Vitals",
     "Targets",
-    "Lighthouse",
     "Network",
 )
 
@@ -104,19 +102,6 @@ FIELDS: Tuple[FormField, ...] = (
     FormField("target_inp_ms", "Target INP", "Targets",
               loc=("metrics", "cwp", "target_inp_ms"), model=CwpMetrics,
               attr="target_inp_ms", unit="ms"),
-
-    FormField("performance", "Performance", "Lighthouse", cast="int",
-              loc=("metrics", "lighthouse", "performance"),
-              model=LighthouseScores, attr="performance"),
-    FormField("accessibility", "Accessibility", "Lighthouse", cast="int",
-              loc=("metrics", "lighthouse", "accessibility"),
-              model=LighthouseScores, attr="accessibility"),
-    FormField("best_practices", "Best practices", "Lighthouse", cast="int",
-              loc=("metrics", "lighthouse", "best_practices"),
-              model=LighthouseScores, attr="best_practices"),
-    FormField("seo", "SEO", "Lighthouse", cast="int",
-              loc=("metrics", "lighthouse", "seo"),
-              model=LighthouseScores, attr="seo"),
 
     FormField("total_transfer_kb", "Total transfer", "Network",
               loc=("metrics", "network", "total_transfer_kb"),
@@ -217,7 +202,6 @@ def _to_kwargs(values: Mapping[str, Any]) -> Dict[str, Any]:
         "source": "manual",
         "runner": RUNNER,
         "cwp": _group_values(values, CwpMetrics),
-        "lighthouse": _group_values(values, LighthouseScores),
         "network_metrics": _group_values(values, NetworkMetrics),
     }
 

@@ -136,6 +136,50 @@
   {% endif %}
 </section>
 
+<section data-section="proposals" class="sheet">
+  <p class="eyebrow">New tickets</p>
+  <h2>Problems in the captures that no open ticket names</h2>
+  {% set drafts = report.proposals|rejectattr('tracked_by')|list %}
+  {% set filed = report.proposals|selectattr('tracked_by')|list %}
+  {% if report.proposals %}
+  <p class="lede">Found by the rules in <span class="mono">analysis/discovery.py</span>:
+    each holds in most runs of a capture, and nothing the capture itself caused is
+    counted. Most severe first; the same drafts are in
+    <span class="mono">proposed-tickets.md</span>, ready to paste.</p>
+  {% if drafts %}
+  <ol class="tickets proposals">
+    {% for p in drafts %}
+    <li class="proposal proposal--{{ p.severity }}">
+      <p class="rec-title"><span class="sev sev--{{ p.severity }}">{{ p.severity }}</span> {{ p.title }}
+        <span class="plan-page">{{ p.category }} · {{ p.seen_on|length }} of {{ p.captures_total }} captures</span></p>
+      <p class="serif">{{ p.summary }}</p>
+      <ul class="evidence-list">
+        {% for line in p.evidence %}<li class="mono">{{ line }}</li>{% endfor %}
+      </ul>
+      <p class="proposal-fix"><strong>Fix:</strong> {{ p.fix }}</p>
+      <p class="proposal-fix"><strong>Done when:</strong> {{ p.done_when }}</p>
+      {% if p.related %}<p class="proposal-fix"><strong>Read first:</strong> <span class="mono">{{ p.related|join(', ') }}</span> touch the same problem.</p>{% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+  {% if filed %}
+  {# No data-section: renders only when a ticket tracks a rule. #}
+  <div class="block">
+    <h3>Already filed <span class="cond">{{ filed|length }}</span></h3>
+    <ul class="tickets">
+      {% for p in filed %}
+      <li><p class="rec-title"><span class="mono">{{ p.tracked_by }}</span> {{ p.title }}</p></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  {% else %}
+  <p class="empty">No HAR captures were supplied, so nothing was looked for. Pass them to
+    <span class="mono">analyze --har page/device=file.har</span>.</p>
+  {% endif %}
+</section>
+
 <section data-section="field" class="sheet">
   <p class="eyebrow">Real users</p>
   <h2>What visitors actually experienced</h2>

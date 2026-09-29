@@ -69,11 +69,10 @@ def test_a_browser_can_fill_and_submit_the_form(server):
 
 
 def test_the_browser_blocks_an_out_of_range_value_before_it_is_sent(server):
-    """`max` came from the schema; this proves the browser honours it.
+    """`min` came from the schema; this proves the browser honours it.
 
-    A Lighthouse score, because it is bounded at both ends. CLS is not: it is a
-    sum of layout-shift scores and carries a `min` only, which the companion
-    test below relies on.
+    LCP cannot be negative. CLS is bounded below only - a sum of layout-shift
+    scores - which the companion test below relies on.
     """
     from playwright.sync_api import sync_playwright
 
@@ -84,9 +83,9 @@ def test_the_browser_blocks_an_out_of_range_value_before_it_is_sent(server):
         page = browser.new_page()
         page.goto(url)
         page.fill("#f-page_url", "https://example.com/")
-        page.fill("#f-performance", "150")
+        page.fill("#f-lcp_ms", "-5")
         page.click("button[type=submit]")
-        valid = page.eval_on_selector("#f-performance", "el => el.checkValidity()")
+        valid = page.eval_on_selector("#f-lcp_ms", "el => el.checkValidity()")
         browser.close()
 
     assert valid is False

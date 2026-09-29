@@ -21,9 +21,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from statistics import median
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import parse_qs, urlsplit
 
+from normalize.site import in_site, site_scope
 from store.artifacts import redact_url
 
 #: A majority of runs must show a problem for it to count as confirmed — one
@@ -49,6 +50,17 @@ class Request:
     initiator: Optional[str] = None
     priority: Optional[str] = None
     render_blocking: Optional[str] = None
+    #: WebPageTest's own classification (Document, Script, Image, ...).
+    request_type: str = ""
+    #: Bytes over the wire, and the body once decoded (None when unknown).
+    bytes_in: int = 0
+    size_uncompressed: Optional[int] = None
+    encoding: str = ""
+    cache_control: str = ""
+    protocol: str = ""
+    #: Main-thread time WebPageTest attributes to this request's script.
+    cpu_ms: float = 0.0
+    redirect_url: str = ""
 
     @property
     def host(self) -> str:
@@ -57,6 +69,10 @@ class Request:
     @property
     def is_image(self) -> bool:
         return self.content_type.startswith("image")
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status < 300
 
 
 @dataclass
@@ -73,10 +89,32 @@ class HarRun:
     cls: Optional[float] = None
     layout_shifts: List[Dict[str, Any]] = field(default_factory=list)
     console: List[Dict[str, Any]] = field(default_factory=list)
+    #: WebPageTest page-level extras; empty/None in a Playwright HAR.
+    tbt_ms: Optional[float] = None
+    long_tasks: List[Tuple[float, float]] = field(default_factory=list)
+    dom_elements: Optional[int] = None
+    fonts: List[Dict[str, Any]] = field(default_factory=list)
+    #: ``_Images``: every <img> with its displayed and natural size.
+    images: List[Dict[str, Any]] = field(default_factory=list)
+    dpr: float = 1.0
+    js_vulns: List[Dict[str, Any]] = field(default_factory=list)
+    #: CORS preflights that did not answer 2xx - dropped from ``requests``,
+    #: kept here because a failed one explains a failed request.
+    failed_preflights: List[Request] = field(default_factory=list)
+    #: ``x-*`` header names the capture sent to hosts outside the site. Names
+    #: only: the values are tokens.
+    cross_origin_headers: List[str] = field(default_factory=list)
 
     @property
     def label(self) -> str:
         return f"{self.source} run {self.index}"
+
+    @property
+    def site(self) -> str:
+        return site_scope(self.page_url)
+
+    def is_first_party(self, request: "Request") -> bool:
+        return in_site(request.url, self.site)
 
     def request_for(self, url: Optional[str]) -> Optional[Request]:
         return next((r for r in self.requests if r.url == url), None) if url else None
@@ -107,15 +145,67 @@ def _request(entry: Dict[str, Any], page_start: datetime) -> Request:
     end = entry.get("_all_end")
     if end is None:
         end = start + max(float(entry.get("time") or 0), 0)
-    status = entry.get("_responseCode", entry.get("response", {}).get("status", 0))
+    response = entry.get("response", {})
+    status = entry.get("_responseCode", response.get("status", 0))
     content_type = (entry.get("_contentType")
-                    or entry.get("response", {}).get("content", {}).get("mimeType") or "")
+                    or response.get("content", {}).get("mimeType") or "")
+    bytes_in = entry.get("_bytesIn")
+    if bytes_in is None:
+        bytes_in = max(int(response.get("bodySize") or 0), 0)
     return Request(
         url=entry["request"]["url"], start_ms=float(start), end_ms=float(end),
         status=int(status or 0), content_type=content_type.lower(),
         initiator_type=entry.get("_initiator_type"), initiator=entry.get("_initiator"),
         priority=entry.get("_priority"), render_blocking=entry.get("_renderBlocking"),
+        request_type=entry.get("_request_type") or "",
+        bytes_in=int(bytes_in or 0),
+        size_uncompressed=_int(entry.get("_objectSizeUncompressed")),
+        encoding=(entry.get("_contentEncoding") or _header(response, "content-encoding")).lower(),
+        cache_control=(entry.get("_cacheControl") or _header(response, "cache-control")).lower(),
+        protocol=(entry.get("_protocol") or response.get("httpVersion") or "").lower(),
+        cpu_ms=float(entry.get("_cpuTime") or 0),
+        redirect_url=response.get("redirectURL") or "",
     )
+
+
+def _header(message: Dict[str, Any], name: str) -> str:
+    return next((str(h.get("value", "")) for h in message.get("headers") or []
+                 if str(h.get("name", "")).lower() == name), "")
+
+
+def _int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _json_list(raw: Any) -> List[Dict[str, Any]]:
+    """A WebPageTest custom metric, which arrives as a list or a JSON string."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+    return [item for item in raw or [] if isinstance(item, dict)] if isinstance(raw, list) else []
+
+
+def _is_preflight(entry: Dict[str, Any]) -> bool:
+    return (entry.get("_request_type") == "Preflight"
+            or entry["request"].get("method", "GET") == "OPTIONS")
+
+
+def _cross_origin_headers(entries: Sequence[Dict[str, Any]], page_url: str) -> List[str]:
+    scope = site_scope(page_url)
+    names = set()
+    for entry in entries:
+        if _is_preflight(entry) or in_site(entry["request"]["url"], scope):
+            continue
+        for header in entry["request"].get("headers") or []:
+            name = str(header.get("name", "")).lower()
+            if name.startswith("x-"):
+                names.add(name)
+    return sorted(names)
 
 
 def _shifts(raw: Any) -> List[Dict[str, Any]]:
@@ -148,10 +238,10 @@ def load_har(path: Path) -> List[HarRun]:
         start = _parse_time(page["startedDateTime"])
         entries = [e for e in log["entries"]
                    if page["id"] is None or e.get("pageref") == page["id"]]
-        requests = [_request(e, start) for e in entries
-                    if e.get("_request_type") != "Preflight"
-                    and e["request"].get("method", "GET") != "OPTIONS"]
+        requests = [_request(e, start) for e in entries if not _is_preflight(e)]
+        preflights = [_request(e, start) for e in entries if _is_preflight(e)]
         page_url = page.get("_URL") or (requests[0].url if requests else "")
+        viewport = page.get("_viewport") if isinstance(page.get("_viewport"), dict) else {}
         runs.append(HarRun(
             source=Path(path).name, index=index, page_url=page_url, requests=requests,
             lcp_ms=_number(page.get("_chromeUserTiming.LargestContentfulPaint")),
@@ -160,6 +250,16 @@ def load_har(path: Path) -> List[HarRun]:
             cls=_number(page.get("_chromeUserTiming.CumulativeLayoutShift")),
             layout_shifts=_shifts(page.get("_LayoutShifts")),
             console=[c for c in page.get("_consoleLog") or [] if isinstance(c, dict)],
+            tbt_ms=_number(page.get("_TotalBlockingTime")),
+            long_tasks=[(float(a), float(b)) for a, b in page.get("_longTasks") or []
+                        if _number(a) is not None and _number(b) is not None],
+            dom_elements=_int(page.get("_domElements")),
+            fonts=_json_list(page.get("_fonts")),
+            images=_json_list(page.get("_Images")),
+            dpr=_number(viewport.get("dpr")) or 1.0,
+            js_vulns=_json_list(page.get("_jsLibsVulns")),
+            failed_preflights=[p for p in preflights if not 200 <= p.status < 300],
+            cross_origin_headers=_cross_origin_headers(entries, page_url),
         ))
     return runs
 
@@ -380,23 +480,47 @@ def slide_in_shift(runs: Sequence[HarRun], *, min_steps: int = 4,
     )
 
 
+_SW_REGISTRATION_FAILED = "failed to register a serviceworker"
+
+
+def _registration_failure(text: str) -> Optional[str]:
+    """Chrome's reason a service worker was refused, or None if it was not.
+
+    The message names the scope and script URLs in parentheses and gives the
+    reason after the last ``): `` - "ServiceWorker script evaluation failed".
+    """
+    if _SW_REGISTRATION_FAILED not in text.lower():
+        return None
+    _, sep, why = text.rpartition("): ")
+    return why.strip() if sep and why.strip() else "no reason given"
+
+
 def service_worker(runs: Sequence[HarRun]) -> CheckResult:
-    """The service worker script is requested and answers."""
+    """The service worker registers: its script answers, and the browser accepts it.
+
+    A script that downloads with 200 and then throws still fails to register -
+    on the live OO pages, in every run - and only the console says so. The
+    status code alone once reported this ticket as not seen.
+    """
     considered, hits, evidence = [], [], []
     for run in runs:
         workers = [r for r in run.requests if re.search(r"service-worker[^/]*\.js|/sw\.js", r.url)]
-        if not workers:
+        refused = [why for c in run.console
+                   if (why := _registration_failure(str(c.get("text", ""))))]
+        if not workers and not refused:
             continue
         considered.append(run)
         broken = [r for r in workers if not 200 <= r.status < 400]
-        if broken:
+        if broken or refused:
             hits.append(run)
-        if run.index == 1:
+        if run.index == 1 or (refused and len(hits) == 1):
             evidence += [f"{run.label}: {r.status} {_short(r.url, 90)}" for r in workers]
+            evidence += [f"{run.label}: console: registration failed - {why[:120]}"
+                         for why in refused[:1]]
     return _verdict(
         "service_worker", runs, hits, considered, evidence,
-        confirmed="The service worker script fails in {hits} of {total} runs.",
-        not_seen="The service worker script loads ({hits} of {total} runs failing).",
+        confirmed="The service worker fails to register in {hits} of {total} runs.",
+        not_seen="The service worker registers ({hits} of {total} runs failing).",
         no_data="No service worker script was requested in these captures.",
     )
 
@@ -492,6 +616,14 @@ def header_artifacts(runs: Sequence[HarRun],
     names = [n.lower() for n in header_names] if header_names else None
     hosts: Dict[str, int] = {}
     for run in runs:
+        # A preflight exists only because the request carried something non-
+        # simple; when the capture itself sent an x-* header across origins,
+        # a refused preflight is the capture's failure, whatever Chrome's
+        # message says ("does not have HTTP ok status" names no header).
+        sent = [h for h in run.cross_origin_headers if names is None or h in names]
+        if sent:
+            for preflight in run.failed_preflights:
+                hosts[preflight.host] = hosts.get(preflight.host, 0) + 1
         for entry in run.console:
             text = str(entry.get("text", ""))
             rejected = _HEADER_REJECTED.search(text)
@@ -507,10 +639,21 @@ def header_artifacts(runs: Sequence[HarRun],
 
 
 def rejected_headers(runs: Sequence[HarRun]) -> List[str]:
-    """The custom headers Chrome reported rejecting in a CORS preflight."""
+    """The custom headers behind the capture's own CORS failures.
+
+    Those Chrome names as rejected, and those the capture sent across origins
+    in a run where a preflight failed.
+    """
     found = {m.group(1).lower() for run in runs for entry in run.console
              if (m := _HEADER_REJECTED.search(str(entry.get("text", ""))))}
+    found |= {h for run in runs if run.failed_preflights for h in run.cross_origin_headers}
     return sorted(found)
+
+
+def artifact_urls(runs: Sequence[HarRun]) -> set:
+    """URLs whose failure the capture caused (see ``header_artifacts``)."""
+    return {p.url for run in runs if run.cross_origin_headers
+            for p in run.failed_preflights}
 
 
 def untracked_findings(runs: Sequence[HarRun]) -> List[str]:
@@ -559,7 +702,8 @@ def untracked_findings(runs: Sequence[HarRun]) -> List[str]:
         out.append(f"Layout shift {shift['score']:.3f} at {shift['time']:.0f} ms "
                    f"({run.label}), region y={rect[1]} height={rect[3]}px")
 
-    failed = [r for r in first.requests if r.status >= 400]
+    caused = artifact_urls(runs)
+    failed = [r for r in first.requests if r.status >= 400 and r.url not in caused]
     if failed:
         out.append(f"{len(failed)} failed requests ({first.label}):")
         out += [f"  {r.status} {_short(r.url, 90)}" for r in failed[:5]]

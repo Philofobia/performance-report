@@ -1,12 +1,12 @@
 """Manual ingestion: CLI + validation -> a normalized canonical ``Run``.
 
-Accepts a free-text problem description and/or metric values (CWV, Lighthouse
-scores, network basics) and converges them to :class:`normalize.schema.Run`.
+Accepts a free-text problem description and/or metric values (CWV and network
+basics) and converges them to :class:`normalize.schema.Run`.
 
 Validation is always forced through the Pydantic canonical schema: inputs are
 placed into the canonical payload and ``Run.model_validate`` is the single gate,
 so every unit/range rule in ``normalize/schema.py`` (e.g. ``lcp_ms >= 0``,
-``cls`` in 0..1, Lighthouse 0..100) applies unchanged to manual entries.
+``cls >= 0``) applies unchanged to manual entries.
 
 URLs (project/page) are checked with ``url_safety.validate_url(..., resolve=False)``
 per SECURITY_PLAN.md §2.2/§2.4; manual ingestion never navigates, so DNS
@@ -15,7 +15,7 @@ resolution is skipped but scheme/userinfo/raw-IP guards still hold.
 Usage::
 
     python -m ingest.manual --problem "Homepage LCP spikes to 6s" \\
-        --lcp-ms 6200 --cls 0.42 --inp-ms 480 --lh-performance 54 \\
+        --lcp-ms 6200 --cls 0.42 --inp-ms 480 \\
         --page homepage --page-url https://example.com/ --output run.json
 """
 from __future__ import annotations
@@ -41,7 +41,6 @@ KNOWN_KEYWORD_TOKENS = (
     "inp",
     "fcp",
     "ttfb",
-    "lighthouse",
     "bundle",
     "image",
     "font",
@@ -108,7 +107,6 @@ def build_manual_run(
     source: str = "manual",
     runner: str = DEFAULT_RUNNER,
     cwp: Optional[Dict] = None,
-    lighthouse: Optional[Dict] = None,
     network_metrics: Optional[Dict] = None,
 ) -> Run:
     """Build and validate a canonical ``Run`` from manual input.
@@ -143,7 +141,6 @@ def build_manual_run(
         },
         "metrics": {
             "cwp": cwp or {},
-            "lighthouse": lighthouse or {},
             "network": network_metrics or {},
         },
     }
@@ -179,10 +176,6 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bundle-kb", type=_num,
                    help="Alias for --total-transfer-kb (bundle/transfer size in KB).")
 
-    p.add_argument("--lh-performance", type=_num)
-    p.add_argument("--lh-accessibility", type=_num)
-    p.add_argument("--lh-best-practices", type=_num)
-    p.add_argument("--lh-seo", type=_num)
 
     p.add_argument("--total-transfer-kb", type=_num)
     p.add_argument("--request-count", type=int)
@@ -221,12 +214,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         "target_cls": args.target_cls,
         "target_inp_ms": args.target_inp_ms,
     }
-    lighthouse = {
-        "performance": args.lh_performance,
-        "accessibility": args.lh_accessibility,
-        "best_practices": args.lh_best_practices,
-        "seo": args.lh_seo,
-    }
     transfer = args.total_transfer_kb if args.total_transfer_kb is not None else args.bundle_kb
     network_metrics = {
         "total_transfer_kb": transfer,
@@ -249,7 +236,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             source=args.source,
             runner=args.runner,
             cwp=cwp,
-            lighthouse=lighthouse,
             network_metrics=network_metrics,
         )
     except ManualValidationError as exc:

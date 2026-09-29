@@ -51,7 +51,7 @@ pytestmark = pytest.mark.e2e
 REPO = Path(__file__).resolve().parents[2]
 PAGE = "homepage"
 PAGE_URL = "https://www.oakley.com/en-us"
-CONDITIONS = {("mid-mobile", "slow-4g"), ("desktop", "lighthouse-desktop")}
+CONDITIONS = {("mid-mobile", "slow-4g"), ("desktop", "desktop-broadband")}
 
 #: Headings the template always renders (report/template/report.html.j2). The
 #: skeleton check proves the ``data-section`` structure; these prove the words

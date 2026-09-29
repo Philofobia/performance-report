@@ -1,7 +1,7 @@
 """Pydantic canonical run object (PROJECT_SPEC §4.2/§4.3).
 
 Every run — manual or automated — converges to :class:`Run`. Validation enforces
-metric units/ranges (e.g. ``lcp_ms >= 0``, ``cls >= 0``, Lighthouse 0..100)
+metric units/ranges (e.g. ``lcp_ms >= 0``, ``cls >= 0``)
 and, for ``automated`` runs, requires the CWV trio (LCP, CLS, INP).
 """
 from __future__ import annotations
@@ -27,6 +27,15 @@ class Condition(BaseModel):
     network: str = Field(min_length=1)
     cpu_throttle: float = Field(default=1, ge=0)
     runs: int = Field(default=3, ge=1, le=100)
+    #: Whether third-party scripts were aborted during the measurement. A
+    #: blocked run's ``network`` also carries ``NO_THIRD_PARTY_SUFFIX``, so
+    #: every place that keys on the condition - trends, the newest run per
+    #: condition, the report's tables - keeps it apart from an unblocked run.
+    third_party_scripts: Literal["allowed", "blocked"] = "allowed"
+
+
+#: Appended to a blocked run's network name (``slow-4g+no-3p``).
+NO_THIRD_PARTY_SUFFIX = "+no-3p"
 
 
 Source = Literal["automated", "manual", "mixed"]
@@ -55,7 +64,7 @@ class CwpMetrics(BaseModel):
     fcp_ms: Optional[float] = Field(default=None, ge=0)
     ttfb_ms: Optional[float] = Field(default=None, ge=0)
     # Total Blocking Time — the lab responsiveness metric derived from long
-    # tasks (DevTools/Lighthouse definition). Complements INP, which is a
+    # tasks (the DevTools definition). Complements INP, which is a
     # field metric requiring a real interaction.
     tbt_ms: Optional[float] = Field(default=None, ge=0)
     #: ``lcp_ms`` is a lower bound: a larger LCP candidate existed whose
@@ -70,13 +79,6 @@ class CwpMetrics(BaseModel):
     target_lcp_ms: Optional[float] = Field(default=None, ge=0)
     target_cls: Optional[float] = Field(default=None, ge=0)
     target_inp_ms: Optional[float] = Field(default=None, ge=0)
-
-
-class LighthouseScores(BaseModel):
-    performance: Optional[int] = Field(default=None, ge=0, le=100)
-    accessibility: Optional[int] = Field(default=None, ge=0, le=100)
-    best_practices: Optional[int] = Field(default=None, ge=0, le=100)
-    seo: Optional[int] = Field(default=None, ge=0, le=100)
 
 
 class NetworkMetrics(BaseModel):
@@ -107,7 +109,6 @@ class MainThreadMetrics(BaseModel):
 
 class Metrics(BaseModel):
     cwp: CwpMetrics = Field(default_factory=CwpMetrics)
-    lighthouse: LighthouseScores = Field(default_factory=LighthouseScores)
     network: NetworkMetrics = Field(default_factory=NetworkMetrics)
     main_thread: MainThreadMetrics = Field(default_factory=MainThreadMetrics)
 

@@ -8,7 +8,14 @@
 # secret is committed. Omit the block entirely and nothing changes — headers are
 # opt-in and header-less runs behave exactly as they always have.
 #
+# block_third_party (true/false, default false): abort every script request
+# to a host outside the page's site, to measure the page without the code it
+# does not own. Settable per page too; `ingest auto --block-third-party` /
+# `--allow-third-party` override it for one campaign. Blocked runs are
+# recorded under <network>+no-3p, so they never mix with unblocked ones.
+#
 project: oakley
+block_third_party: false
 headers:
   X-Akamai-Bot: ${AKAMAI_BOT_TOKEN}
 pages:
@@ -16,14 +23,14 @@ pages:
     url: https://www.oakley.com/en-us
     tests:
       - { device: mid-mobile, network: slow-4g, runs: 3 }
-      - { device: desktop, network: lighthouse-desktop, runs: 3 }
+      - { device: desktop, network: desktop-broadband, runs: 3 }
   - name: plp
     url: https://www.oakley.com/en-us/category/sunglasses
     tests:
       - { device: mid-mobile, network: slow-4g, runs: 3 }
-      - { device: desktop, network: lighthouse-desktop, runs: 3 }
+      - { device: desktop, network: desktop-broadband, runs: 3 }
   - name: pdp
     url: https://www.oakley.com/en-us/product/W0OO9102?variant=888392335937
     tests:
       - { device: mid-mobile, network: slow-4g, runs: 3 }
-      - { device: desktop, network: lighthouse-desktop, runs: 3 }
+      - { device: desktop, network: desktop-broadband, runs: 3 }

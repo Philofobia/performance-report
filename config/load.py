@@ -137,6 +137,8 @@ class PageTarget(BaseModel):
     tests: List[PageTest] = Field(default_factory=list)
     # None = inherit the project headers; {} = explicitly send none.
     headers: Optional[Dict[str, str]] = None
+    # None = inherit the project's block_third_party.
+    block_third_party: Optional[bool] = None
 
 
 class TargetsConfig(BaseModel):
@@ -144,6 +146,9 @@ class TargetsConfig(BaseModel):
     pages: List[PageTarget]
     # Project-wide request headers, applied to every page unless overridden.
     headers: Dict[str, str] = Field(default_factory=dict)
+    # Abort third-party script requests during the campaign (per page
+    # overridable). Off: the page is measured as visitors get it.
+    block_third_party: bool = False
 
     @field_validator("pages")
     @classmethod
@@ -192,7 +197,7 @@ class RunDefaults(BaseModel):
     mobile_device: str = "mid-mobile"
     mobile_network: str = "slow-4g"
     desktop_device: str = "desktop"
-    desktop_network: str = "lighthouse-desktop"
+    desktop_network: str = "desktop-broadband"
 
 
 class Thresholds(BaseModel):
@@ -421,6 +426,12 @@ class ProjectConfig:
     project: str
     pages: List[PageTarget]  # pages with default conditions already resolved
     headers: Dict[str, str] = field(default_factory=dict)  # unresolved ${VAR} refs
+    block_third_party: bool = False
+
+    def blocks_third_party(self, page: PageTarget) -> bool:
+        """The page's own ``block_third_party`` when set, else the project's."""
+        return (self.block_third_party if page.block_third_party is None
+                else page.block_third_party)
 
     def headers_for(
         self,
@@ -506,5 +517,6 @@ def load_config(
         project=targets_obj.project,
         pages=targets_obj.pages,
         headers=targets_obj.headers,
+        block_third_party=targets_obj.block_third_party,
     )
 

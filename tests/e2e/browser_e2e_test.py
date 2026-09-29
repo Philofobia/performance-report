@@ -9,9 +9,6 @@ because it needs Playwright Chromium and public network access. Run with::
 
     python -m playwright install chromium
     pytest -m e2e -v
-
-The Lighthouse Node bridge is out of scope here (see ingest/browser/lighthouse.py);
-a stub supplies empty category scores, which the schema accepts as optional.
 """
 from __future__ import annotations
 
@@ -39,11 +36,6 @@ DESKTOP = Device(
 )
 SLOW_4G = Network(name="slow-4g", latency_ms=170, downlink_mbps=4.0, uplink_mbps=3.0)
 FAST_3G = Network(name="fast-3g", latency_ms=150, downlink_mbps=1.6, uplink_mbps=0.75)
-
-
-def _no_lighthouse(url, cdp):
-    """Stub Lighthouse report — the Node bridge is not wired in CI."""
-    return {"categories": {}}
 
 
 @pytest.fixture(scope="module")
@@ -144,7 +136,7 @@ def campaign_runs(browser, e2e_config, tmp_path_factory):
 
     artifacts = tmp_path_factory.mktemp("e2e_artifacts")
     runner = BrowserRunner(
-        browser, setup_page_fn=serve_realistic_page, run_lighthouse_fn=_no_lighthouse
+        browser, setup_page_fn=serve_realistic_page
     )
     return automated.run_campaign(
         e2e_config, runner, artifacts_root=str(artifacts)
@@ -181,7 +173,7 @@ def test_core_web_vitals_are_measured(campaign_runs):
 
 
 def test_main_thread_metrics_come_from_cdp(campaign_runs):
-    """DevTools counters over CDP — no Lighthouse Node bridge involved."""
+    """DevTools counters over CDP."""
     runs, _ = campaign_runs
     for run in runs:
         mt = run.metrics.main_thread
@@ -247,7 +239,7 @@ def test_inp_reflects_real_interaction_latency(browser):
         )
 
     runner = BrowserRunner(
-        browser, setup_page_fn=serve_fixture, run_lighthouse_fn=_no_lighthouse
+        browser, setup_page_fn=serve_fixture
     )
     result = runner.run_condition(E2E_URL, DESKTOP, FAST_3G)
 
@@ -266,7 +258,7 @@ def test_live_public_site_is_measurable(browser):
     """
     from ingest.browser.runner import BrowserRunner
 
-    runner = BrowserRunner(browser, run_lighthouse_fn=_no_lighthouse)
+    runner = BrowserRunner(browser)
     try:
         result = runner.run_condition(E2E_URL, MID_MOBILE, SLOW_4G)
     except Exception as exc:  # pragma: no cover - offline / DNS-blocked CI
