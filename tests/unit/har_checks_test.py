@@ -354,3 +354,60 @@ def test_evidence_urls_are_redacted(tmp_path):
     evidence = " ".join(hc.duplicate_downloads(three_runs(tmp_path, build)).evidence)
 
     assert "SECRET123" not in evidence
+
+
+def test_a_service_worker_that_downloads_but_fails_to_register_is_confirmed(tmp_path):
+    """The live OO pages: service-worker.js answers 200, then Chrome refuses it.
+
+    Reading the status alone reported OAK-36852 as not seen.
+    """
+    console = [{"level": "log", "text":
+                "Service Worker registrazione fallita: TypeError: Failed to register a "
+                "ServiceWorker for scope ('https://www.oakley.com/en-us/') with script "
+                "('https://www.oakley.com/en-us/service-worker.js'): ServiceWorker script "
+                "evaluation failed"}]
+
+    def build(pid):
+        return page(pid, console=console), [
+            entry("https://www.oakley.com/en-us/service-worker.js", 0, 50, page=pid,
+                  ctype="application/javascript")]
+
+    result = hc.service_worker(three_runs(tmp_path, build))
+
+    assert result.status == hc.CONFIRMED
+    assert any("ServiceWorker script evaluation failed" in line for line in result.evidence)
+
+
+def test_a_failed_preflight_is_the_captures_fault_when_it_sent_its_header_everywhere(tmp_path):
+    """WebPageTest sent x-akamai-bot to every host; media.oakley.com answered
+    the preflight 501 and Chrome said only "does not have HTTP ok status"."""
+    script = "https://media.oakley.com/lense-view-module/script/main__1.0.1.min.js"
+    console = [{"level": "error", "text":
+                f"Access to script at '{script}' from origin 'https://www.oakley.com' has "
+                "been blocked by CORS policy: Response to preflight request doesn't pass "
+                "access control check: It does not have HTTP ok status."}]
+
+    def build(pid):
+        preflight = entry(script, 100, 150, page=pid, status=501, request_type="Preflight")
+        preflight["request"]["method"] = "OPTIONS"
+        third = entry("https://cdn0.forter.com/x.js", 100, 200, page=pid,
+                      ctype="application/javascript")
+        third["request"]["headers"] = [{"name": "x-akamai-bot", "value": "secret"}]
+        return page(pid, console=console), [preflight, third]
+
+    runs = three_runs(tmp_path, build)
+
+    assert runs[0].cross_origin_headers == ["x-akamai-bot"]
+    assert "media.oakley.com" in hc.header_artifacts(runs)
+    assert hc.rejected_headers(runs) == ["x-akamai-bot"]
+    assert script in hc.artifact_urls(runs)
+
+
+def test_header_values_never_leave_the_loader(tmp_path):
+    def build(pid):
+        third = entry("https://cdn0.forter.com/x.js", 100, 200, page=pid)
+        third["request"]["headers"] = [{"name": "X-Akamai-Bot", "value": "secret-token"}]
+        return page(pid), [third]
+
+    runs = three_runs(tmp_path, build)
+    assert "secret-token" not in repr(runs)
