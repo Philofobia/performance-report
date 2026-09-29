@@ -45,7 +45,18 @@ captures**: every ticket in `config/tickets.yaml` is listed in the PDF as confir
 not seen, or not checkable, with the runs and requests that show it, and each page
 lists the concrete problems its HARs contain · **the bot-allowlist header sent to the
 site only** — it used to reach every host, which broke the hero image and inflated
-LCP three- to fourfold.
+LCP three- to fourfold · **new tickets proposed from the HARs**: 14 rules find
+problems no open ticket names — scripts holding the main thread, versioned assets
+cached for an hour, third-party render-blocking CSS, duplicate library versions,
+font-display, DOM size, low-priority LCP images, oversized images, console errors,
+flagged libraries — and write them as paste-ready drafts to `proposed-tickets.md` ·
+**third-party scripts blocked with one boolean** (`block_third_party`), recorded as
+their own condition · **no Lighthouse**: the audit hook never ran and is gone, with its
+score fields; the desktop preset is `desktop-broadband`.
+
+**Report of 2026-09-29** (`data/reports/oakley-dfceb394`, the 28-Sep campaign plus six
+WebPageTest HARs): 7 of 15 open tickets confirmed — OAK-36852 among them, which the
+status-only service-worker check had read as not seen — and 12 new tickets proposed.
 
 **Verified against the live site on 2026-09-28:** a three-page Oakley campaign,
 Grafana field data (1.38 M sessions over 7 days), model analysis of every page, a
@@ -94,7 +105,7 @@ Anything this README does not describe as working is not there.
 Two ways in, one normalized data model, one report out.
 
 - **Manual ingestion** — you supply a problem description and/or metric values
-  (LCP, CLS, INP, FCP, TTFB, Lighthouse scores, transfer sizes).
+  (LCP, CLS, INP, FCP, TTFB, transfer sizes).
 - **Automated ingestion** — a headless Chromium campaign drives your target pages
   under configurable **device × network × run-count** matrices, measuring Core Web
   Vitals with native `PerformanceObserver` collectors and main-thread counters
@@ -257,6 +268,29 @@ nothing changes. Use
 `--no-headers` to run without them, and see [CUSTOM_HEADERS.md](docs/CUSTOM_HEADERS.md)
 for scoping rules and how to confirm the token was accepted.
 
+### Blocking third-party scripts (optional)
+
+```yaml
+project: oakley
+block_third_party: false        # true: abort every script to a host outside the site
+pages:
+  - name: pdp
+    url: https://www.oakley.com/en-us/product/...
+    block_third_party: true     # per-page override
+```
+
+`ingest auto --block-third-party` / `--allow-third-party` override the file for one
+campaign. Only **scripts** are aborted: they cost the main-thread time and load the
+rest of a vendor's requests, while third-party styles and images are content the page
+renders. "The site" is the page's host minus `www.` and its subdomains — the same rule
+the header scoping uses ([`normalize/site.py`](normalize/site.py)).
+
+A page without its third parties is a different condition, so its runs are recorded
+under `<network>+no-3p` (`slow-4g+no-3p`) with `condition.third_party_scripts=blocked`:
+trends and the report never compare it with the page as visitors get it. The run's
+`guard` says how many scripts were blocked. Measure both ways and the difference is
+what the third parties cost.
+
 ---
 
 ## Running it
@@ -287,6 +321,7 @@ python -m cli ingest auto --pages homepage,plp      # only named pages
 python -m cli ingest auto --device desktop --runs 5
 python -m cli ingest auto --dry-run                 # print the resolved matrix, no browser
 python -m cli ingest auto --no-headers              # ignore configured request headers
+python -m cli ingest auto --block-third-party       # abort third-party scripts (+no-3p)
 python -m cli ingest auto --no-store                # do not record this campaign as history
 python -m cli ingest auto --targets config/ci-targets.yaml   # a different campaign file
 ```
@@ -434,7 +469,7 @@ The details that make the numbers trustworthy:
   the Event Timing API's 16 ms threshold and no entry is emitted; the run then fails
   validation rather than reporting the floor as if it were a measurement. **TBT** is
   therefore also collected as the always-available lab responsiveness metric.
-- **TBT runs from FCP to Time to Interactive**, as in Lighthouse and WebPageTest: long
+- **TBT runs from FCP to Time to Interactive**, as in DevTools and WebPageTest: long
   tasks after the first five-second quiet window are not load-time blocking, and
   neither are the tasks our own synthetic interaction causes. It used to sum every long
   task until collection; with consent working, trackers fire for 20–30 s after load,
@@ -450,13 +485,14 @@ The details that make the numbers trustworthy:
   Chromium gives a cross-origin image only its download time; that value is flagged
   `†`, not reported as a paint. The venv must run the pinned Playwright (1.62): at
   1.48 the Oakley hero read its download time, hiding the delay OAK-39155 is about.
-- **Desktop is measured on Lighthouse's desktop network** (10 Mbps, 40 ms). It was
-  fast-3g (1.6 Mbps), which put a working 1 MB hero at 12 s of LCP — true for that link,
-  not for desktop visitors, whom WebPageTest and the field put at ~2 s. Mobile stays on
-  slow-4G with a 4× CPU slowdown, Lighthouse's mobile default.
-- **Lighthouse is opt-in.** A faithful programmatic audit needs a Node process wired to
-  the page's CDP websocket. CDP already yields the same main-thread breakdown natively,
-  so Lighthouse category scores are populated only if you inject `run_lighthouse_fn`.
+- **Desktop is measured on `desktop-broadband`** (10 Mbps, 40 ms). It was fast-3g
+  (1.6 Mbps), which put a working 1 MB hero at 12 s of LCP — true for that link, not
+  for desktop visitors, whom WebPageTest and the field put at ~2 s. Mobile stays on
+  slow-4G with a 4× CPU slowdown. The preset was called `lighthouse-desktop` until
+  2026-09-29; trends key on the network name, so desktop series restart there.
+- **No Lighthouse.** Its audit hook never ran — no bridge was ever wired — and was
+  removed with its score fields (schema, store, manual CLI, web form). Runs stored with
+  those scores still load; the scores are ignored. Main-thread data comes from CDP.
 - **Median of N.** Default 3 runs per condition; every run's raw artifacts are kept so
   results stay auditable. The run whose LCP sits closest to the median donates the
   screenshot and HAR — and a run that reported no LCP is never that run, since it
@@ -586,7 +622,49 @@ The checks: `lcp_render_delay` (image downloaded long before it is painted; with
 first fetched at another width), `duplicate_downloads`, `multiple_renditions`,
 `slide_in_shift` (one region shifting frame by frame), `service_worker`,
 `lcp_image_from_script`, `css_background_images` (with `match:` naming the images the
-ticket means — never icons).
+ticket means — never icons). `service_worker` reads the console as well as the status:
+on OO the script answers 200 and Chrome then refuses it ("script evaluation failed").
+
+A capture that sent an `x-*` header to hosts outside the site (WebPageTest with a
+site-wide bot header) makes every cross-origin request it touches need a CORS
+preflight. A refused preflight in such a capture is the capture's failure — Chrome's
+message ("does not have HTTP ok status") names no header — and is never reported as
+the site's, nor proposed as a ticket.
+
+#### New tickets from the HARs
+
+[`analysis/discovery.py`](analysis/discovery.py) asks its own questions of the same
+captures, and the report's **New tickets** section lists what no open ticket names,
+most severe first. `report` also writes `proposed-tickets.md` beside the PDF: the
+drafts alone, one paste-ready block each — title in the open tickets' style
+(`HP / PDP | ...`), priority, area, where it was seen, problem, evidence, proposed
+fix, a *done when* stated as what the next capture shows, and open tickets on related
+checks to read first.
+
+| Rule | Finds |
+| --- | --- |
+| `main_thread_scripts` | scripts (and the document) running ≥100 ms of main thread; TBT and longest task |
+| `third_party_cost` | requests, bytes and CPU per third-party vendor |
+| `third_party_render_blocking` | render-blocking requests to other origins |
+| `redirected_subresources` | sub-resources requested at a URL that redirects |
+| `duplicate_libraries` | one library at two major versions (`react@16` and `react@17`) |
+| `short_static_cache` | the site's static assets cached under a week, or `private` |
+| `uncompressed_text` | text responses over 1.4 KB with no Content-Encoding |
+| `font_display` | loaded faces with `font-display: auto`/`block` |
+| `dom_size` | over 1,500 elements at load |
+| `lcp_priority` | the LCP image fetched below High priority |
+| `oversized_images` | raster images ≥1.5× wider than their slot at the device's pixel ratio |
+| `failed_requests` | 4xx/5xx the site makes, less what the capture broke |
+| `console_errors` | JavaScript errors, less network, CORS-artifact and service-worker lines |
+| `vulnerable_libraries` | libraries WebPageTest flags with advisories |
+
+Every rule needs most runs of a capture to agree, and finds nothing when the HAR lacks
+the field — this project's own captures carry no CPU attribution, so the WebPageTest
+exports are the input to use. Once a draft is filed, add `tracks: [rule]` to its
+entry in `config/tickets.yaml` and later reports list it as already filed instead of
+proposing it again. A rule that counted "images in the first viewport waiting on
+JavaScript" was dropped: WebPageTest's in-viewport list includes hidden mega-menu
+images, whose box sits at 0,0.
 
 **It always produces a report.** No API key, a spent [token budget](#token-budget), an
 exhausted free-tier quota, or a model that returns unusable JSON twice all degrade to a
