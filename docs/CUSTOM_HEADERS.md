@@ -57,25 +57,36 @@ and compare, without editing config. With it, an unset token is not an error.
 
 ---
 
-## Why the header is set at the context level
+## Which requests carry the header
 
-Playwright applies `extra_http_headers` set on a **browser context** to every request
-made by every page in that context. That is the robust place for the token: it covers
-the main HTML document *and* every sub-resource — scripts, images, XHR/fetch.
+**Every request to the page's own site and its subdomains, and nothing else.** For
+`https://www.oakley.com/...` that is `oakley.com` and `*.oakley.com` — the document,
+and `media.oakley.com` / `assets2.oakley.com`, which Akamai also fronts. No third
+party ever receives it (`install_site_headers` in `ingest/browser/runner.py`).
 
-If the header were attached per navigation instead, only the document would carry it
-and the bot filter could still block individual sub-resource requests. On a page
-issuing 180–250 requests, that difference is the difference between zero blocks and a
-partial, misleading measurement.
+It used to be set on the whole browser context, which sends it to *every* host. That
+was wrong in two ways, both found on the live Oakley homepage (2026-09-28):
 
-The runner does this in `ingest/browser/runner.py`, adding the key to the context
-kwargs only when headers were actually supplied:
+- **It broke the measurement.** A non-safelisted header on a cross-origin fetch, XHR
+  or `crossorigin` image forces a CORS preflight. A preflight never carries the token,
+  and hosts that do not allow the header fail the request. Every `media.oakley.com`
+  image failed (`net::ERR_FAILED`, then `ERR_BLOCKED_BY_ORB`), the hero never painted,
+  and LCP fell back to text that appears late: **6–9 s measured, against ~2 s in
+  WebPageTest and in the field**. Scoped to the site, the hero is the LCP element
+  again at ~2.7 s under mid-mobile / slow-4G.
+- **It leaked the token** to forter, google, doubleclick, affirm, cookielaw and every
+  other third party on the page.
 
-```python
-if extra_http_headers:
-    ctx_kwargs["extra_http_headers"] = dict(extra_http_headers)
-context = self._browser.new_context(**ctx_kwargs)
-```
+WebPageTest runs configured with a custom header have the same problem: their console
+shows `Request header field x-akamai-bot is not allowed by Access-Control-Allow-Headers
+in preflight response` for cookielaw, forter and others. Failures of those requests in
+such a test are the test's, not the site's.
+
+The header is added by request interception, which applies it below the CORS layer —
+no preflight — and keeps cookies. The price is interception latency on first-party
+requests; a run with no headers configured installs no interception at all. The scope
+is the host minus a leading `www.`, never a guessed registrable domain: guessing would
+turn `shop.example.co.uk` into `co.uk`.
 
 ---
 

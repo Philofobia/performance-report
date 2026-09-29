@@ -195,6 +195,30 @@ def test_the_committed_baseline_matches_the_real_template():
     assert fingerprint(render_html(a_report())) == load_baseline(BASELINE_PATH)
 
 
+def test_tickets_and_har_captures_do_not_change_the_skeleton():
+    """A report with HAR evidence is the same document as one without it.
+
+    Ticket groups render only when they have tickets, so they carry no
+    data-section; the skeleton sees "tickets" and "page.har" either way.
+    """
+    from analysis.reportmodel import HarCaptureModel, TicketModel
+    from report.render_html import render_html
+
+    from tests.unit.render_html_test import a_report
+
+    report = a_report(pages=("homepage", "pdp"))
+    report.tickets = [
+        TicketModel(id="OAK-1", title="t", status="confirmed", summary="s",
+                    evidence=["run 1: x"]),
+        TicketModel(id="OAK-2", title="t", status="not_checkable", summary="needs a click"),
+    ]
+    report.pages[0].har = [HarCaptureModel(device="mobile", source="HOMEMOB.har", runs=3,
+                                           findings=["LCP 2034 ms"],
+                                           test_artifacts=["cdn.cookielaw.org"])]
+
+    assert fingerprint(render_html(report)) == load_baseline(BASELINE_PATH)
+
+
 def test_the_committed_baseline_is_page_count_independent():
     from report.render_html import render_html
 

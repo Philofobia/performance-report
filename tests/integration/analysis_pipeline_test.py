@@ -171,6 +171,157 @@ def test_load_runs_reports_an_unreadable_file(tmp_path):
         load_runs(input_dir=directory)
 
 
+def _write(directory, name, payload):
+    (directory / name).write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _in_project(payload, project):
+    payload["project"]["name"] = project
+    return payload
+
+
+def test_runs_from_two_projects_are_refused_not_merged(input_dir):
+    """A CI campaign run locally left ci-smoke runs beside Oakley's, and the
+    report took its project name from whichever run sorted first."""
+    _write(input_dir, "ci.json", _in_project(run_payload("run_c1", "homepage"),
+                                              "ci-smoke"))
+
+    with pytest.raises(ValueError, match=r"ci-smoke.*storefront.*--project"):
+        load_runs(input_dir=input_dir)
+
+
+def test_project_selects_one_campaign_from_a_mixed_directory(input_dir):
+    _write(input_dir, "ci.json", _in_project(run_payload("run_c1", "homepage"),
+                                              "ci-smoke"))
+
+    assert [r.run_id for r in load_runs(input_dir=input_dir, project="ci-smoke")] == [
+        "run_c1"]
+    assert {r.project.name for r in load_runs(input_dir=input_dir,
+                                              project="storefront")} == {"storefront"}
+
+
+def test_an_unknown_project_is_an_error_naming_what_is_there(input_dir):
+    with pytest.raises(FileNotFoundError, match="storefront"):
+        load_runs(input_dir=input_dir, project="oakley")
+
+
+def test_the_newest_run_of_a_condition_supersedes_older_ones(input_dir, capsys):
+    """One file per (page x condition) is the contract, but a store holds every
+    campaign ever measured, and a directory can hold files from before a rename.
+    Analysing them together reported August's run beside today's as one
+    campaign, with the worst of the two chosen as the page's primary run."""
+    older = run_payload("run_h0", "homepage", lcp=9999)
+    older["meta"]["created_at"] = "2025-12-01T09:00:00Z"
+    _write(input_dir, "old-homepage.json", older)
+
+    runs = load_runs(input_dir=input_dir)
+
+    assert {r.run_id for r in runs} == {"run_h1", "run_h2", "run_p1"}
+    assert "1 older run" in capsys.readouterr().err
+
+
+def test_the_store_path_analyses_the_latest_campaign_not_all_history(tmp_path):
+    db = tmp_path / "runs.sqlite"
+    conn = sql.connect(db)
+    sql.init_schema(conn)
+    august = run_payload("run_old", "homepage")
+    august["meta"]["created_at"] = "2026-08-20T08:00:00Z"
+    sql.insert_run(conn, Run.model_validate(august))
+    sql.insert_run(conn, Run.model_validate(run_payload("run_new", "homepage")
+                                            | {"meta": {"created_at": "2026-09-28T07:00:00Z",
+                                                        "source": "automated"}}))
+    conn.close()
+
+    assert [r.run_id for r in load_runs(from_store=db)] == ["run_new"]
+
+
+def test_cli_selects_a_project(input_dir, tmp_path, capsys):
+    _write(input_dir, "ci.json", _in_project(run_payload("run_c1", "homepage"),
+                                              "ci-smoke"))
+
+    assert main(["--input-dir", str(input_dir), "--output-dir", str(tmp_path / "out"),
+                 "--no-llm", "--no-field"]) == 1
+    assert "--project" in capsys.readouterr().err
+
+    assert main(["--input-dir", str(input_dir), "--output-dir", str(tmp_path / "out"),
+                 "--no-llm", "--no-field", "--project", "ci-smoke"]) == 0
+    assert "ci-smoke" in capsys.readouterr().out
+
+
+class _SummaryRefused(FakeLlm):
+    """Every page analysed; the summary call refused, as a 429 did live."""
+
+    def summarize(self, payload):
+        from rag.embeddings import QuotaExceededError
+
+        self.summary_calls += 1
+        raise QuotaExceededError("429 RESOURCE_EXHAUSTED")
+
+
+def test_a_summary_that_fell_back_to_rules_is_not_reported_as_model_written(
+        input_dir, vector_store):
+    """Live Oakley: three pages written by the model, then a 429 on the summary.
+    The executive summary was the rule-based text, and the cover still said
+    `llm` with no degradation reason."""
+    report = run_analysis(load_runs(input_dir=input_dir), store=vector_store,
+                          embed_client=FakeEmbeddings(), llm_client=_SummaryRefused(),
+                          history=[], no_field=True)
+
+    assert all(p.verdict for p in report.pages)
+    assert report.meta.analysis_mode == "partial"
+    assert report.meta.summary_degradation == "quota_exhausted"
+    assert report.meta.degradation_reason is None   # no *page* fell back
+
+
+def test_a_model_written_summary_carries_no_summary_degradation(input_dir, vector_store):
+    report = run_analysis(load_runs(input_dir=input_dir), store=vector_store,
+                          embed_client=FakeEmbeddings(), llm_client=FakeLlm(),
+                          history=[], no_field=True)
+
+    assert report.meta.analysis_mode == "llm"
+    assert report.meta.summary_degradation is None
+
+
+def test_cli_checks_tickets_against_a_supplied_har(input_dir, tmp_path, monkeypatch):
+    """`--har page/device=path`: the report lists every ticket with what the
+    capture shows, and the page carries the capture's own findings."""
+    from tests.unit.har_checks_test import _hero_waits_for_script
+
+    pages, entries = [], []
+    for n in (1, 2, 3):
+        p, e = _hero_waits_for_script(f"page_{n}")
+        pages.append(p)
+        entries += e
+    har = tmp_path / "HOMEMOB.har"
+    har.write_text(json.dumps({"log": {"pages": pages, "entries": entries}}), encoding="utf-8")
+    catalog = tmp_path / "tickets.yaml"
+    catalog.write_text(
+        "site_hosts: {OO: [www.oakley.com]}\n"
+        "tickets:\n"
+        "  - {id: OAK-39155, title: hero, pages: [homepage], check: lcp_render_delay,\n"
+        "     params: {script: newHeroBanner.js}}\n"
+        "  - {id: OAK-39153, title: do not sell, reason: Needs a click.}\n",
+        encoding="utf-8")
+    out = tmp_path / "out"
+
+    assert main(["--input-dir", str(input_dir), "--output-dir", str(out), "--no-llm",
+                 "--no-field", "--har", f"homepage/mobile={har}",
+                 "--tickets", str(catalog)]) == 0
+
+    payload = json.loads(next(out.glob("*/report.json")).read_text(encoding="utf-8"))
+    assert [(t["id"], t["status"]) for t in payload["tickets"]] == [
+        ("OAK-39155", "confirmed"), ("OAK-39153", "not_checkable")]
+    homepage = next(p for p in payload["pages"] if p["name"] == "homepage")
+    assert homepage["har"][0]["source"] == "HOMEMOB.har"
+    assert homepage["har"][0]["runs"] == 3
+
+
+def test_cli_rejects_a_malformed_har_argument(input_dir, tmp_path, capsys):
+    assert main(["--input-dir", str(input_dir), "--output-dir", str(tmp_path / "o"),
+                 "--no-llm", "--no-field", "--har", "homepage=x.har"]) == 1
+    assert "page/device=path" in capsys.readouterr().err
+
+
 def test_group_by_page_is_sorted(input_dir):
     grouped = group_by_page(load_runs(input_dir=input_dir))
     assert list(grouped) == ["homepage", "plp"]

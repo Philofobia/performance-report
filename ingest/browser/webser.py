@@ -51,6 +51,13 @@ COLLECTOR_SCRIPT = """
   observe('largest-contentful-paint', (e) => {
     if (e.startTime > 0) {
       state.lcp_ms = e.startTime;
+      // A load time but no render time: startTime is the image's *download*,
+      // not its paint (older Chromium, cross-origin, no Timing-Allow-Origin).
+      state.lcp_paint_missing = !(e.renderTime > 0) && e.loadTime > 0;
+      const el = e.element;
+      const cls = el && typeof el.className === 'string' ? el.className.trim().split(/\\s+/)[0] : '';
+      const tail = e.url ? ' …/' + e.url.split('?')[0].split('/').pop() : '';
+      state.lcp_element = el ? (el.tagName + (el.id ? '#' + el.id : cls ? '.' + cls : '') + tail).slice(0, 300) : null;
       if (e.size > state.lcp_timed_max_size) state.lcp_timed_max_size = e.size;
     } else if (e.size > state.lcp_untimed_max_size) {
       state.lcp_untimed_max_size = e.size;
@@ -88,6 +95,9 @@ READ_SCRIPT = """
     fcp_ms: s.fcp_ms === undefined ? null : s.fcp_ms,
     ttfb_ms: nav ? nav.responseStart : null,
     longtasks: s.longtasks || [],
+    interaction_at: s.interaction_at === undefined ? null : s.interaction_at,
+    lcp_paint_missing: s.lcp_paint_missing === true,
+    lcp_element: s.lcp_element || null,
     lcp_timed_max_size: s.lcp_timed_max_size || 0,
     lcp_untimed_max_size: s.lcp_untimed_max_size || 0
   };
@@ -137,19 +147,44 @@ def install_collector(page) -> None:
     page.add_init_script(COLLECTOR_SCRIPT)
 
 
+#: Time to Interactive is the end of the last long task before this long a
+#: stretch with none (Lighthouse's quiet window).
+TTI_QUIET_WINDOW_MS = 5000.0
+
+
+#: Stamps when the synthetic interaction begins (see ``trigger_interaction``).
+MARK_INTERACTION_SCRIPT = """
+() => { if (window.__PERF_CAPTURE__) { window.__PERF_CAPTURE__.interaction_at = performance.now(); } }
+"""
+
+
 def compute_tbt_ms(
-    longtasks: List[Dict[str, Any]], fcp_ms: Optional[float]
+    longtasks: List[Dict[str, Any]], fcp_ms: Optional[float],
+    *, until_ms: Optional[float] = None,
 ) -> Optional[float]:
-    """Total Blocking Time: blocking time of long tasks that land after FCP.
+    """Total Blocking Time: blocking time of long tasks between FCP and TTI.
 
     Each long task contributes ``duration - 50ms`` (the portion the main thread
-    was unavailable to respond). Tasks before FCP are excluded, matching how
-    DevTools/Lighthouse define the metric. Returns ``None`` when the browser
-    reported no ``longtask`` support at all.
+    was unavailable to respond). Tasks before FCP are excluded, and so is every
+    task after Time to Interactive — the end of the last long task before a
+    five-second window with none — matching how DevTools/Lighthouse and
+    WebPageTest define the metric. This is TTI's CPU criterion only; the
+    network criterion needs request timing this collector does not keep.
+
+    Without the TTI bound TBT grew with the observation window: on the live
+    Oakley homepage trackers fire long tasks for 20-30 s after load, and the
+    unbounded sum read 10.7 s against 0.4-0.65 s in WebPageTest. When no quiet
+    window arrives before observation ends, every task counts — TTI is then
+    later than we watched.
+
+    ``until_ms`` is when the runner's synthetic interaction began: the key
+    press and click that measure INP run the page's handlers, and those tasks
+    are ours, not the load's. Returns ``None`` when the browser reported no
+    ``longtask`` support at all.
     """
     if longtasks is None:
         return None
-    total = 0.0
+    tasks = []
     for task in longtasks:
         try:
             start = float(task.get("start", 0.0))
@@ -158,9 +193,19 @@ def compute_tbt_ms(
             continue
         if fcp_ms is not None and start + duration < fcp_ms:
             continue  # entirely before first paint — not blocking the user yet
+        if until_ms is not None and start >= until_ms:
+            continue  # our own synthetic interaction, not the page load
+        tasks.append((start, duration))
+
+    total = 0.0
+    quiet_since = fcp_ms if fcp_ms is not None else 0.0
+    for start, duration in sorted(tasks):
+        if start - quiet_since >= TTI_QUIET_WINDOW_MS:
+            break  # interactive: nothing after this is load-time blocking
         blocking = duration - BLOCKING_TASK_FLOOR_MS
         if blocking > 0:
             total += blocking
+        quiet_since = max(quiet_since, start + duration)
     return round(total, 3)
 
 
@@ -172,6 +217,12 @@ def lcp_underestimated(raw: Dict[str, Any]) -> bool:
     candidate is *larger* than every candidate that did report a time, the
     element that actually decides the page's LCP was never timed, and the value
     we can report is the largest timed element — a lower bound.
+
+    Also true when the winning candidate had a load time but no render time
+    (``lcp_paint_missing``): its ``startTime`` is when the image *downloaded*,
+    not when it was painted. Chromium 130 did this for the cross-origin Oakley
+    hero, reporting 1192 ms for an image painted — per OAK-39155 — about a
+    second later; Chromium 151 exposes the paint (1344 ms).
     """
     def _size(key: str) -> float:
         try:
@@ -179,6 +230,8 @@ def lcp_underestimated(raw: Dict[str, Any]) -> bool:
         except (TypeError, ValueError):
             return 0.0
 
+    if raw.get("lcp_paint_missing") is True:
+        return True
     return _size("lcp_untimed_max_size") > _size("lcp_timed_max_size")
 
 
@@ -193,9 +246,12 @@ def collect_web_vitals(page) -> Dict[str, Any]:
         except (TypeError, ValueError):
             out[key] = None
     # TBT is derived, not observed directly.
-    out["tbt_ms"] = compute_tbt_ms(raw.get("longtasks"), out.get("fcp_ms"))
+    out["tbt_ms"] = compute_tbt_ms(raw.get("longtasks"), out.get("fcp_ms"),
+                                   until_ms=raw.get("interaction_at"))
     # Not a measurement — a qualifier on lcp_ms. See lcp_underestimated().
     out["lcp_underestimated"] = lcp_underestimated(raw)
+    element = raw.get("lcp_element")
+    out["lcp_element"] = str(element)[:300] if element else None
     return out
 
 
@@ -286,7 +342,14 @@ def trigger_interaction(page) -> None:
     Presses Escape (never activates a control or submits a form) and, when a
     provably non-interactive point exists, taps it. Both are best-effort: any
     failure leaves ``inp_ms`` as ``None`` rather than raising.
+
+    The moment is recorded first, so Total Blocking Time can leave out the
+    long tasks this interaction causes (``compute_tbt_ms``'s ``until_ms``).
     """
+    try:
+        page.evaluate(MARK_INTERACTION_SCRIPT)
+    except Exception:  # pragma: no cover - defensive, browser-specific
+        pass
     try:
         page.keyboard.press("Escape")
     except Exception:  # pragma: no cover - defensive, browser-specific

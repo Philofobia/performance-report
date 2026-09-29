@@ -4,7 +4,7 @@
 
 Pages tested: {{ report.cover.pages|join(', ') }}
 
-Analysis: {% if report.meta.analysis_mode == 'llm' %}retrieval-grounded model analysis ({{ report.meta.model }}){% elif report.meta.analysis_mode == 'partial' %}retrieval-grounded model analysis ({{ report.meta.model }}), but some pages fell back to rule-based analysis ({{ report.meta.degradation_reason }}) — those pages carry generic playbook recommendations rather than ones written for them{% else %}rule-based analysis — no model reasoned over these measurements{% endif %}
+Analysis: {% if report.meta.analysis_mode == 'llm' %}retrieval-grounded model analysis ({{ report.meta.model }}){% elif report.meta.analysis_mode == 'partial' and report.meta.summary_degradation and not report.meta.degradation_reason %}retrieval-grounded model analysis ({{ report.meta.model }}) of every page, but the executive summary fell back to rule-based analysis ({{ report.meta.summary_degradation }}){% elif report.meta.analysis_mode == 'partial' %}retrieval-grounded model analysis ({{ report.meta.model }}), but some pages fell back to rule-based analysis ({{ report.meta.degradation_reason }}) — those pages carry generic playbook recommendations rather than ones written for them{% else %}rule-based analysis — no model reasoned over these measurements{% endif %}
 
 ## Executive summary
 
@@ -33,6 +33,30 @@ Each page lists its own remaining recommendations below.
 {% endfor %}
 {% else %}
 _No actions could be ranked for this campaign._
+{% endif %}
+
+## Tickets
+
+{% if report.tickets %}
+Each ticket in `config/tickets.yaml`, checked against the HAR captures supplied
+for this report. A ticket is confirmed only when most runs of a capture show it.
+{% for status, heading in [('confirmed', 'Confirmed — act on these'), ('not_seen', 'Not seen in these captures'), ('no_data', 'No capture could answer'), ('not_checkable', 'Cannot be checked from a page-load capture')] %}
+{% set group = report.tickets|selectattr('status', 'equalto', status)|list %}
+{% if group %}
+
+**{{ heading }}** ({{ group|length }})
+
+{% for ticket in group %}
+- **{{ ticket.id }}** {{ ticket.title }} ({{ ticket.sites|join(' / ') }}{% if ticket.observed_on %}; seen on {{ ticket.observed_on|join(', ') }}{% endif %}) — {{ ticket.summary }}
+{% for line in ticket.evidence %}
+  - `{{ line|trim }}`
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% else %}
+_No HAR captures were supplied, so no ticket was checked. Pass them to
+`analyze --har page/device=file.har`._
 {% endif %}
 
 ## What visitors actually experienced
@@ -182,6 +206,27 @@ page as {{ field_beacons[page.name] }} real visits measured it ({{ page.field.pa
 _No findings were produced for this page._
 {% endif %}
 
+**In the HAR captures**
+
+{% if page.har %}
+{% for capture in page.har %}
+_{{ capture.device }} — {{ capture.source }}, {{ capture.runs }} runs{% if capture.lcp_ms is not none %}, median LCP {{ capture.lcp_ms|round|int }} ms{% endif %}{% if capture.cls is not none %}, CLS {{ '%.3f'|format(capture.cls) }}{% endif %}_
+
+{% for line in capture.findings %}
+- `{{ line }}`
+{% else %}
+_Nothing beyond the tickets above._
+{% endfor %}
+{% if capture.test_artifacts %}
+
+Not the site's problem: requests to {{ capture.test_artifacts|join(', ') }} failed because the capture sent {{ capture.rejected_headers|join(', ') or 'a custom header' }} to them, which forces a CORS preflight those hosts refuse.
+{% endif %}
+
+{% endfor %}
+{% else %}
+_No HAR capture was supplied for this page._
+{% endif %}
+
 **What to do**
 
 {% if page.recommendations %}
@@ -198,6 +243,9 @@ _No playbook-grounded recommendations for this page._
 | --- | --- | --- | --- | --- |
 {% for row in page.conditions %}
 | {{ row.device }} / {{ row.network }} | {{ row.metrics.lcp_ms|round|int if row.metrics.lcp_ms is not none else '—' }}{% if row.lcp_underestimated %} †{% endif %} | {{ '%.2f'|format(row.metrics.cls) if row.metrics.cls is not none else '—' }} | {{ row.metrics.inp_ms|round|int if row.metrics.inp_ms is not none else '—' }} | {{ row.metrics.tbt_ms|round|int if row.metrics.tbt_ms is not none else '—' }} |
+{% endfor %}
+{% for row in page.conditions if row.lcp_element %}
+- LCP element, {{ row.device }} / {{ row.network }}: `{{ row.lcp_element }}`
 {% endfor %}
 {% if page.conditions|selectattr('lcp_underestimated')|list %}
 † LCP is a **lower bound** for this condition. The largest element on the page was

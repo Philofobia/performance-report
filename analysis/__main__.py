@@ -41,13 +41,65 @@ class SimpleSummary:
     top_actions: List[str]
 
 
+def _one_project(runs: List[Run], project: Optional[str], where: Any) -> List[Run]:
+    """The runs of exactly one project — named, or the only one present.
+
+    Never merged: a report takes its name, campaign id and history from its
+    project, and a directory holding a CI campaign beside Oakley's produced a
+    report named after whichever run happened to sort first.
+    """
+    counts: Dict[str, int] = {}
+    for run in runs:
+        counts[run.project.name] = counts.get(run.project.name, 0) + 1
+    listing = ", ".join(f"{name} ({counts[name]})" for name in sorted(counts))
+
+    if project is not None:
+        if project not in counts:
+            raise FileNotFoundError(
+                f"No runs for project {project!r} in {where}; found: {listing}")
+        return [r for r in runs if r.project.name == project]
+    if len(counts) > 1:
+        raise ValueError(
+            f"Runs from more than one project in {where}: {listing}. "
+            "Pass --project to choose one.")
+    return runs
+
+
+def _latest_per_condition(runs: List[Run]) -> List[Run]:
+    """The newest run of each (page x device x network); say what was dropped.
+
+    One run per condition is what a campaign writes, but the store holds every
+    campaign ever measured, and a directory can hold files from before a
+    rename. Taken together they were analysed as one campaign: August beside
+    today, with the worse of the two chosen as the page's primary run.
+    """
+    latest: Dict[tuple, Run] = {}
+    for run in runs:
+        key = (run.page.name, run.condition.device, run.condition.network)
+        held = latest.get(key)
+        if held is None or (run.meta.created_at, run.run_id) > (
+                held.meta.created_at, held.run_id):
+            latest[key] = run
+    superseded = len(runs) - len(latest)
+    if superseded:
+        noun = "run" if superseded == 1 else "runs"
+        print(f"Analysing the newest run of each condition; {superseded} older "
+              f"{noun} of the same conditions set aside.", file=sys.stderr)
+    return list(latest.values())
+
+
 def load_runs(
     *,
     input_dir: Optional[Any] = None,
     from_store: Optional[Any] = None,
     pages: Optional[Sequence[str]] = None,
+    project: Optional[str] = None,
 ) -> List[Run]:
-    """Load runs from a directory of normalized JSON, or from SQLite."""
+    """Load one campaign's runs from a directory of JSON, or from SQLite.
+
+    One campaign means one project (``project``, or the only one present) and
+    the newest run of each page x condition.
+    """
     runs: List[Run] = []
     if from_store is not None:
         from store import sql
@@ -74,14 +126,17 @@ def load_runs(
                 raise ValueError(f"Could not read run JSON {path}: {exc}") from exc
             runs.append(Run.model_validate(payload))
 
+    where = from_store if from_store is not None else input_dir
+    if runs:
+        runs = _one_project(runs, project, where)
+
     if pages:
         wanted = {p.strip() for p in pages if p.strip()}
         runs = [r for r in runs if r.page.name in wanted]
 
     if not runs:
-        where = from_store if from_store is not None else input_dir
         raise FileNotFoundError(f"No runs found in {where}")
-    return sorted(runs, key=lambda r: r.run_id)
+    return sorted(_latest_per_condition(runs), key=lambda r: r.run_id)
 
 
 def group_by_page(runs: Sequence[Run]) -> Dict[str, List[Run]]:
@@ -120,6 +175,48 @@ def rule_based_summary(pages: Sequence[PageAnalysis]) -> SimpleSummary:
                 actions.append(label)
     return SimpleSummary(problem=problem, key_finding=key_finding,
                          top_actions=actions[:MAX_TOP_ACTIONS])
+
+
+def load_har_evidence(har_args: Sequence[str],
+                      tickets_path: Optional[str] = None) -> tuple:
+    """``--har`` values -> (captures, ticket outcomes); both empty with no HAR.
+
+    Tickets are evaluated only when a HAR was supplied: with nothing to check
+    against, every ticket would read "no data", which says nothing.
+    """
+    from analysis import har_checks, tickets as tk
+
+    captures = []
+    for value in har_args:
+        page, device, path = tk.parse_har_arg(value)
+        runs = har_checks.load_har(path)
+        if not runs:
+            raise ValueError(f"{path} holds no page loads")
+        captures.append(tk.Capture(page=page, device=device, runs=runs))
+    if not captures:
+        return [], []
+    catalog = tk.load_catalog(Path(tickets_path) if tickets_path else tk.TICKETS_FILE)
+    return captures, tk.evaluate(catalog, captures)
+
+
+def _degradation_reason(exc: Exception) -> str:
+    """The same reason names ``analyze_page`` gives a page that fell back.
+
+    Most specific first: ``BudgetExhaustedError`` and ``QuotaExceededError``
+    are both ``EmbeddingError``s, and "we chose not to spend" must not read as
+    a bad response.
+    """
+    from analysis.llm import InvalidModelOutputError, LlmUnavailableError
+    from rag.embeddings import MissingApiKeyError, QuotaExceededError
+
+    for kind, reason in ((BudgetExhaustedError, "budget_exhausted"),
+                         (QuotaExceededError, "quota_exhausted"),
+                         (MissingApiKeyError, "no_api_key"),
+                         (LlmUnavailableError, "model_unavailable"),
+                         (InvalidModelOutputError, "invalid_model_output")):
+        if isinstance(exc, kind):
+            return reason
+    return "invalid_model_output"
 
 
 def _summary_payload(pages: Sequence[PageAnalysis]) -> str:
@@ -212,6 +309,8 @@ def run_analysis(
     history: Optional[Sequence[Any]] = None,
     field: Optional[Any] = None,
     no_field: bool = False,
+    har_captures: Sequence[Any] = (),
+    tickets: Sequence[Any] = (),
 ) -> Report:
     """Run the full analysis pipeline over a campaign's runs.
 
@@ -304,6 +403,7 @@ def run_analysis(
         ))
 
     summary: Any = rule_based_summary(analyses)
+    summary_degradation: Optional[str] = None
     if llm_client is not None and analyses and all(p.mode == "llm" for p in analyses):
         from analysis.llm import AnalysisError
         from rag.embeddings import EmbeddingError
@@ -312,8 +412,11 @@ def run_analysis(
             summary = _top_up_actions(
                 llm_client.summarize(_summary_payload(analyses)), analyses
             )
-        except (AnalysisError, EmbeddingError):
+        except (AnalysisError, EmbeddingError) as exc:
             summary = rule_based_summary(analyses)
+            summary_degradation = _degradation_reason(exc)
+            print(f"Executive summary: no model summary ({summary_degradation}) - "
+                  "the report carries the rule-based one.", file=sys.stderr)
 
     if page_analyses_out is not None:
         page_analyses_out.extend(analyses)
@@ -332,6 +435,8 @@ def run_analysis(
         analyses, project=project, settings=settings, summary=summary,
         generated_at=generated_at or datetime.now(timezone.utc),
         model=model, knowledge_digest=digest, trends=series, field=field,
+        summary_degradation=summary_degradation,
+        har_captures=har_captures, tickets=tickets,
     )
 
 
@@ -448,6 +553,16 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Read runs from this SQLite database instead of a directory.")
     p.add_argument("--pages", default=None,
                    help="Comma-separated page names to analyse.")
+    p.add_argument("--har", action="append", default=[], metavar="PAGE/DEVICE=PATH",
+                   help="A HAR for one page and condition, e.g. "
+                        "homepage/mobile=HOMEMOB.har (WebPageTest exports carry the "
+                        "most). Repeat per file. Its findings and the tickets in "
+                        "--tickets are checked against it; the file is read, never "
+                        "copied.")
+    p.add_argument("--tickets", default=None,
+                   help="Ticket catalog (default config/tickets.yaml).")
+    p.add_argument("--project", default=None,
+                   help="Project to analyse, when the input holds more than one.")
     p.add_argument("--output-dir", default=None,
                    help="Where to write <campaign-id>/report.json.")
     p.add_argument("--no-llm", action="store_true",
@@ -511,12 +626,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             ),
             from_store=args.from_store,
             pages=pages,
+            project=args.project,
         )
     except FileNotFoundError as exc:
         print(f"No runs to analyse: {exc}", file=sys.stderr)
         return 1
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
+        return 1
+
+    try:
+        captures, outcomes = load_har_evidence(args.har, args.tickets)
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"Could not use the HAR captures: {exc}", file=sys.stderr)
         return 1
 
     store = embed_client = llm_client = None
@@ -528,7 +650,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         runs, store=store, embed_client=embed_client, llm_client=llm_client,
         settings=settings, use_priors=args.use_priors, top_k=args.top_k,
         page_analyses_out=collected, llm_disabled=args.no_llm,
-        no_field=args.no_field,
+        no_field=args.no_field, har_captures=captures, tickets=outcomes,
     )
 
     target = output_dir / report.cover.campaign_id

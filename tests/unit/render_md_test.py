@@ -36,6 +36,28 @@ def test_a_partial_report_does_not_claim_no_model_was_used():
     assert "no_api_key" in markdown
 
 
+def test_a_summary_written_by_rules_is_named_on_the_cover():
+    from tests.unit.render_html_test import _summary_fell_back
+
+    markdown = render_md(_summary_fell_back(a_report(mode="partial")))
+
+    assert "executive summary" in markdown
+    assert "quota_exhausted" in markdown
+    assert "some pages fell back" not in markdown
+
+
+def test_tickets_and_har_findings_reach_the_markdown():
+    from tests.unit.render_html_test import _with_tickets
+
+    markdown = render_md(_with_tickets(a_report()))
+
+    assert "**Confirmed — act on these** (1)" in markdown
+    assert "- **OAK-39155** Hero hidden until newHeroBanner.js runs" in markdown
+    assert "`homepage / mobile: painted 1086 ms after download`" in markdown
+    assert "**In the HAR captures**" in markdown
+    assert "Not the site's problem" in markdown
+
+
 def test_a_wholly_rule_based_report_still_says_so_plainly():
     markdown = render_md(a_report(mode="rule_based"))
     assert "no model reasoned over these measurements" in markdown

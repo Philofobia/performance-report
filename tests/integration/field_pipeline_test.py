@@ -134,6 +134,26 @@ def test_main_exits_one_on_duplicate_snapshot_without_replace(tmp_path, monkeypa
     assert "--replace" in err
 
 
+def test_main_loads_dotenv_so_the_configured_connection_is_seen(tmp_path, monkeypatch):
+    """The README says the Grafana identity lives in .env, and `ingest auto`
+    and `analyze` both load it — this stage did not. With every variable set
+    in .env it still failed "GRAFANA_BASE_URL is not set", which is why every
+    Oakley report so far said there was no field data."""
+    calls = []
+    monkeypatch.setattr("dotenv.load_dotenv",
+                        lambda *a, **k: calls.append(k) or False)
+    monkeypatch.setattr("ingest.field._build_client", lambda settings: _StubClient())
+    monkeypatch.setattr(
+        "ingest.field.load_settings",
+        lambda *a, **k: Settings(storage={"sqlite_path": str(tmp_path / "r.sqlite")}),
+    )
+
+    main(["--project", "oakley", "--hosts", "www.oakley.com"])
+
+    assert calls, "ingest field did not load .env"
+    assert calls[0].get("override") is False
+
+
 def test_main_exits_non_zero_when_grafana_is_unreachable(tmp_path, monkeypatch):
     from ingest.grafana.client import GrafanaError
 

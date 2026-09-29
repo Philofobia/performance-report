@@ -88,6 +88,10 @@ def merge_median_metrics(measurements: List[Dict[str, Any]]) -> Dict[str, Dict[s
     cwp_merged["lcp_underestimated"] = any(
         bool(r.get("lcp_underestimated")) for r in cwp_runs
     )
+    # Not a median of strings: the element of the run whose LCP is the median,
+    # the same run that donates the screenshot and HAR.
+    cwp_merged["lcp_element"] = (
+        median_measurement(measurements).get("cwp", {}).get("lcp_element"))
 
     return {
         "cwp": cwp_merged,

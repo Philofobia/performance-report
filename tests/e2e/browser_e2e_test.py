@@ -176,6 +176,8 @@ def test_core_web_vitals_are_measured(campaign_runs):
         assert cwp.fcp_ms is not None and cwp.fcp_ms > 0
         assert cwp.ttfb_ms is not None and cwp.ttfb_ms > 0
         assert cwp.tbt_ms is not None, "TBT not derived from long tasks"
+        assert cwp.lcp_element and cwp.lcp_element.split(".")[0] in {"H1", "P", "DIV"}, (
+            f"LCP element not recorded: {cwp.lcp_element!r}")
 
 
 def test_main_thread_metrics_come_from_cdp(campaign_runs):

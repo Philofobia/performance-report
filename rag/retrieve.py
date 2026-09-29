@@ -16,6 +16,7 @@ type in the query, so weight is not carried by the metric names alone.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
@@ -97,6 +98,10 @@ def _safe_field(text: str) -> str:
     return truncate(neutralize(str(text)), _MAX_SAFE_FIELD_CHARS)
 
 
+_CONSENT_ELEMENT = re.compile(r"onetrust|cookie|consent|gdpr|ot-sdk|didomi|usercentrics",
+                              re.IGNORECASE)
+
+
 def detect_symptoms(run: Run, thresholds: Optional[Thresholds] = None) -> List[Symptom]:
     """Derive threshold-backed symptoms from a run's metrics.
 
@@ -120,6 +125,17 @@ def detect_symptoms(run: Run, thresholds: Optional[Thresholds] = None) -> List[S
         elif cwp.lcp_ms > th.lcp_good_ms:
             add("lcp_warn", f"Largest Contentful Paint is {_fmt(cwp.lcp_ms)}ms, above the "
                 f"{th.lcp_good_ms}ms target.", "warn", "lcp_ms", cwp.lcp_ms, th.lcp_good_ms)
+
+    # The LCP of a first visit can be the consent banner, not the page: on the
+    # Oakley PLP (mobile) the OneTrust text painted at ~7.3 s outgrew the small
+    # product images, and LCP read 7.9 s where WebPageTest - whose captures
+    # never showed the banner - read ~2 s.
+    if cwp.lcp_element and _CONSENT_ELEMENT.search(cwp.lcp_element):
+        add("lcp_consent_banner",
+            f"The LCP element is the cookie consent banner ({cwp.lcp_element})"
+            + (f", painted at {_fmt(cwp.lcp_ms)}ms" if cwp.lcp_ms is not None else "")
+            + " - a first-time visitor's largest paint is the banner, not the page.",
+            "warn", "lcp_ms", cwp.lcp_ms, th.lcp_good_ms)
 
     if cwp.cls is not None:
         if cwp.cls > th.cls_fail:

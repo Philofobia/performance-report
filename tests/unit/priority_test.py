@@ -100,6 +100,40 @@ def test_projected_change_is_rendered_ready_to_print():
     assert action.metric == "tbt_ms"
 
 
+def _page_with_band(name, *, value, conservative, optimistic, title):
+    """One recommendation whose projection has a real low/high band."""
+    page = _page(name, metric="lcp_ms", value=value, severity="fail",
+                 gain=0.0, title=title)
+    page.recommendations[0].projections = [ProjectionModel(
+        metric="lcp_ms", before=value, after_low=conservative,
+        after_high=optimistic, reduction_pct=(value - conservative) / value,
+        source="images.md")]
+    return page
+
+
+def test_the_plan_prints_the_conservative_end_of_the_band():
+    """`after_low` is the conservative end (analysis/estimator.py).
+
+    The plan printed `after_high` — the optimistic edge — under a heading that
+    promises "the conservative end of its stated range". On the live Oakley
+    homepage that read 6524 ms → 2662 ms where the estimate was 4880 ms.
+    """
+    page = _page_with_band("a", value=6524.0, conservative=5546.0,
+                           optimistic=3915.0, title="Always set width and height")
+
+    assert _rank([page])[0].projected == "6524 ms → 5546 ms"
+
+
+def test_the_plan_is_ordered_by_the_conservative_gain():
+    """A wide optimistic band must not outrank a surer, larger conservative win."""
+    wide = _page_with_band("wide", value=6000.0, conservative=5900.0,
+                           optimistic=3000.0, title="Wide band")
+    sure = _page_with_band("sure", value=6000.0, conservative=5000.0,
+                           optimistic=4800.0, title="Sure thing")
+
+    assert [a.page for a in _rank([wide, sure])] == ["sure", "wide"]
+
+
 def test_a_recommendation_without_projections_still_makes_the_plan():
     """Rule-based campaigns have no magnitudes; they still have actions."""
     page = PageBlock(

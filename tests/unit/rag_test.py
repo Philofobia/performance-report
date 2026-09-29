@@ -480,6 +480,29 @@ def test_symptoms_detected_from_thresholds():
     assert "tbt_high" in codes
 
 
+def test_a_consent_banner_as_the_lcp_element_is_named():
+    """PLP mobile: the OneTrust banner, painted at ~7.3 s, is the largest
+    element for a first-time visitor - the LCP is the banner, not the page."""
+    run = make_run(metrics={"cwp": {"lcp_ms": 7872, "lcp_element": "DIV.onetrust-policy-text",
+                                    "cls": 0.05, "inp_ms": 80, "fcp_ms": 1552,
+                                    "ttfb_ms": 68, "tbt_ms": 500},
+                            "network": {}, "main_thread": {}})
+
+    banner = [s for s in retrieve.detect_symptoms(run) if s.code == "lcp_consent_banner"]
+
+    assert banner and "consent banner" in banner[0].text
+    assert "DIV.onetrust-policy-text" in banner[0].text
+
+
+def test_an_ordinary_lcp_element_is_not_a_consent_banner():
+    run = make_run(metrics={"cwp": {"lcp_ms": 2100, "lcp_element": "IMG.oo_hp_cm_bglayer …/hero-d.jpg",
+                                    "cls": 0.05, "inp_ms": 80, "fcp_ms": 1552,
+                                    "ttfb_ms": 68, "tbt_ms": 500},
+                            "network": {}, "main_thread": {}})
+
+    assert "lcp_consent_banner" not in [s.code for s in retrieve.detect_symptoms(run)]
+
+
 def test_healthy_run_produces_no_cwv_symptoms():
     run = make_run(metrics={"cwp": {"lcp_ms": 1200, "cls": 0.02, "inp_ms": 90,
                                     "fcp_ms": 900, "ttfb_ms": 200, "tbt_ms": 30},

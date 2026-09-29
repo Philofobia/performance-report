@@ -133,6 +133,86 @@ def test_a_partial_report_does_not_claim_no_model_was_used():
     assert "some pages fell back" in html
 
 
+def _summary_fell_back(report):
+    """Every page model-written; the executive summary refused (a live 429)."""
+    report.meta = report.meta.model_copy(update={
+        "degradation_reason": None, "summary_degradation": "quota_exhausted"})
+    return report
+
+
+def test_a_summary_written_by_rules_is_named_on_the_cover():
+    """Every page model-written, the summary not: the cover must not blame pages."""
+    html = render_html(_summary_fell_back(a_report(mode="partial")))
+
+    assert "executive summary" in html
+    assert "quota_exhausted" in html
+    assert "some pages fell back" not in html
+    assert "no model reasoned over these measurements" not in html
+
+
+def _with_tickets(report):
+    from analysis.reportmodel import HarCaptureModel, TicketModel
+
+    report.tickets = [
+        TicketModel(id="OAK-39155", title="Hero hidden until newHeroBanner.js runs",
+                    sites=["OO"], status="confirmed", observed_on=["OO"],
+                    summary="Confirmed on homepage/mobile (1 of 1 captures).",
+                    evidence=["homepage / mobile: painted 1086 ms after download",
+                              "  run 1: <script>alert(1)</script> hero.jpg"]),
+        TicketModel(id="OAK-36852", title="Service worker missing", sites=["OSI"],
+                    status="not_seen", summary="Not seen in 3 capture(s) that can show it."),
+        TicketModel(id="OAK-39153", title="Do not sell does nothing", status="not_checkable",
+                    summary="Needs a click on the link."),
+    ]
+    report.pages[0].har = [HarCaptureModel(
+        device="mobile", source="HOMEMOB.har", runs=3, lcp_ms=2219, cls=0.055,
+        findings=["Layout shift 0.055 at 5181 ms (HOMEMOB.har run 1), region y=317"],
+        test_artifacts=["cdn.cookielaw.org"], rejected_headers=["x-akamai-bot"])]
+    return report
+
+
+def test_tickets_are_listed_by_status_with_their_evidence():
+    html = render_html(_with_tickets(a_report()))
+
+    confirmed = html.index("Confirmed — act on these")
+    assert confirmed < html.index("Not seen in these captures") < html.index(
+        "Cannot be checked from a page-load capture")
+    assert "OAK-39155" in html and "painted 1086 ms after download" in html
+    assert "Needs a click on the link." in html
+
+
+def test_evidence_from_a_har_is_escaped():
+    """Evidence lines carry URLs read from a file someone else produced."""
+    html = render_html(_with_tickets(a_report()))
+
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_the_har_block_lists_findings_and_names_what_the_test_caused():
+    html = render_html(_with_tickets(a_report()))
+
+    assert "HOMEMOB.har · 3 runs · median LCP 2219 ms · CLS 0.055" in html
+    assert "Layout shift 0.055 at 5181 ms" in html
+    assert "Not the site's problem" in html and "x-akamai-bot" in html
+
+
+def test_the_lcp_element_is_named_under_the_conditions_table():
+    report = a_report()
+    report.pages[0].conditions[0].lcp_element = "DIV.onetrust-policy-text"
+
+    html = render_html(report)
+
+    assert "LCP element, mid-mobile / slow-4g: DIV.onetrust-policy-text" in html
+
+
+def test_without_har_captures_the_sections_say_how_to_supply_them():
+    html = render_html(a_report())
+
+    assert "No HAR captures were supplied" in html
+    assert "No HAR capture was supplied for this page." in html
+
+
 def test_renders_a_complete_html_document():
     html = render_html(a_report())
     assert html.lstrip().startswith("<!DOCTYPE html>")

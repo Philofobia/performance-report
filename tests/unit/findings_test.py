@@ -146,6 +146,117 @@ def test_rule_based_recommendations_are_capped_and_deterministic():
     assert [r.title for r in first] == [r.title for r in second]
 
 
+def test_tactics_from_one_playbook_each_own_one_link_of_its_chain():
+    """Each recommendation carries its own projected step, not the playbook's.
+
+    Two images.md tactics used to carry the same two-link chain, so both
+    claimed the combined effect of both and the plan printed the same numbers
+    twice.
+    """
+    run = make_run()
+    symptoms = retrieve.detect_symptoms(run, Thresholds())
+    chunks = knowledge.load_knowledge_dir("data/knowledge")
+    recommendations = rule_based_analysis(run, symptoms, chunks)[3]
+
+    by_source = {}
+    for rec in recommendations:
+        by_source.setdefault(rec.playbook_source, []).append(rec)
+    shared = [recs for recs in by_source.values() if len(recs) > 1]
+    assert shared, "fixture no longer yields two tactics from one playbook"
+
+    for recs in shared:
+        for rec in recs:
+            metrics = [p.metric for p in rec.projections]
+            assert len(metrics) == len(set(metrics)), (
+                f"{rec.title} carries more than one link per metric")
+        befores = [rec.projections[0].before for rec in recs if rec.projections]
+        assert len(set(befores)) == len(befores), (
+            f"{recs[0].playbook_source}: tactics share one projection")
+
+
+def test_the_worst_failure_gets_its_playbook_whatever_its_name():
+    """Playbooks used to fill the six slots alphabetically.
+
+    caching, fonts and images took all six, so javascript.md never appeared —
+    on the live Oakley homepage, whose worst measurement was a 2366 ms Total
+    Blocking Time against a 200 ms target.
+    """
+    run = make_run(lcp=6200, cls=0.02, inp=150)
+    run.metrics.cwp.tbt_ms = 2400
+    symptoms = retrieve.detect_symptoms(run, Thresholds())
+    chunks = knowledge.load_knowledge_dir("data/knowledge")
+
+    recommendations = rule_based_analysis(run, symptoms, chunks)[3]
+    sources = [r.playbook_source for r in recommendations]
+
+    assert "javascript.md" in sources
+    assert "images.md" in sources
+
+
+def test_a_playbook_matched_only_by_a_side_symptom_ranks_below_a_failing_metric():
+    """caching.md projects TTFB. Matched only by `many_requests` while TTFB is
+    fine, it must not crowd out a playbook for a metric that is failing."""
+    run = make_run(lcp=6200, cls=0.42, inp=150)
+    run.metrics.cwp.ttfb_ms = 400
+    run.metrics.cwp.fcp_ms = 1500
+    run.metrics.cwp.tbt_ms = 2400
+    symptoms = retrieve.detect_symptoms(run, Thresholds())
+    chunks = knowledge.load_knowledge_dir("data/knowledge")
+
+    sources = {r.playbook_source
+               for r in rule_based_analysis(run, symptoms, chunks)[3]}
+
+    assert {"javascript.md", "images.md", "layout-shift.md"} <= sources
+    assert "caching.md" not in sources
+
+
+def test_tactics_are_taken_in_the_playbooks_own_order():
+    """Section order is the author's priority; the slug's alphabet is not.
+
+    "Always set width and height" — a layout-shift fix — led the LCP advice
+    because "always" sorts before "prioritize" and "serve".
+    """
+    run = make_run(lcp=6200, cls=0.02, inp=150)
+    symptoms = retrieve.detect_symptoms(run, Thresholds())
+    chunks = knowledge.load_knowledge_dir("data/knowledge")
+    in_document_order = [c.heading_path[-1] for c in chunks
+                         if c.source == "images.md" and len(c.heading_path) >= 2]
+
+    chosen = [r.title for r in rule_based_analysis(run, symptoms, chunks)[3]
+              if r.playbook_source == "images.md"]
+
+    assert chosen
+    assert sorted(chosen, key=in_document_order.index) == in_document_order[:len(chosen)]
+
+
+def test_image_advice_does_not_promise_an_lcp_the_image_does_not_set():
+    """PLP mobile: the LCP element was the OneTrust banner, and the plan still
+    promised 'Serve modern formats: 7716 ms -> 6559 ms'. An image fix cannot
+    move the paint time of a text banner."""
+    run = make_run(lcp=7716, cls=0.02, inp=150)
+    run.metrics.cwp.lcp_element = "DIV#onetrust-policy-text"
+    symptoms = retrieve.detect_symptoms(run, Thresholds())
+    chunks = knowledge.load_knowledge_dir("data/knowledge")
+
+    recommendations = rule_based_analysis(run, symptoms, chunks)[3]
+
+    image_lcp = [p for r in recommendations if r.playbook_source == "images.md"
+                 for p in r.projections if p.metric == "lcp_ms"]
+    assert image_lcp == []
+
+
+def test_image_advice_still_projects_lcp_when_the_lcp_is_an_image():
+    run = make_run(lcp=6200, cls=0.02, inp=150)
+    run.metrics.cwp.lcp_element = "IMG.oo_hp_cm_bglayer …/hero-m.jpg"
+    symptoms = retrieve.detect_symptoms(run, Thresholds())
+    chunks = knowledge.load_knowledge_dir("data/knowledge")
+
+    recommendations = rule_based_analysis(run, symptoms, chunks)[3]
+
+    assert any(p.metric == "lcp_ms" for r in recommendations
+               if r.playbook_source == "images.md" for p in r.projections)
+
+
 def test_rule_based_analysis_on_a_healthy_run_says_so():
     run = make_run(lcp=1500, cls=0.01, inp=80)
     run.metrics.cwp.fcp_ms = 1200

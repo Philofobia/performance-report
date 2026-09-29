@@ -1,0 +1,117 @@
+# Open performance tickets, and how a HAR capture can confirm each one.
+# Read by analysis/tickets.py; evaluated by `python -m cli analyze --har ...`.
+#
+# OO and OSI share one page skeleton, so a ticket raised on either site is
+# checked against whichever site's captures were supplied - the report says
+# which site the evidence came from.
+#
+#   pages:  page names from config/targets.yaml the ticket applies to ("*" = all)
+#   check:  a check in analysis/har_checks.py CHECKS, with optional params
+#   reason: for a ticket no HAR can confirm - printed instead of a verdict
+#
+# Add a ticket by adding an entry. A ticket whose check cannot be answered by
+# the supplied captures is reported as such, never dropped.
+
+site_hosts:
+  OO: [www.oakley.com]
+
+tickets:
+  - id: OAK-39155
+    title: "HP | The hero image is hidden by CSS until newHeroBanner.js runs"
+    sites: [OO]
+    pages: [homepage]
+    check: lcp_render_delay
+    params: {script: newHeroBanner.js, min_gap_ms: 300}
+
+  - id: OAK-39157
+    title: "PDP | The product image is ready 0.3-0.9s before it appears"
+    sites: [OO]
+    pages: [pdp]
+    check: lcp_render_delay
+    params: {min_gap_ms: 250}
+
+  - id: OAK-39154
+    title: "PDP | Preload and <picture> breakpoints don't match"
+    sites: [OO]
+    pages: [pdp]
+    check: preload_mismatch
+
+  - id: OAK-38965
+    title: "PDP | Main product image preload is never used"
+    sites: [OSI]
+    pages: [pdp]
+    check: preload_mismatch
+
+  - id: OAK-37050
+    title: "Duplicate image downloads caused by lazy-load-images module"
+    sites: [OO, OSI]
+    pages: ["*"]
+    check: duplicate_downloads
+
+  - id: OAK-38307
+    title: "PLP | CLS caused by promo modal slide-in animation"
+    sites: [OO]
+    pages: [plp]
+    check: slide_in_shift
+
+  - id: OAK-36852
+    title: "Service Worker registration fails due to missing service-worker.js"
+    sites: [OSI]
+    pages: ["*"]
+    check: service_worker
+
+  - id: OAK-38963
+    title: "Homepage | Hero image is lazy-loaded by JavaScript"
+    sites: [OSI]
+    pages: [homepage]
+    check: lcp_image_from_script
+
+  - id: OAK-38968
+    title: "PLP | Product tile images are CSS backgrounds"
+    sites: [OSI]
+    pages: [plp]
+    check: css_background_images
+    params: {match: pieyewear}
+
+  - id: OAK-38971
+    title: "Whole page shifts down when JavaScript shows the header spacer"
+    sites: [OSI]
+    pages: ["*"]
+    reason: >-
+      A layout shift can be seen in a capture but not attributed to the header
+      spacer without the element that moved; check it in a DevTools
+      Performance trace on OSI.
+
+  - id: OAK-36986
+    title: "Third-party tracking fails due to domain allowlist mismatch"
+    sites: [OO]
+    pages: ["*"]
+    reason: >-
+      The third-party failures in captures taken with a site-wide X-Akamai-Bot
+      header are caused by that header (CORS preflight), and cannot be told
+      apart from an allowlist mismatch. Re-capture with the header scoped to
+      the site, as this project's own runner now does.
+
+  - id: OAK-39153
+    title: "\"Do not sell my personal information\" does nothing"
+    sites: [OO, OSI]
+    pages: ["*"]
+    reason: Needs a click on the link; a page-load capture cannot show it.
+
+  - id: OAK-39133
+    title: "OSL | Mobile | Global header and store locator tab bar overlap when scrolling back up"
+    sites: [OO]
+    pages: [store-locator]
+    reason: A visual overlap while scrolling; the store locator is not a captured page.
+
+  - id: OAK-39147
+    title: "OSL | Mobile | The page layout shifts when the store locator renders"
+    sites: [OO]
+    pages: [store-locator]
+    reason: The store locator is not among the captured pages.
+
+  - id: OAK-38797
+    title: "Load Oakley design token stylesheets on the Store Finder page"
+    sites: [OO]
+    pages: [store-finder]
+    reason: The Store Finder is not among the captured pages.

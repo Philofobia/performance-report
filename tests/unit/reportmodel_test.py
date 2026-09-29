@@ -449,6 +449,13 @@ def test_condition_row_qualifier_defaults_false():
     assert reportmodel._condition_row(make_run()).lcp_underestimated is False
 
 
+def test_condition_row_names_the_lcp_element():
+    run = make_run()
+    run.metrics.cwp.lcp_element = "DIV.onetrust-policy-text"
+    assert reportmodel._condition_row(run).lcp_element == "DIV.onetrust-policy-text"
+    assert reportmodel._condition_row(make_run()).lcp_element is None
+
+
 # --------------------------------------------------------------------------- #
 # The ranked plan (design spec 2026-08-20)
 # --------------------------------------------------------------------------- #

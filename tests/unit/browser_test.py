@@ -138,6 +138,10 @@ class FakePage:
         self.listeners.setdefault(event, []).append(handler)
         self.log.append(f"on:{event}")
 
+    def route(self, matcher, handler):
+        self.routes = getattr(self, "routes", []) + [(matcher, handler)]
+        self.log.append("route")
+
     def add_init_script(self, script):
         self.init_scripts.append(script)
         self.log.append("add_init_script")
@@ -624,6 +628,17 @@ def test_lcp_not_underestimated_when_largest_candidate_is_timed():
     ) is False
 
 
+def test_lcp_is_a_lower_bound_when_the_winner_reports_download_not_paint():
+    """Chromium 130 gave the cross-origin Oakley hero renderTime 0 and a
+    loadTime: startTime fell back to the download (1192 ms), not the paint -
+    which OAK-39155 puts about a second later. Chromium 151 exposes the paint
+    (1344 ms). Whatever the browser, a value without a paint time is a floor."""
+    assert webser.lcp_underestimated(
+        {"lcp_timed_max_size": 1024650, "lcp_paint_missing": True}) is True
+    assert webser.lcp_underestimated(
+        {"lcp_timed_max_size": 1024650, "lcp_paint_missing": False}) is False
+
+
 def test_lcp_not_underestimated_when_no_untimed_candidates():
     assert webser.lcp_underestimated({"lcp_timed_max_size": 9010}) is False
     assert webser.lcp_underestimated({}) is False
@@ -751,6 +766,39 @@ def test_tbt_none_when_longtasks_unsupported():
 
 def test_tbt_zero_when_no_long_tasks_occurred():
     assert webser.compute_tbt_ms([], fcp_ms=500) == 0.0
+
+
+def test_tbt_stops_at_the_first_five_second_quiet_window():
+    """TBT runs from FCP to Time to Interactive, not to whenever we stop looking.
+
+    On the live Oakley homepage, with consent working, trackers keep firing long
+    tasks for 20-30 s after load; counting them all read 10.7 s of blocking
+    against 0.4-0.65 s in WebPageTest, which stops at TTI like Lighthouse.
+    """
+    tasks = [
+        {"start": 1000, "duration": 150},   # 100 blocking
+        {"start": 3000, "duration": 250},   # 200 blocking; ends 3250
+        # 5 s quiet from 3250: interactive. Everything later is after TTI.
+        {"start": 9000, "duration": 1000},
+        {"start": 20000, "duration": 2000},
+    ]
+    assert webser.compute_tbt_ms(tasks, fcp_ms=500) == 300.0
+
+
+def test_tbt_keeps_counting_while_tasks_keep_coming():
+    """No quiet window before observation ended: every task counts, as before."""
+    tasks = [{"start": 1000 + i * 3000, "duration": 150} for i in range(5)]
+    assert webser.compute_tbt_ms(tasks, fcp_ms=500) == 500.0
+
+
+def test_tbt_excludes_our_own_synthetic_interaction():
+    """The runner presses a key and clicks to measure INP; the handlers that
+    runs are our doing, not the page's load."""
+    tasks = [
+        {"start": 1000, "duration": 150},   # 100 blocking
+        {"start": 4000, "duration": 400},   # at/after the interaction: excluded
+    ]
+    assert webser.compute_tbt_ms(tasks, fcp_ms=500, until_ms=4000) == 100.0
 
 
 def test_tbt_tolerates_malformed_entries():
@@ -1123,6 +1171,21 @@ def test_merge_median_metrics_ors_lcp_underestimated_across_runs():
     assert merged["cwp"]["lcp_ms"] == 2000
 
 
+def test_the_lcp_element_comes_from_the_median_run():
+    """Which element the median LCP belongs to - not a median of strings.
+
+    PLP mobile read 7.9 s where WebPageTest read ~2 s; only the element
+    (the OneTrust consent banner) explains why.
+    """
+    merged = automated.merge_median_metrics([
+        {"cwp": {"lcp_ms": 2100, "lcp_element": "IMG.preview_image …/qt.png"}},
+        {"cwp": {"lcp_ms": 7872, "lcp_element": "DIV.onetrust-policy-text"}},
+        {"cwp": {"lcp_ms": 7900, "lcp_element": "DIV.onetrust-policy-text"}},
+    ])
+    assert merged["cwp"]["lcp_ms"] == 7872
+    assert merged["cwp"]["lcp_element"] == "DIV.onetrust-policy-text"
+
+
 def test_merge_median_metrics_lcp_underestimated_false_when_no_run_flagged():
     merged = automated.merge_median_metrics([
         {"cwp": {"lcp_ms": 1000, "cls": 0.1, "inp_ms": 10}},
@@ -1163,12 +1226,31 @@ def test_make_automated_run_carries_representative_artifacts():
 # --------------------------------------------------------------------------- #
 # Optional custom request headers (opt-in; see tests/unit/headers_test.py)
 # --------------------------------------------------------------------------- #
-def test_headers_are_applied_at_context_level(public_dns):
-    """Context-level headers cover the document AND every sub-resource.
+class _FakeRoute:
+    def __init__(self, url, headers):
+        self.request = type("Req", (), {"url": url, "headers": dict(headers)})()
+        self.continued_with = None
 
-    Playwright applies ``extra_http_headers`` set on a context to every request
-    made by every page in it. Setting them per-navigation would leave scripts,
-    images and XHR unprotected — exactly the requests a bot filter blocks.
+    def continue_(self, **kwargs):
+        self.continued_with = kwargs
+
+
+def _header_route(browser):
+    _, ctx = browser.contexts[0]
+    routes = getattr(ctx.pages[0], "routes", [])
+    assert len(routes) == 1, "expected exactly one header route"
+    return routes[0]
+
+
+def test_headers_are_never_set_on_the_whole_context(public_dns):
+    """Context-wide headers went to every host, third parties included.
+
+    A non-safelisted header on a cross-origin fetch, XHR or crossorigin image
+    forces a CORS preflight; hosts that do not allow it fail the request. On
+    the live Oakley homepage that blocked every media.oakley.com image, the
+    hero never painted, and LCP fell back to late text: 6-9 s measured against
+    ~2 s in WebPageTest and in the field. It also handed the allowlist token to
+    forter, google, doubleclick and every other third party on the page.
     """
     browser = FakeBrowser()
     runner = make_runner(browser)
@@ -1177,7 +1259,55 @@ def test_headers_are_applied_at_context_level(public_dns):
         extra_http_headers={"X-Akamai-Bot": "tok"},
     )
     ctx_kwargs, _ = browser.contexts[0]
-    assert ctx_kwargs["extra_http_headers"] == {"X-Akamai-Bot": "tok"}
+    assert "extra_http_headers" not in ctx_kwargs
+
+
+def test_the_header_reaches_the_site_and_its_subdomains_only(public_dns):
+    browser = FakeBrowser()
+    make_runner(browser).run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK,
+        extra_http_headers={"X-Akamai-Bot": "tok"},
+    )
+    matcher, _ = _header_route(browser)
+
+    for url in ("https://www.oakley.com/en-us", "https://media.oakley.com/hero.jpg",
+                "https://assets2.oakley.com/p.png", "https://oakley.com/"):
+        assert matcher(url), url
+    for url in ("https://cdn0.forter.com/x.js", "https://evil-oakley.com/",
+                "https://oakley.com.evil.net/", "https://www.google.com/collect"):
+        assert not matcher(url), url
+
+
+def test_the_routed_request_keeps_its_headers_and_gains_the_token(public_dns):
+    browser = FakeBrowser()
+    make_runner(browser).run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK,
+        extra_http_headers={"X-Akamai-Bot": "tok"},
+    )
+    _, handler = _header_route(browser)
+    route = _FakeRoute("https://media.oakley.com/hero.jpg", {"accept": "image/avif"})
+
+    handler(route)
+
+    assert route.continued_with == {"headers": {"accept": "image/avif",
+                                                "X-Akamai-Bot": "tok"}}
+
+
+def test_the_header_route_is_installed_before_navigation(public_dns):
+    browser = FakeBrowser()
+    make_runner(browser).run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK,
+        extra_http_headers={"X-Akamai-Bot": "tok"},
+    )
+    assert browser.log.index("route") < browser.log.index("goto")
+
+
+def test_no_headers_installs_no_route(public_dns):
+    """Interception costs latency; a header-less run must not pay it."""
+    browser = FakeBrowser()
+    make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    _, ctx = browser.contexts[0]
+    assert not getattr(ctx.pages[0], "routes", [])
 
 
 def test_no_headers_omits_extra_http_headers_key_entirely(public_dns):
@@ -1530,7 +1660,7 @@ def test_cli_writes_one_json_per_run(monkeypatch, tmp_path, capsys):
     ])
     assert code == 0
     written = sorted(p.name for p in tmp_path.glob("*.json"))
-    assert written == ["pdp__mid-mobile__slow-4g.json"]
+    assert written == ["storefront__pdp__mid-mobile__slow-4g.json"]
     data = json.loads((tmp_path / written[0]).read_text(encoding="utf-8"))
     assert data["page"]["name"] == "pdp"
     assert data["meta"]["source"] == "automated"
@@ -1597,8 +1727,8 @@ def test_cli_keeps_the_runs_it_completed_before_a_failure(monkeypatch, tmp_path)
     code = automated.main(["--output-dir", str(out)])
     assert code == 1
     assert sorted(p.name for p in out.glob("*.json")) == [
-        "homepage__desktop__fast-3g.json",
-        "homepage__mid-mobile__slow-4g.json",
+        "storefront__homepage__desktop__fast-3g.json",
+        "storefront__homepage__mid-mobile__slow-4g.json",
     ]
 
 

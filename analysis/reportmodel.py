@@ -163,6 +163,8 @@ class ConditionRow(BaseModel):
     #: browser exposed no render time for it. A separate field rather than a
     #: `metrics` key — the dict is float-typed, and a qualifier is not a metric.
     lcp_underestimated: bool = False
+    #: The element ``metrics["lcp_ms"]`` belongs to, when the run recorded it.
+    lcp_element: Optional[str] = None
 
 
 class FindingModel(BaseModel):
@@ -307,6 +309,38 @@ class PageFieldBlock(BaseModel):
     rage_clicks: Optional[int] = None
 
 
+class HarCaptureModel(BaseModel):
+    """One HAR supplied for a page (``analyze --har``), reduced to what it shows.
+
+    Only URLs (redacted) and timings - the HAR itself carries cookies and is
+    never copied into the report.
+    """
+
+    device: str
+    source: str
+    runs: int
+    lcp_ms: Optional[float] = None
+    cls: Optional[float] = None
+    findings: List[str] = Field(default_factory=list)
+    #: Hosts whose requests failed because the capture sent a custom header.
+    test_artifacts: List[str] = Field(default_factory=list)
+    rejected_headers: List[str] = Field(default_factory=list)
+
+
+class TicketModel(BaseModel):
+    """One open ticket and what the supplied captures show for it."""
+
+    id: str
+    title: str
+    sites: List[str] = Field(default_factory=list)
+    pages: List[str] = Field(default_factory=list)
+    #: "confirmed" | "not_seen" | "no_data" | "not_checkable"
+    status: str
+    summary: str
+    evidence: List[str] = Field(default_factory=list)
+    observed_on: List[str] = Field(default_factory=list)
+
+
 class PageBlock(BaseModel):
     name: str
     url: str
@@ -327,6 +361,8 @@ class PageBlock(BaseModel):
     projections: Dict[str, ProjectionModel]
     #: Defaulted so a `report.json` written before this existed still validates.
     field: PageFieldBlock = Field(default_factory=PageFieldBlock)
+    #: HARs supplied for this page; empty when none were.
+    har: List[HarCaptureModel] = Field(default_factory=list)
 
 
 class ComparisonRow(BaseModel):
@@ -415,6 +451,11 @@ class ReportMeta(BaseModel):
     degraded_appendix_entries: int = 0
     #: "live" | "stale" | "unavailable" — see field_mode_for.
     field_mode: str = "unavailable"
+    #: Why the executive summary is the rule-based one although every page was
+    #: model-written — the summary call failed. ``degradation_reason`` names
+    #: *pages* only, so without this a 429 on the last call left a report whose
+    #: cover said the model wrote a summary it did not.
+    summary_degradation: Optional[str] = None
 
 
 class Report(BaseModel):
@@ -426,6 +467,9 @@ class Report(BaseModel):
     #: Every page's recommendations in one ranked order. Defaulted so a
     #: report.json written before this existed still validates.
     action_plan: List[PlannedAction] = Field(default_factory=list)
+    #: Every ticket in config/tickets.yaml and what the supplied HARs show.
+    #: Empty when no HAR was supplied.
+    tickets: List[TicketModel] = Field(default_factory=list)
     pages: List[PageBlock]
     comparison: List[ComparisonRow]
     methodology: Methodology
@@ -450,6 +494,7 @@ def _condition_row(run: Run) -> ConditionRow:
         },
         # Without this the table would present a lower bound as a measurement.
         lcp_underestimated=cwp.lcp_underestimated,
+        lcp_element=cwp.lcp_element,
     )
 
 
@@ -724,6 +769,25 @@ def _appendix(pages: Sequence[PageAnalysis], settings: Settings) -> List[Appendi
     return sorted(entries, key=lambda e: (e.page, e.run_id, e.device, e.network))
 
 
+def _har_blocks(captures: Sequence[Any], page_name: str) -> List[HarCaptureModel]:
+    """The HARs supplied for one page, as concrete findings (analysis/har_checks)."""
+    from analysis import har_checks as hc
+
+    blocks: List[HarCaptureModel] = []
+    for capture in captures:
+        if capture.page != page_name or not capture.runs:
+            continue
+        summary = hc.summarize_runs(capture.runs)
+        blocks.append(HarCaptureModel(
+            device=capture.device, source=capture.runs[0].source,
+            runs=len(capture.runs), lcp_ms=summary["lcp_ms"], cls=summary["cls"],
+            findings=hc.untracked_findings(capture.runs),
+            test_artifacts=hc.header_artifacts(capture.runs),
+            rejected_headers=hc.rejected_headers(capture.runs),
+        ))
+    return sorted(blocks, key=lambda b: (b.device, b.source))
+
+
 def build_report(
     pages: Sequence[PageAnalysis],
     *,
@@ -735,11 +799,16 @@ def build_report(
     knowledge_digest: str = "",
     trends: Optional[Mapping[str, Sequence[TrendSeries]]] = None,
     field: Optional[Any] = None,
+    summary_degradation: Optional[str] = None,
+    har_captures: Optional[Sequence[Any]] = None,
+    tickets: Optional[Sequence[Any]] = None,
 ) -> Report:
     """Assemble the Report JSON from per-page analyses.
 
     ``summary`` is anything with ``problem``, ``key_finding`` and
     ``top_actions`` — an ``LlmSummary`` or the rule-based stand-in.
+    ``summary_degradation`` is the reason the summary is the stand-in when
+    every page was model-written, and makes the report ``partial``.
 
     ``trends`` is keyed by page name. A page absent from it renders the trend
     section's empty state; no section is ever conditionally omitted.
@@ -763,6 +832,8 @@ def build_report(
                     field=_page_field_block(field, settings, p.page_name))
         for p in ordered
     ]
+    for block in page_blocks:
+        block.har = _har_blocks(har_captures or (), block.name)
 
     # One ranked plan over every page, so "what do I fix first" is answered by
     # expected payoff rather than by which page sorted first.
@@ -796,6 +867,7 @@ def build_report(
             ),
         ),
         action_plan=plan,
+        tickets=[TicketModel(**vars(t)) for t in tickets or ()],
         pages=page_blocks,
         comparison=_comparison(ordered, settings),
         methodology=_methodology(ordered, settings),
@@ -808,8 +880,8 @@ def build_report(
             # a transient API error hits a single call -- so the mixed case is
             # the common one, and it needs a name of its own.
             analysis_mode=(
-                "llm" if not degraded
-                else "rule_based" if len(degraded) == len(ordered)
+                "llm" if not degraded and not summary_degradation
+                else "rule_based" if degraded and len(degraded) == len(ordered)
                 else "partial"
             ),
             # Every distinct reason, not just the first page's: pages fail for
@@ -824,6 +896,7 @@ def build_report(
             knowledge_digest=knowledge_digest,
             degraded_appendix_entries=sum(1 for e in appendix if e.degraded),
             field_mode=field_block.mode,
+            summary_degradation=summary_degradation,
         ),
     )
 

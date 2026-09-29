@@ -20,7 +20,13 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from analysis.estimator import Candidate, Projection, by_source, effort_of, project
+from analysis.estimator import (
+    Candidate,
+    Projection,
+    effort_of,
+    parse_impact_ranges,
+    project_each,
+)
 from normalize.schema import Run
 from rag.knowledge import Chunk
 from rag.retrieve import Symptom
@@ -249,10 +255,14 @@ def _metrics_map(run: Run) -> Dict[str, Optional[float]]:
 
 def build_recommendations(
     rows: Sequence[Tuple[str, str, str, str, Mapping[str, Any]]],
-    projections: Mapping[str, Sequence[Projection]],
+    projections: Sequence[Sequence[Projection]],
 ) -> List[Recommendation]:
     """Assemble ordered recommendations from ``(title, rationale, source,
-    section, metadata, why_it_matters)`` rows and projections grouped by source.
+    section, metadata, why_it_matters)`` rows and each row's own projections.
+
+    ``projections`` is aligned with ``rows`` — ``estimator.project_each`` over
+    the same candidates — so a recommendation carries only the step it
+    contributes, never the steps of its playbook's other tactics.
 
     Shared by both paths so LLM-authored and rule-based recommendations are
     ordered by exactly the same rule (§7.1). ``why_it_matters`` is the model's
@@ -269,34 +279,98 @@ def build_recommendations(
             playbook_source=source,
             playbook_section=section,
             effort=effort_of(metadata),
-            projections=tuple(projections.get(source, ())),
+            projections=tuple(own),
         )
-        for title, rationale, source, section, metadata, why_it_matters in rows
+        for (title, rationale, source, section, metadata, why_it_matters), own
+        in zip(rows, projections, strict=True)
     ]
     return sorted(
         built, key=lambda r: rank_key(r.playbook_source, r.title, r.projections)
     )
 
 
+_SEVERITY_RANK = {"fail": 0, "warn": 1}
+
+#: LCP elements an image playbook can speed up.
+_IMAGE_ELEMENTS = ("IMG", "IMAGE", "SVG", "VIDEO", "PICTURE")
+
+
+def applicable_metadata(metadata: Mapping[str, Any], run: Run) -> Mapping[str, Any]:
+    """A playbook's front matter, minus ranges this run's page cannot realise.
+
+    An image playbook's LCP range assumes the LCP element is an image. On the
+    Oakley PLP (mobile) it was the OneTrust consent banner, and the plan still
+    promised "Serve modern formats: 7716 ms -> 6559 ms" - an image fix cannot
+    move a text banner's paint. When the element is known and is not an
+    image, the LCP range is dropped; the tactic stays, with its other ranges.
+    """
+    element = (run.metrics.cwp.lcp_element or "").strip().upper()
+    if (str(metadata.get("category", "")).strip() == "images" and element
+            and not element.startswith(_IMAGE_ELEMENTS)):
+        return {k: v for k, v in metadata.items()
+                if not str(k).startswith("expected_lcp_")}
+    return metadata
+
+
+def _playbook_relevance(
+    tactics: Sequence[Chunk], symptoms: Sequence[Symptom], run: Run
+) -> tuple:
+    """How urgently this page needs a playbook — smaller sorts first.
+
+    A playbook is judged by the symptoms on the metric it *projects onto* (its
+    ``expected_<metric>_reduction_*`` key): its worst severity, then how far
+    over target. One matched only through a side symptom — caching.md via
+    ``many_requests`` while TTFB is fine — sorts after every playbook that
+    addresses a failing metric of its own.
+
+    This replaced filling the slots alphabetically, which gave caching, fonts
+    and images all six and never reached javascript.md: on the live Oakley
+    homepage, whose worst measurement was blocking time.
+    """
+    projected = {r.metric for r in
+                 parse_impact_ranges(applicable_metadata(tactics[0].metadata, run))}
+    claimed = set(_symptom_list(tactics[0]))
+    own = [s for s in symptoms if s.code in claimed and s.metric in projected]
+    if not own:
+        return (1, 0, 0.0)
+    return min(
+        (0, _SEVERITY_RANK.get(s.severity, 2),
+         -(float(s.value) / float(s.target)) if s.value and s.target else 0.0)
+        for s in own
+    )
+
+
 def _rule_based_recommendations(
     run: Run, symptoms: Sequence[Symptom], chunks: Sequence[Chunk]
 ) -> List[Recommendation]:
-    """Tactics from the playbooks whose front matter names a detected symptom."""
+    """Tactics from the playbooks whose front matter names a detected symptom.
+
+    Playbooks are taken most-urgent first (``_playbook_relevance``); within
+    one, tactics are taken in the order the playbook lists them. Section order
+    is the author's priority — ordering by slug put "Always set width and
+    height", a layout-shift fix, at the head of the LCP advice.
+    """
     matched = match_playbooks_by_symptoms([s.code for s in symptoms], chunks)
+    position = {chunk.chunk_id: index for index, chunk in enumerate(chunks)}
 
     per_source: Dict[str, List[Chunk]] = {}
-    for chunk in _tactics(matched):
+    for chunk in sorted(_tactics(matched), key=lambda c: position[c.chunk_id]):
         per_source.setdefault(chunk.source, []).append(chunk)
 
+    ranked = sorted(
+        per_source,
+        key=lambda source: (_playbook_relevance(per_source[source], symptoms, run), source),
+    )
     selected: List[Chunk] = []
-    for source in sorted(per_source):
+    for source in ranked:
         selected.extend(per_source[source][:MAX_TACTICS_PER_PLAYBOOK])
     selected = selected[:MAX_RULE_BASED_RECOMMENDATIONS]
 
     candidates = [
-        Candidate(source=chunk.source, metadata=chunk.metadata) for chunk in selected
+        Candidate(source=chunk.source, metadata=applicable_metadata(chunk.metadata, run))
+        for chunk in selected
     ]
-    projections = by_source(project(candidates, _metrics_map(run)))
+    projections = project_each(candidates, _metrics_map(run))
 
     return build_recommendations(
         [
@@ -513,10 +587,11 @@ def analyze_page(
 
     metrics = _metrics_map(primary)
     candidates = [
-        Candidate(source=rec.playbook_source, metadata=allowed[rec.playbook_source])
+        Candidate(source=rec.playbook_source,
+                  metadata=applicable_metadata(allowed[rec.playbook_source], primary))
         for rec in kept
     ]
-    projections = by_source(project(candidates, metrics))
+    projections = project_each(candidates, metrics)
 
     recommendations = build_recommendations(
         [

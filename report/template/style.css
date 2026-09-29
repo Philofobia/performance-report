@@ -31,10 +31,39 @@
   --fail: #b3261e;
   --unknown: #6b7280;
 
-  --sans: Corbel, "Segoe UI", Candara, "Trebuchet MS", sans-serif;
-  --serif: Constantia, Cambria, "Palatino Linotype", Georgia, serif;
+  --sans: "Report Figures Sans", Corbel, "Segoe UI", Candara, "Trebuchet MS", sans-serif;
+  --serif: "Report Figures Serif", Constantia, Cambria, "Palatino Linotype", Georgia, serif;
   --mono: Consolas, "Cascadia Mono", "DejaVu Sans Mono", monospace;
 }
+
+/* Figures come from a face whose *default* digits are lining and tabular.
+ *
+ * Corbel and Constantia default to old-style figures, and asking for lining
+ * or tabular ones (`font-variant-numeric`) makes the shaper substitute
+ * alternate glyphs that have no character-map entry. Chromium's PDF writer
+ * then has no Unicode to record for them: the digits print, but the PDF's
+ * text layer holds U+0000 — nothing to search, copy or read aloud, in a
+ * document whose whole argument is its numbers.
+ *
+ * So the digits alone (unicode-range) are drawn from Segoe UI and Cambria,
+ * whose default figures are already lining and tabular, and no numeric
+ * variant is requested anywhere. Segoe UI Semibold's figures are
+ * proportional; it only sets h1-h3, where nothing aligns in columns.
+ * Where these faces are not installed, `local()` finds nothing and the stack
+ * continues exactly as it did without them. tests/e2e/report_pdf_e2e_test.py
+ * holds the text layer to this. */
+@font-face { font-family: "Report Figures Sans"; src: local("Segoe UI"), local("SegoeUI");
+             font-weight: 400; unicode-range: U+0030-0039; }
+@font-face { font-family: "Report Figures Sans"; src: local("Segoe UI Semibold"), local("SegoeUI-Semibold");
+             font-weight: 600; unicode-range: U+0030-0039; }
+@font-face { font-family: "Report Figures Sans"; src: local("Segoe UI Bold"), local("SegoeUI-Bold");
+             font-weight: 700; unicode-range: U+0030-0039; }
+@font-face { font-family: "Report Figures Serif"; src: local("Cambria");
+             font-weight: 400; unicode-range: U+0030-0039; }
+@font-face { font-family: "Report Figures Serif"; src: local("Cambria Bold"), local("Cambria-Bold");
+             font-weight: 700; unicode-range: U+0030-0039; }
+@font-face { font-family: "Report Figures Serif"; src: local("Cambria Italic"), local("Cambria-Italic");
+             font-style: italic; unicode-range: U+0030-0039; }
 
 @page {
   size: A4;
@@ -52,7 +81,7 @@ body {
   font-family: var(--sans);
   font-size: 9.5pt;
   line-height: 1.5;
-  font-variant-numeric: tabular-nums lining-nums;
+  /* No font-variant-numeric: see the "Report Figures" faces above. */
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
 }
@@ -351,6 +380,26 @@ p { margin: 0 0 2.5mm; }
 }
 .finding-title { font-weight: 700; font-size: 10pt; margin-bottom: 1mm; }
 .evidence { color: var(--muted); font-size: 7.5pt; margin: 1mm 0 0; }
+
+/* Tickets and HAR findings: lists a developer acts on, one request per line. */
+.tickets { list-style: none; margin: 2mm 0 0; padding: 0; }
+.tickets > li {
+  padding: 0 0 2.5mm 4mm;
+  margin-bottom: 2.5mm;
+  border-left: 1.5pt solid var(--rule);
+  break-inside: avoid;
+}
+.tickets--confirmed > li { border-left-color: var(--fail); }
+.tickets--not_seen > li { border-left-color: var(--pass); }
+.evidence-list {
+  list-style: none;
+  margin: 1mm 0 0;
+  padding: 0;
+  font-size: 7pt;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.evidence-list > li { margin: 0.6mm 0; }
 
 .impacts {
   display: grid;

@@ -14,6 +14,16 @@ networks:
     downlink_mbps: 1.6
     uplink_mbps: 0.75
     offline: false
+  # Lighthouse's desktop throttling (rttMs 40, throughputKbps 10240). The
+  # desktop default: fast-3g put a working 1 MB hero at 12 s of LCP on the
+  # Oakley homepage - true for a 1.6 Mbps link, not for desktop visitors, whom
+  # WebPageTest (20 Mbps) and the field both put at ~2 s.
+  - name: lighthouse-desktop
+    label: Lighthouse desktop (10 Mbps, 40 ms)
+    latency_ms: 40
+    downlink_mbps: 10.0
+    uplink_mbps: 10.0
+    offline: false
   - name: slow-4g
     label: Slow 4G (DevTools)
     latency_ms: 170
