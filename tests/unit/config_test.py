@@ -405,3 +405,22 @@ def test_field_thresholds_default_to_dashboard_values():
     assert th.field_cache_hit_warn_pct == 70.0
     assert th.field_frustration_warn == 30.0
     assert th.field_frustration_fail == 60.0
+
+
+def test_third_party_blocking_is_off_unless_configured():
+    cfg = cl.load_config()
+    assert cfg.block_third_party is False
+    assert not any(cfg.blocks_third_party(page) for page in cfg.pages)
+
+
+def test_a_page_setting_overrides_the_project_block_setting(tmp_path):
+    targets = tmp_path / "targets.yaml"
+    targets.write_text(
+        "project: p\n"
+        "block_third_party: true\n"
+        "pages:\n"
+        "  - {name: a, url: 'https://example.com/'}\n"
+        "  - {name: b, url: 'https://example.com/b', block_third_party: false}\n",
+        encoding="utf-8")
+    cfg = cl.load_config(targets=targets)
+    assert [cfg.blocks_third_party(p) for p in cfg.pages] == [True, False]

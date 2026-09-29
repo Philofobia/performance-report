@@ -1308,6 +1308,90 @@ def test_blocked_main_document_still_closes_the_context(public_dns):
 
 
 # --------------------------------------------------------------------------- #
+# Optional third-party script blocking
+# --------------------------------------------------------------------------- #
+class _BlockRoute:
+    def __init__(self, url, resource_type):
+        self.request = type("Req", (), {"url": url, "resource_type": resource_type,
+                                        "headers": {}})()
+        self.outcome = None
+
+    def abort(self, reason=None):
+        self.outcome = ("abort", reason)
+
+    def continue_(self, **kwargs):
+        self.outcome = ("continue", kwargs)
+
+
+def _only_route(browser):
+    _, ctx = browser.contexts[0]
+    routes = getattr(ctx.pages[0], "routes", [])
+    assert len(routes) == 1
+    return routes[0]
+
+
+def test_blocking_matches_third_party_hosts_only(public_dns):
+    browser = FakeBrowser()
+    make_runner(browser).run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK, block_third_party=True)
+    matcher, _ = _only_route(browser)
+
+    for url in ("https://cdn0.forter.com/x.js", "https://unpkg.com/react@17/umd/r.js",
+                "https://oakley.com.evil.net/a.js"):
+        assert matcher(url), url
+    for url in ("https://www.oakley.com/_ui/main.js", "https://media.oakley.com/a.js",
+                "https://oakley.com/", "data:image/gif;base64,R0lGOD"):
+        assert not matcher(url), url
+
+
+def test_blocking_aborts_scripts_and_lets_everything_else_through(public_dns):
+    """Scripts are what cost main-thread time; images and styles are content."""
+    browser = FakeBrowser()
+    make_runner(browser).run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK, block_third_party=True)
+    _, handler = _only_route(browser)
+
+    script = _BlockRoute("https://cdn0.forter.com/x.js", "script")
+    style = _BlockRoute("https://cdn.jsdelivr.net/swiper.css", "stylesheet")
+    handler(script)
+    handler(style)
+
+    assert script.outcome == ("abort", "blockedbyclient")
+    assert style.outcome == ("continue", {})
+
+
+def test_blocked_scripts_are_counted_in_the_guard(public_dns):
+    """The guard reports the live counter the route handler increments."""
+    browser = FakeBrowser()
+    runner = make_runner(browser)
+    result = runner.run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK, block_third_party=True)
+    # The fake navigation issues no requests, so nothing was blocked - but
+    # blocking was on, which is not the same as None.
+    assert result["guard"]["third_party_scripts_blocked"] == 0
+
+
+def test_without_blocking_nothing_is_intercepted_and_the_guard_says_so(public_dns):
+    browser = FakeBrowser()
+    result = make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    _, ctx = browser.contexts[0]
+    assert not getattr(ctx.pages[0], "routes", [])
+    assert result["guard"]["third_party_scripts_blocked"] is None
+
+
+def test_headers_and_blocking_install_disjoint_routes(public_dns):
+    """The token goes to the site; blocking applies to everyone else."""
+    browser = FakeBrowser()
+    make_runner(browser).run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK,
+        extra_http_headers={"X-Akamai-Bot": "tok"}, block_third_party=True)
+    _, ctx = browser.contexts[0]
+    (site, _), (third, _) = ctx.pages[0].routes
+    for url in ("https://www.oakley.com/", "https://cdn0.forter.com/x.js"):
+        assert site(url) != third(url), url
+
+
+# --------------------------------------------------------------------------- #
 # run_campaign
 # --------------------------------------------------------------------------- #
 class RecordingRunner:
@@ -1318,12 +1402,13 @@ class RecordingRunner:
 
     def run_condition(
         self, url, device, network, *, artifacts_dir=None, run_id=None,
-        extra_http_headers=None,
+        extra_http_headers=None, block_third_party=False,
     ):
         self.calls.append(
             {"url": url, "device": device.name, "network": network.name,
              "artifacts_dir": artifacts_dir, "run_id": run_id,
-             "extra_http_headers": extra_http_headers}
+             "extra_http_headers": extra_http_headers,
+             "block_third_party": block_third_party}
         )
         n = len(self.calls)
         return {
@@ -1401,6 +1486,83 @@ def test_run_campaign_no_headers_flag_does_not_require_the_token():
     runner = RecordingRunner()
     runs = automated.run_campaign(cfg, runner, pages=["pdp"], no_headers=True, env={})
     assert len(runs) == 1
+
+
+def test_run_campaign_does_not_block_third_parties_by_default():
+    runner = RecordingRunner()
+    runs = automated.run_campaign(make_cfg(), runner, pages=["pdp"])
+    assert runner.calls[0]["block_third_party"] is False
+    assert runs[0].condition.network == "slow-4g"
+    assert runs[0].condition.third_party_scripts == "allowed"
+
+
+def test_a_blocked_run_is_recorded_as_its_own_condition():
+    """Trends and the newest-run-per-condition key on the network name.
+
+    A page without its third-party scripts under the plain network name would
+    extend the series of the page as visitors get it, and a report would read
+    the difference as an improvement the site made.
+    """
+    cfg = make_cfg()
+    cfg.block_third_party = True
+    runner = RecordingRunner()
+    runs = automated.run_campaign(cfg, runner, pages=["pdp"], artifacts_root="data/raw")
+
+    assert runner.calls[0]["block_third_party"] is True
+    assert runner.calls[0]["network"] == "slow-4g"      # the preset still applies
+    assert runs[0].condition.network == "slow-4g+no-3p"
+    assert runs[0].condition.third_party_scripts == "blocked"
+    path = runner.calls[0]["artifacts_dir"].replace("\\", "/")
+    assert path == "data/raw/pdp/mid-mobile__slow-4g_no-3p/run_1"  # safe_segment
+
+
+def test_a_page_can_override_the_project_block_setting():
+    cfg = make_cfg()
+    cfg.block_third_party = True
+    cfg.pages[1].block_third_party = False
+    runner = RecordingRunner()
+    automated.run_campaign(cfg, runner)
+    by_page = {c["url"]: c["block_third_party"] for c in runner.calls}
+    assert by_page == {"https://example.com/": True, "https://example.com/p/1": False}
+
+
+def test_the_campaign_argument_overrides_every_page():
+    cfg = make_cfg()
+    cfg.pages[1].block_third_party = True
+    runner = RecordingRunner()
+    automated.run_campaign(cfg, runner, block_third_party=False)
+    assert not any(c["block_third_party"] for c in runner.calls)
+
+
+def test_cli_block_third_party_flag(monkeypatch, tmp_path):
+    cfg = make_cfg()
+    monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
+    runner = RecordingRunner()
+    monkeypatch.setattr(automated, "_real_runner", lambda cfg=None: (None, None, runner))
+
+    assert automated.main(["--pages", "pdp", "--block-third-party", "--no-store",
+                           "--output-dir", str(tmp_path)]) == 0
+    assert runner.calls[0]["block_third_party"] is True
+
+
+def test_cli_allow_third_party_flag_beats_the_config(monkeypatch, tmp_path):
+    cfg = make_cfg()
+    cfg.block_third_party = True
+    monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
+    runner = RecordingRunner()
+    monkeypatch.setattr(automated, "_real_runner", lambda cfg=None: (None, None, runner))
+
+    assert automated.main(["--pages", "pdp", "--allow-third-party", "--no-store",
+                           "--output-dir", str(tmp_path)]) == 0
+    assert runner.calls[0]["block_third_party"] is False
+
+
+def test_cli_dry_run_shows_the_blocked_condition(monkeypatch, capsys):
+    cfg = make_cfg()
+    cfg.block_third_party = True
+    monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
+    assert automated.main(["--dry-run", "--pages", "pdp"]) == 0
+    assert "slow-4g+no-3p" in capsys.readouterr().out
 
 
 def test_run_campaign_respects_overrides():
