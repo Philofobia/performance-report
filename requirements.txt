@@ -3,10 +3,10 @@
 # Packages not yet installed are pinned to current stable releases (verify on install).
 pydantic==2.13.5          # verified in venv
 PyYAML==6.0.3             # verified in venv
-python-dotenv==1.2.3      # verified in venv
+python-dotenv==1.2.4      # verified in venv
 numpy==2.5.3              # exact top-k cosine for RAG retrieval (store/vectordb.py);
                           # replaces chromadb - see PROJECT_SPEC.md 8, decision #6
-google-genai==2.24.0      # sole LLM + embeddings client (litellm dropped: 19 CVEs
+google-genai==2.28.0      # sole LLM + embeddings client (litellm dropped: 19 CVEs
                           # at the pinned version, unused, and spec-optional)
 jinja2==3.1.6             # verified in venv
 matplotlib==3.11.2        # 3.10.4 was never published; broke CI install
