@@ -51,11 +51,6 @@ CREATE TABLE IF NOT EXISTS runs (
     ttfb_ms           REAL,
     tbt_ms            REAL,
 
-    lh_performance    INTEGER,
-    lh_accessibility  INTEGER,
-    lh_best_practices INTEGER,
-    lh_seo            INTEGER,
-
     total_transfer_kb REAL,
     request_count     INTEGER,
     render_blocking_css INTEGER,
@@ -132,7 +127,6 @@ def init_schema(conn: sqlite3.Connection) -> None:
 def _row_values(run: Run) -> Dict[str, Any]:
     """Flatten a canonical Run into the ``runs`` column set."""
     cwp = run.metrics.cwp
-    lh = run.metrics.lighthouse
     net = run.metrics.network
     mt = run.metrics.main_thread
     return {
@@ -155,10 +149,6 @@ def _row_values(run: Run) -> Dict[str, Any]:
         "fcp_ms": cwp.fcp_ms,
         "ttfb_ms": cwp.ttfb_ms,
         "tbt_ms": cwp.tbt_ms,
-        "lh_performance": lh.performance,
-        "lh_accessibility": lh.accessibility,
-        "lh_best_practices": lh.best_practices,
-        "lh_seo": lh.seo,
         "total_transfer_kb": net.total_transfer_kb,
         "request_count": net.request_count,
         "render_blocking_css": net.render_blocking_css,
@@ -279,7 +269,7 @@ def metric_history(
     """
     allowed = {
         "lcp_ms", "cls", "inp_ms", "fcp_ms", "ttfb_ms", "tbt_ms",
-        "lh_performance", "total_transfer_kb", "request_count",
+        "total_transfer_kb", "request_count",
         "script_ms", "task_ms", "dom_nodes",
     }
     if metric not in allowed:

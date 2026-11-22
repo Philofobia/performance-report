@@ -10,7 +10,7 @@ run_defaults:
   mobile_device: mid-mobile
   mobile_network: slow-4g
   desktop_device: desktop
-  desktop_network: lighthouse-desktop
+  desktop_network: desktop-broadband
 
 timeouts:
   # Per-navigation budgets for the browser runner (ms).

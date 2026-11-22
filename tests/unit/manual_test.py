@@ -15,19 +15,16 @@ def test_text_only_produces_manual_run():
     assert run.meta.source == "manual"
     assert run.problem.description == "Homepage LCP spikes to 6s"
     assert run.metrics.cwp.lcp_ms is None  # no metrics supplied
-    assert run.metrics.lighthouse.performance is None
 
 
 def test_metrics_only_populates_cwp_and_validates():
     run = build_manual_run(
         page_url="https://example.com/",
         cwp={"lcp_ms": 6200, "cls": 0.42, "inp_ms": 480, "fcp_ms": 3100, "ttfb_ms": 1800},
-        lighthouse={"performance": 54, "accessibility": 88},
         network_metrics={"total_transfer_kb": 4820, "request_count": 118},
     )
     assert run.metrics.cwp.lcp_ms == 6200
     assert run.metrics.cwp.cls == 0.42
-    assert run.metrics.lighthouse.performance == 54
     assert run.metrics.network.request_count == 118
     assert run.problem.description == ""
 
@@ -65,11 +62,6 @@ def test_cls_above_one_accepted():
 def test_negative_lcp_rejected():
     with pytest.raises(ValidationError):
         build_manual_run(page_url="https://example.com/", cwp={"lcp_ms": -5})
-
-
-def test_lighthouse_out_of_range_rejected():
-    with pytest.raises(ValidationError):
-        build_manual_run(page_url="https://example.com/", lighthouse={"performance": 150})
 
 
 def test_non_https_url_rejected():

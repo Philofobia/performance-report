@@ -20,6 +20,7 @@ import yaml
 from pydantic import BaseModel, Field
 
 from analysis import har_checks as hc
+from analysis.discovery import RULE_IDS
 
 TICKETS_FILE = Path(__file__).resolve().parents[1] / "config" / "tickets.yaml"
 
@@ -37,6 +38,9 @@ class TicketSpec(BaseModel):
     check: Optional[str] = None
     params: Dict[str, Any] = Field(default_factory=dict)
     reason: str = ""
+    #: ``analysis.discovery`` rules this ticket already covers: a problem a
+    #: rule finds is then listed as filed here rather than proposed again.
+    tracks: List[str] = Field(default_factory=list)
 
 
 class TicketCatalog(BaseModel):
@@ -54,6 +58,10 @@ def load_catalog(path: Path = TICKETS_FILE) -> TicketCatalog:
                              f"(known: {', '.join(sorted(hc.CHECKS))})")
         if ticket.check is None and not ticket.reason:
             raise ValueError(f"{ticket.id}: a ticket with no check must give a reason")
+        unknown = sorted(set(ticket.tracks) - set(RULE_IDS))
+        if unknown:
+            raise ValueError(f"{ticket.id}: unknown discovery rule(s) {', '.join(unknown)} "
+                             f"(known: {', '.join(RULE_IDS)})")
     return catalog
 
 

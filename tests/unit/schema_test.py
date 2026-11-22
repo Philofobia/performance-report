@@ -34,7 +34,6 @@ def valid_run_payload(**overrides):
                 "target_cls": 0.1,
                 "target_inp_ms": 200,
             },
-            "lighthouse": {"performance": 54, "accessibility": 88, "best_practices": 79, "seo": 90},
             "network": {"total_transfer_kb": 4820, "request_count": 118, "render_blocking_css": 6},
         },
     }
@@ -46,7 +45,6 @@ def test_valid_automated_run_parses():
     assert run.run_id.startswith("run_")
     assert run.condition.device == "mid-mobile"
     assert run.metrics.cwp.lcp_ms == 6200
-    assert run.metrics.lighthouse.performance == 54
 
 
 def test_valid_manual_run_needs_no_cwv():
@@ -110,26 +108,16 @@ def test_non_numeric_metric_rejected():
         Run.model_validate(payload)
 
 
-def test_lighthouse_score_out_of_range_rejected():
+def test_a_run_stored_with_lighthouse_scores_still_loads():
+    """Lighthouse was removed; runs written before that still carry its scores.
+
+    They must load - the store and data/processed hold months of them - and
+    the scores must not come back.
+    """
     payload = valid_run_payload()
-    payload["metrics"]["lighthouse"]["performance"] = 150
-    with pytest.raises(ValidationError):
-        Run.model_validate(payload)
-
-
-def test_lighthouse_negative_rejected():
-    payload = valid_run_payload()
-    payload["metrics"]["lighthouse"]["seo"] = -1
-    with pytest.raises(ValidationError):
-        Run.model_validate(payload)
-
-
-def test_lighthouse_within_range_accepted():
-    payload = valid_run_payload()
-    payload["metrics"]["lighthouse"] = {"performance": 0, "seo": 100}
+    payload["metrics"]["lighthouse"] = {"performance": 54, "seo": 90}
     run = Run.model_validate(payload)
-    assert run.metrics.lighthouse.performance == 0
-    assert run.metrics.lighthouse.seo == 100
+    assert "lighthouse" not in run.model_dump()["metrics"]
 
 
 def test_empty_run_id_rejected():

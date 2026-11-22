@@ -40,8 +40,6 @@ def make_run(
         "metrics": {
             "cwp": {"lcp_ms": lcp_ms, "cls": 0.42, "inp_ms": 480,
                     "fcp_ms": 3100, "ttfb_ms": 1800, "tbt_ms": 620},
-            "lighthouse": {"performance": 54, "accessibility": 88,
-                           "best_practices": 79, "seo": 90},
             "network": {"total_transfer_kb": 4820, "request_count": 118,
                         "render_blocking_css": 6},
             "main_thread": {"script_ms": 1820, "layout_ms": 240, "style_ms": 90,
@@ -105,12 +103,11 @@ def test_flat_metric_columns_are_queryable(conn):
     """Metrics are columns, not an opaque blob — the report layer queries them."""
     sql.insert_run(conn, make_run(lcp_ms=6200))
     row = conn.execute(
-        "SELECT lcp_ms, cls, tbt_ms, lh_performance, dom_nodes, page_name FROM runs"
+        "SELECT lcp_ms, cls, tbt_ms, dom_nodes, page_name FROM runs"
     ).fetchone()
     assert row["lcp_ms"] == 6200
     assert row["cls"] == 0.42
     assert row["tbt_ms"] == 620
-    assert row["lh_performance"] == 54
     assert row["dom_nodes"] == 3200
     assert row["page_name"] == "homepage"
 

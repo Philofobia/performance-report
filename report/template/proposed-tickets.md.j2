@@ -1,0 +1,56 @@
+# Proposed tickets — {{ report.cover.project }}
+
+`{{ report.cover.campaign_id }}` · generated {{ report.cover.generated_at.strftime('%Y-%m-%d %H:%M UTC') }}
+
+Problems the HAR captures show that no ticket in `config/tickets.yaml` names,
+most severe first. Each holds in most runs of a capture, and nothing the
+capture itself caused (a header it sent, a CORS preflight that header forced)
+is counted. Every block below is one ticket: copy it as it stands.
+{% set drafts = report.proposals|rejectattr('tracked_by')|list %}
+{% for p in drafts %}
+
+---
+
+## {{ p.title }}
+
+**Priority:** {{ p.severity|capitalize }} · **Area:** {{ p.category }} · **Seen on:** {{ p.seen_on|join(', ') }} ({{ p.seen_on|length }} of {{ p.captures_total }} captures)
+
+### Problem
+
+{{ p.summary }}
+
+### Evidence
+
+{% for line in p.evidence %}
+{% if line.startswith('  ') %}
+    {{ line|trim }}
+{% else %}
+- {{ line }}
+{% endif %}
+{% endfor %}
+
+### Proposed fix
+
+{{ p.fix }}
+
+### Done when
+
+{{ p.done_when }}
+{% if p.related %}
+
+### Related
+
+{{ p.related|join(', ') }} — open ticket(s) on the same area; check they do not already cover this.
+{% endif %}
+{% endfor %}
+{% set filed = report.proposals|selectattr('tracked_by')|list %}
+{% if filed %}
+
+---
+
+## Already filed
+
+{% for p in filed %}
+- **{{ p.tracked_by }}** tracks: {{ p.title }}
+{% endfor %}
+{% endif %}

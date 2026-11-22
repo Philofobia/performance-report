@@ -77,13 +77,12 @@ def test_range_hints_come_from_the_schema(app):
     """Range hints are the schema's numbers, not the template's.
 
     CLS carries `min="0"` and *no* max, because the schema bounds it below
-    only; Lighthouse carries the schema's 0..100. A template with its own
-    numbers would still have claimed `max="1"` for CLS after the schema
-    stopped saying so.
+    only. A template with its own numbers would still have claimed `max="1"`
+    for CLS after the schema stopped saying so.
     """
     _, _, body = call(app)
     assert 'name="cls"' in body
-    assert 'max="100"' in body          # Lighthouse scores
+    assert 'max="1"' not in body
 
 
 def test_device_and_network_render_the_configured_presets(app):

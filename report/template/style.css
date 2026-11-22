@@ -401,6 +401,27 @@ p { margin: 0 0 2.5mm; }
 }
 .evidence-list > li { margin: 0.6mm 0; }
 
+/* Proposed tickets: severity on the rule, then the fix and its test. */
+.proposals { counter-reset: none; }
+.proposal--high > li, .proposal.proposal--high { border-left-color: var(--fail); }
+.proposal.proposal--medium { border-left-color: var(--warn); }
+.proposal.proposal--low { border-left-color: var(--rule); }
+.sev {
+  font-family: var(--mono);
+  font-size: 6.5pt;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.2mm 1.2mm;
+  margin-right: 1mm;
+  border: 0.6pt solid currentColor;
+  border-radius: 1mm;
+  vertical-align: 1pt;
+}
+.sev--high { color: var(--fail); }
+.sev--medium { color: var(--warn); }
+.sev--low { color: var(--muted); }
+.proposal-fix { font-size: 8pt; margin: 1.2mm 0 0; }
+
 .impacts {
   display: grid;
   grid-template-columns: 20mm 1fr;

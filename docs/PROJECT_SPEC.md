@@ -371,6 +371,9 @@ content scales with the page count.
   process wired to the page's CDP websocket. CDP gives the same main-thread data natively with no
   extra runtime, so Lighthouse category scores are **opt-in** (inject `run_lighthouse_fn`) rather
   than required; the schema treats them as optional.
+  **Superseded 2026-09-29:** the bridge was never wired, and Lighthouse was removed entirely —
+  hook, score fields, manual flags and form inputs. The Lighthouse references elsewhere in this
+  spec describe the original plan, not the code.
 - **Reproducibility:** N runs per condition (default 3), report the **median**; store every run's
   raw artifacts so results are auditable.
 - **Budget guardrails:** request caps, navigation timeouts, and a per-page target list so long

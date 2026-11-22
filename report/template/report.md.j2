@@ -59,6 +59,39 @@ _No HAR captures were supplied, so no ticket was checked. Pass them to
 `analyze --har page/device=file.har`._
 {% endif %}
 
+## New tickets
+
+{% set drafts = report.proposals|rejectattr('tracked_by')|list %}
+{% set filed = report.proposals|selectattr('tracked_by')|list %}
+{% if report.proposals %}
+Problems in the HAR captures that no open ticket names, found by the rules in
+`analysis/discovery.py`. Each holds in most runs of a capture; nothing the
+capture itself caused is counted. The same drafts are in `proposed-tickets.md`.
+{% for p in drafts %}
+
+{{ loop.index }}. **[{{ p.severity }}] {{ p.title }}** ({{ p.category }}; {{ p.seen_on|length }} of {{ p.captures_total }} captures) — {{ p.summary }}
+{% for line in p.evidence %}
+   - `{{ line|trim }}`
+{% endfor %}
+   - Fix: {{ p.fix }}
+   - Done when: {{ p.done_when }}
+{% if p.related %}
+   - Read first: {{ p.related|join(', ') }}
+{% endif %}
+{% endfor %}
+{% if filed %}
+
+**Already filed** ({{ filed|length }})
+
+{% for p in filed %}
+- **{{ p.tracked_by }}** {{ p.title }}
+{% endfor %}
+{% endif %}
+{% else %}
+_No HAR captures were supplied, so nothing was looked for. Pass them to
+`analyze --har page/device=file.har`._
+{% endif %}
+
 ## What visitors actually experienced
 
 Measured from real sessions, not from the emulated campaign. Where these

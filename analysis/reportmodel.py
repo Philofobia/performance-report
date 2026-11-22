@@ -341,6 +341,24 @@ class TicketModel(BaseModel):
     observed_on: List[str] = Field(default_factory=list)
 
 
+class ProposalModel(BaseModel):
+    """A ticket nobody has filed yet, found in the HARs (analysis/discovery)."""
+
+    key: str
+    title: str
+    category: str
+    #: "high" | "medium" | "low"
+    severity: str
+    summary: str
+    fix: str
+    done_when: str
+    seen_on: List[str] = Field(default_factory=list)
+    captures_total: int = 0
+    evidence: List[str] = Field(default_factory=list)
+    related: List[str] = Field(default_factory=list)
+    tracked_by: Optional[str] = None
+
+
 class PageBlock(BaseModel):
     name: str
     url: str
@@ -470,6 +488,9 @@ class Report(BaseModel):
     #: Every ticket in config/tickets.yaml and what the supplied HARs show.
     #: Empty when no HAR was supplied.
     tickets: List[TicketModel] = Field(default_factory=list)
+    #: Problems the HARs show that no open ticket names - drafts to file.
+    #: Empty when no HAR was supplied; defaulted for older report.json files.
+    proposals: List[ProposalModel] = Field(default_factory=list)
     pages: List[PageBlock]
     comparison: List[ComparisonRow]
     methodology: Methodology
@@ -802,6 +823,7 @@ def build_report(
     summary_degradation: Optional[str] = None,
     har_captures: Optional[Sequence[Any]] = None,
     tickets: Optional[Sequence[Any]] = None,
+    proposals: Optional[Sequence[Any]] = None,
 ) -> Report:
     """Assemble the Report JSON from per-page analyses.
 
@@ -868,6 +890,7 @@ def build_report(
         ),
         action_plan=plan,
         tickets=[TicketModel(**vars(t)) for t in tickets or ()],
+        proposals=[ProposalModel(**vars(p)) for p in proposals or ()],
         pages=page_blocks,
         comparison=_comparison(ordered, settings),
         methodology=_methodology(ordered, settings),

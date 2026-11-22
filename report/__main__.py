@@ -24,7 +24,7 @@ from pydantic import ValidationError
 
 from analysis.reportmodel import Report
 from report.render_html import render_html
-from report.render_md import render_md
+from report.render_md import render_md, render_proposed_tickets
 from report.skeleton import (
     BASELINE_PATH,
     diff_sections,
@@ -97,7 +97,12 @@ def write_outputs(
     with_pdf: bool,
     images: Optional[Mapping[str, Any]] = None,
 ) -> List[Path]:
-    """Write report.html, report.md and optionally report.pdf."""
+    """Write report.html, report.md, proposed-tickets.md and optionally report.pdf.
+
+    ``proposed-tickets.md`` holds the ticket drafts alone, one paste-ready
+    block each; it is written whenever the report has any, and removed when a
+    re-render has none, so a stale draft never outlives its evidence.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     written: List[Path] = []
 
@@ -109,6 +114,13 @@ def write_outputs(
     md_path = output_dir / "report.md"
     md_path.write_text(render_md(report, base_dir=output_dir), encoding="utf-8")
     written.append(md_path)
+
+    drafts_path = output_dir / "proposed-tickets.md"
+    if report.proposals:
+        drafts_path.write_text(render_proposed_tickets(report), encoding="utf-8")
+        written.append(drafts_path)
+    elif drafts_path.exists():
+        drafts_path.unlink()
 
     if with_pdf:
         from report.render_pdf import chromium_page_factory, render_pdf

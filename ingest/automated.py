@@ -30,7 +30,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 from config.load import PageTarget, PageTest, ProjectConfig
 from ingest.browser.runner import TargetUnreachableError
 from ingest.persist import RunPersister
-from normalize.schema import Run
+from normalize.schema import NO_THIRD_PARTY_SUFFIX, Run
 from store import sql
 from store.artifacts import safe_segment
 
@@ -65,12 +65,10 @@ def median_int(values: List[Optional[float]]) -> Optional[int]:
 def merge_median_metrics(measurements: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """Median of each numeric metric across N raw measurement dicts."""
     cwp_runs = [m.get("cwp", {}) for m in measurements]
-    lh_runs = [m.get("lighthouse", {}) for m in measurements]
     net_runs = [m.get("network", {}) for m in measurements]
     mt_runs = [m.get("main_thread", {}) for m in measurements]
 
     cwp_keys = ("lcp_ms", "cls", "inp_ms", "fcp_ms", "ttfb_ms", "tbt_ms")
-    lh_keys = ("performance", "accessibility", "best_practices", "seo")
     net_float_keys = ("total_transfer_kb",)
     net_int_keys = ("request_count", "render_blocking_css")
     mt_float_keys = ("script_ms", "layout_ms", "style_ms", "task_ms", "js_heap_kb")
@@ -95,8 +93,6 @@ def merge_median_metrics(measurements: List[Dict[str, Any]]) -> Dict[str, Dict[s
 
     return {
         "cwp": cwp_merged,
-        # Lighthouse category scores are integers 0-100.
-        "lighthouse": _merge(lh_runs, int_keys=lh_keys),
         "network": _merge(net_runs, float_keys=net_float_keys, int_keys=net_int_keys),
         "main_thread": _merge(mt_runs, float_keys=mt_float_keys, int_keys=mt_int_keys),
     }
@@ -172,6 +168,11 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def condition_network(network: str, block_third_party: bool) -> str:
+    """The network name a run is recorded under (see ``make_automated_run``)."""
+    return f"{network}{NO_THIRD_PARTY_SUFFIX}" if block_third_party else network
+
+
 def make_automated_run(
     cfg: ProjectConfig,
     page: PageTarget,
@@ -179,8 +180,14 @@ def make_automated_run(
     measurements: List[Dict[str, Any]],
     *,
     runner: str = DEFAULT_RUNNER_NAME,
+    block_third_party: bool = False,
 ) -> Run:
-    """Emit the ONE canonical ``Run`` for a (page x condition) from N raw runs."""
+    """Emit the ONE canonical ``Run`` for a (page x condition) from N raw runs.
+
+    With ``block_third_party`` the run's network is ``<network>+no-3p``: a page
+    without its third-party scripts is a different condition, and must not
+    extend - or be compared with - the series of the page as visitors get it.
+    """
     med = merge_median_metrics(measurements)
     representative = median_measurement(measurements)
     device = cfg.devices.get(condition.device)
@@ -192,9 +199,10 @@ def make_automated_run(
         "page": {"name": page.name, "url": page.url},
         "condition": {
             "device": condition.device,
-            "network": condition.network,
+            "network": condition_network(condition.network, block_third_party),
             "cpu_throttle": cpu_throttle,
             "runs": condition.runs,
+            "third_party_scripts": "blocked" if block_third_party else "allowed",
         },
         "meta": {"created_at": _now_iso(), "source": "automated", "runner": runner},
         "problem": {},
@@ -216,6 +224,7 @@ def run_campaign(
     pages: Optional[List[str]] = None,
     artifacts_root: Optional[str] = None,
     no_headers: bool = False,
+    block_third_party: Optional[bool] = None,
     env: Optional[Mapping[str, str]] = None,
     on_run: Optional[Callable[[Run], Optional[Run]]] = None,
 ) -> List[Run]:
@@ -223,7 +232,8 @@ def run_campaign(
 
     ``no_headers=True`` discards any configured request headers for this
     invocation — useful for measuring the same targets with and without a bot
-    allowlist token. Headers are resolved per page only when they are actually
+    allowlist token. ``block_third_party`` overrides targets.yaml's
+    ``block_third_party`` for every page; ``None`` keeps the configured value. Headers are resolved per page only when they are actually
     wanted, so an unset token cannot break a campaign that does not use it.
 
     ``on_run`` is called with each Run the moment its (page x condition)
@@ -241,6 +251,9 @@ def run_campaign(
         device_obj = cfg.devices[condition.device]
         network_obj = cfg.networks[condition.network]
         headers = {} if no_headers else cfg.headers_for(page, env=env)
+        blocking = (cfg.blocks_third_party(page) if block_third_party is None
+                    else block_third_party)
+        network_label = condition_network(condition.network, blocking)
         measurements: List[Dict[str, Any]] = []
         for i in range(condition.runs):
             artifacts_dir = None
@@ -248,7 +261,7 @@ def run_campaign(
                 artifacts_dir = str(
                     Path(artifacts_root)
                     / safe_segment(page.name)
-                    / f"{safe_segment(condition.device)}__{safe_segment(condition.network)}"
+                    / f"{safe_segment(condition.device)}__{safe_segment(network_label)}"
                     / f"run_{i + 1}"
                 )
             token = f"run_{i + 1}"
@@ -260,9 +273,11 @@ def run_campaign(
                     artifacts_dir=artifacts_dir,
                     run_id=token,
                     extra_http_headers=headers,
+                    block_third_party=blocking,
                 )
             )
-        run = make_automated_run(cfg, page, condition, measurements)
+        run = make_automated_run(cfg, page, condition, measurements,
+                                 block_third_party=blocking)
         if on_run is not None:
             run = on_run(run) or run
         result.append(run)
@@ -291,6 +306,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-headers", action="store_true",
                    help="Ignore any request headers configured in targets.yaml "
                         "for this run (e.g. to measure without a bot-allowlist token).")
+    blocking = p.add_mutually_exclusive_group()
+    blocking.add_argument("--block-third-party", dest="block_third_party",
+                          action="store_const", const=True, default=None,
+                          help="Abort third-party script requests on every page "
+                               "(overrides block_third_party in targets.yaml). "
+                               "Runs are recorded under <network>+no-3p.")
+    blocking.add_argument("--allow-third-party", dest="block_third_party",
+                          action="store_const", const=False,
+                          help="Let third-party scripts load on every page, "
+                               "whatever targets.yaml says.")
     p.add_argument("--no-store", action="store_true",
                    help="Do not record the campaign in the SQLite run store. "
                         "Trends are built from that store, so a campaign run "
@@ -363,7 +388,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         runs: List[Run] = []
         out_dir = Path(args.output_dir)
         for page, cond in plan:  # dry-run still emits nothing real; print plan
-            print(f"{page.name}\t{cond.device}\t{cond.network}\t{cond.runs}")
+            blocking = (cfg.blocks_third_party(page) if args.block_third_party is None
+                        else args.block_third_party)
+            print(f"{page.name}\t{cond.device}\t"
+                  f"{condition_network(cond.network, blocking)}\t{cond.runs}")
         return 0
 
     # Every configured header name is a candidate secret, so the scrubber is
@@ -411,6 +439,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 pages=pages,
                 artifacts_root=args.artifacts_root,
                 no_headers=args.no_headers,
+                block_third_party=args.block_third_party,
                 on_run=sink,
             )
         except TargetUnreachableError as exc:

@@ -80,7 +80,7 @@ COLLECTOR_SCRIPT = """
 })();
 """
 
-# Long tasks below this are not "blocking" by definition (Lighthouse/DevTools).
+# Long tasks below this are not "blocking" by definition (DevTools/WebPageTest).
 BLOCKING_TASK_FLOOR_MS = 50.0
 
 # TTFB comes from the navigation entry at read time, not from an observer.
@@ -148,7 +148,7 @@ def install_collector(page) -> None:
 
 
 #: Time to Interactive is the end of the last long task before this long a
-#: stretch with none (Lighthouse's quiet window).
+#: stretch with none (the standard TTI quiet window).
 TTI_QUIET_WINDOW_MS = 5000.0
 
 
@@ -167,7 +167,7 @@ def compute_tbt_ms(
     Each long task contributes ``duration - 50ms`` (the portion the main thread
     was unavailable to respond). Tasks before FCP are excluded, and so is every
     task after Time to Interactive — the end of the last long task before a
-    five-second window with none — matching how DevTools/Lighthouse and
+    five-second window with none — matching how DevTools and
     WebPageTest define the metric. This is TTI's CPU criterion only; the
     network criterion needs request timing this collector does not keep.
 

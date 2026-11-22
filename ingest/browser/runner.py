@@ -22,6 +22,12 @@ forced CORS preflights that failed, and broke the very images LCP is measured
 on. It is entirely opt-in: with no headers, no request is intercepted and the
 context is built exactly as it was before the feature existed.
 
+**Optional third-party script blocking.** ``block_third_party=True`` aborts
+every script request to a host outside the page's site
+(``install_third_party_block``), so the same page can be measured with and
+without the scripts it does not own. Off by default; the campaign records the
+choice in the run's condition so the two are never compared as one.
+
 Mockability: the Playwright surface (browser/context/page/CDP session) and the
 measurement collectors are injected. Tests supply fakes + canned metrics, so no
 real browser is ever launched in offline tests.
@@ -34,7 +40,8 @@ from urllib.parse import urlsplit
 
 from config.load import Device, Network
 from normalize import url_safety
-from ingest.browser import cdp_metrics, webser, lighthouse
+from normalize.site import in_site, site_scope
+from ingest.browser import cdp_metrics, webser
 
 
 # Statuses a bot filter (Akamai et al.) returns when it rejects a request.
@@ -121,15 +128,6 @@ def assert_safe_chain(response, *, requested: str) -> None:
             ) from exc
 
 
-def _no_lighthouse(url: str, cdp: object) -> dict:
-    """Default: no Lighthouse audit.
-
-    Main-thread data comes from CDP directly (``cdp_metrics``), so the Node
-    Lighthouse bridge is opt-in rather than required. Pass ``run_lighthouse_fn``
-    to populate the optional Lighthouse category scores.
-    """
-    return {}
-
 # Default CDP emulation for a given device (Playwright context.new_context kwargs).
 def device_context_kwargs(device: Device) -> Dict[str, Any]:
     """Resolve a config ``Device`` to Playwright ``new_context`` keyword args."""
@@ -159,24 +157,10 @@ def network_throttle_params(network: Network) -> Dict[str, Any]:
     }
 
 
-def header_scope(page_url: str) -> str:
-    """The site a page's request headers may reach: its host, minus ``www.``.
-
-    ``www.oakley.com`` scopes to ``oakley.com``, which admits
-    ``media.oakley.com`` and ``assets2.oakley.com`` — Akamai fronts those too
-    and blocks their images without the token. Deliberately not a registrable-
-    domain guess: stripping more than ``www.`` would turn
-    ``shop.example.co.uk`` into ``co.uk`` and send the token to every site
-    under it. Too narrow fails loudly (a blocked image); too broad leaks.
-    """
-    host = (urlsplit(page_url).hostname or "").lower()
-    return host[4:] if host.startswith("www.") else host
-
-
-def in_header_scope(request_url: str, scope: str) -> bool:
-    """Whether ``request_url`` is ``scope`` itself or one of its subdomains."""
-    host = (urlsplit(request_url).hostname or "").lower()
-    return bool(scope) and (host == scope or host.endswith("." + scope))
+#: Kept under the names the header code and its tests have always used; the
+#: rule itself lives in ``normalize.site`` so the HAR analysis shares it.
+header_scope = site_scope
+in_header_scope = in_site
 
 
 def install_site_headers(page, page_url: str, headers: Mapping[str, str]) -> None:
@@ -201,6 +185,37 @@ def install_site_headers(page, page_url: str, headers: Mapping[str, str]) -> Non
         route.continue_(headers={**route.request.headers, **extra})
 
     page.route(lambda request_url: in_header_scope(request_url, scope), _add)
+
+
+#: Resource types blocked by ``install_third_party_block``. Scripts only: they
+#: are what costs main-thread time, and what loads the rest of a third
+#: party's requests. Blocking images or XHR as well would also remove things
+#: the page itself renders (a CDN'd swiper stylesheet, a review widget's
+#: markup), which changes what is measured rather than who runs code.
+BLOCKED_THIRD_PARTY_TYPES = frozenset({"script"})
+
+
+def install_third_party_block(page, page_url: str) -> Dict[str, int]:
+    """Abort script requests to hosts outside the page's site; count them.
+
+    Every other third-party request continues untouched. The cost is
+    interception latency on third-party requests only - the site's own are
+    not matched - and a run without blocking installs nothing. Returns the
+    live counter the runner reports in ``guard``.
+    """
+    scope = site_scope(page_url)
+    blocked = {"count": 0}
+
+    def _block(route) -> None:
+        if route.request.resource_type in BLOCKED_THIRD_PARTY_TYPES:
+            blocked["count"] += 1
+            route.abort("blockedbyclient")
+        else:
+            route.continue_()
+
+    page.route(lambda request_url: bool(urlsplit(request_url).hostname)
+               and not in_site(request_url, scope), _block)
+    return blocked
 
 
 def apply_cpu_throttle(cdp, device: Device) -> None:
@@ -231,7 +246,6 @@ class BrowserRunner:
         trigger_interaction_fn: Optional[Callable[[object], None]] = None,
         setup_page_fn: Optional[Callable[[object], None]] = None,
         collect_cdp_metrics_fn: Optional[Callable[[object], dict]] = None,
-        run_lighthouse_fn: Optional[Callable[[str, object], dict]] = None,
         navigation_timeout_ms: int = 30_000,
         network_idle_timeout_ms: int = 5_000,
         lcp_timeout_ms: int = 3_000,
@@ -249,8 +263,6 @@ class BrowserRunner:
         self._wait_for_lcp = webser.wait_for_lcp
         self._wait_for_inp = webser.wait_for_inp
         self._collect_cdp_metrics = collect_cdp_metrics_fn or cdp_metrics.collect_cdp_metrics
-        # Lighthouse is opt-in: CDP supplies the main-thread breakdown natively.
-        self._run_lighthouse = run_lighthouse_fn or _no_lighthouse
         self._navigation_timeout_ms = navigation_timeout_ms
         self._network_idle_timeout_ms = network_idle_timeout_ms
         self._lcp_timeout_ms = lcp_timeout_ms
@@ -266,14 +278,16 @@ class BrowserRunner:
         artifacts_dir: Optional[str] = None,
         run_id: Optional[str] = None,
         extra_http_headers: Optional[Dict[str, str]] = None,
+        block_third_party: bool = False,
     ) -> Dict[str, Any]:
         """Run one (url, device, network) measurement and return raw measurements.
 
         Returns a dict with ``cwp``, ``main_thread``, ``network``,
-        ``resource_timings``, ``lighthouse``, ``captures`` and ``guard`` keys.
+        ``resource_timings``, ``captures`` and ``guard`` keys.
 
         ``extra_http_headers`` is optional; when falsy, nothing about context
-        construction changes. Raises :class:`BlockedResponseError` if the main
+        construction changes. ``block_third_party`` aborts third-party script
+        requests (``install_third_party_block``). Raises :class:`BlockedResponseError` if the main
         document returns a non-2xx status.
         """
         # --- SSRF gate: validate BEFORE any navigation (non-negotiable) ---
@@ -329,6 +343,9 @@ class BrowserRunner:
 
             if site_headers:
                 install_site_headers(page, url, site_headers)
+
+            third_party = (install_third_party_block(page, url)
+                           if block_third_party else None)
 
             if self._setup_page is not None:
                 self._setup_page(page)
@@ -400,7 +417,6 @@ class BrowserRunner:
             collected = self._collect_metrics(page) or {}
             # DevTools main-thread counters, read directly over CDP.
             main_thread = self._collect_cdp_metrics(cdp) or {}
-            lh_scores = self._run_lighthouse(url, cdp) or {}
 
             if artifacts_dir:
                 out = Path(artifacts_dir)
@@ -424,10 +440,13 @@ class BrowserRunner:
             "main_thread": main_thread,
             "network": collected.get("network", {}),
             "resource_timings": collected.get("resource_timings", []),
-            "lighthouse": lh_scores,
             "guard": {
                 "main_status": main_status,
                 "blocked_requests": blocked["count"],
+                # None when blocking was off, so "blocked nothing" and "did
+                # not try" stay distinguishable.
+                "third_party_scripts_blocked": (
+                    third_party["count"] if third_party is not None else None),
             },
             "captures": {
                 "screenshot": screenshot_path,

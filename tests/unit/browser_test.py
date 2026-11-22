@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from config.load import Device, Network, PageTarget, PageTest, ProjectConfig, Settings
 from ingest import automated
-from ingest.browser import cdp_metrics, lighthouse, webser
+from ingest.browser import cdp_metrics, webser
 from ingest.browser import runner as runner_mod
 from ingest.browser.runner import (
     BlockedResponseError,
@@ -251,19 +251,11 @@ def public_dns(monkeypatch):
     monkeypatch.setattr(url_safety, "_lookup", lambda host: {"8.8.8.8"})
 
 
-def make_runner(browser, collect=None, lh_cdp=None, **kwargs):
+def make_runner(browser, collect=None, **kwargs):
     def collect_fn(page):
         return sample_collect(page) if collect is None else collect(page)
 
-    def lh_fn(url, cdp):
-        return {"performance": 80, "seo": 90} if lh_cdp is None else lh_cdp(url, cdp)
-
-    return BrowserRunner(
-        browser,
-        collect_metrics_fn=collect_fn,
-        run_lighthouse_fn=lh_fn,
-        **kwargs,
-    )
+    return BrowserRunner(browser, collect_metrics_fn=collect_fn, **kwargs)
 
 
 # --------------------------------------------------------------------------- #
@@ -326,11 +318,9 @@ def test_run_condition_returns_full_measurement_shape(public_dns):
     browser = FakeBrowser()
     result = make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
     assert set(result) == {
-        "cwp", "main_thread", "network", "resource_timings", "lighthouse",
-        "captures", "guard",
+        "cwp", "main_thread", "network", "resource_timings", "captures", "guard",
     }
     assert result["cwp"]["lcp_ms"] == 6200
-    assert result["lighthouse"]["performance"] == 80
 
 
 def test_run_condition_applies_device_emulation_to_context(public_dns):
@@ -773,7 +763,7 @@ def test_tbt_stops_at_the_first_five_second_quiet_window():
 
     On the live Oakley homepage, with consent working, trackers keep firing long
     tasks for 20-30 s after load; counting them all read 10.7 s of blocking
-    against 0.4-0.65 s in WebPageTest, which stops at TTI like Lighthouse.
+    against 0.4-0.65 s in WebPageTest, which stops at TTI.
     """
     tasks = [
         {"start": 1000, "duration": 150},   # 100 blocking
@@ -818,7 +808,7 @@ def test_collect_web_vitals_derives_tbt():
 
 
 # --------------------------------------------------------------------------- #
-# CDP main-thread metrics (DevTools-native, no Lighthouse Node bridge)
+# CDP main-thread metrics (DevTools-native)
 # --------------------------------------------------------------------------- #
 CDP_PAYLOAD = {"metrics": [
     {"name": "ScriptDuration", "value": 1.2345},       # seconds
@@ -913,53 +903,6 @@ def test_runner_collects_cdp_main_thread_metrics(public_dns):
     assert result["main_thread"] == {"script_ms": 1234.5, "dom_nodes": 1500}
 
 
-def test_lighthouse_is_optional_by_default(public_dns):
-    """Default path must not require the Node bridge (it would raise)."""
-    browser = FakeBrowser()
-    runner = BrowserRunner(browser, collect_metrics_fn=sample_collect)
-    result = runner.run_condition("https://example.com/", DEVICE, NETWORK)
-    assert result["lighthouse"] == {}
-
-
-# --------------------------------------------------------------------------- #
-# lighthouse
-# --------------------------------------------------------------------------- #
-def test_category_scores_maps_fractions_to_0_100():
-    lhr = {"categories": {
-        "performance": {"score": 0.54},
-        "accessibility": {"score": 0.88},
-        "best-practices": {"score": 0.79},
-        "seo": {"score": 0.9},
-    }}
-    assert lighthouse.category_scores(lhr) == {
-        "performance": 54, "accessibility": 88, "best_practices": 79, "seo": 90
-    }
-
-
-def test_category_scores_missing_categories_are_none():
-    assert lighthouse.category_scores({}) == {
-        "performance": None, "accessibility": None, "best_practices": None, "seo": None
-    }
-
-
-def test_category_scores_null_score_is_none_not_zero():
-    scores = lighthouse.category_scores({"categories": {"performance": {"score": None}}})
-    assert scores["performance"] is None
-
-
-def test_run_lighthouse_uses_injected_runner():
-    scores = lighthouse.run_lighthouse(
-        "https://example.com/", object(),
-        runner=lambda url, cdp: {"categories": {"seo": {"score": 1.0}}},
-    )
-    assert scores["seo"] == 100
-
-
-def test_default_lighthouse_runner_raises_actionable_error():
-    with pytest.raises(lighthouse.LighthouseUnavailableError, match="bridge"):
-        lighthouse.run_lighthouse("https://example.com/", object())
-
-
 # --------------------------------------------------------------------------- #
 # campaign: medians, planning, run emission
 # --------------------------------------------------------------------------- #
@@ -981,17 +924,14 @@ def test_merge_median_metrics_keeps_count_fields_integral():
     measurements = [
         {"cwp": {"lcp_ms": 1000, "cls": 0.1, "inp_ms": 100},
          "network": {"request_count": 10, "render_blocking_css": 1},
-         "lighthouse": {"performance": 50},
          "main_thread": {"dom_nodes": 100, "script_ms": 10.0}},
         {"cwp": {"lcp_ms": 2000, "cls": 0.2, "inp_ms": 200},
          "network": {"request_count": 21, "render_blocking_css": 2},
-         "lighthouse": {"performance": 61},
          "main_thread": {"dom_nodes": 201, "script_ms": 20.0}},
     ]
     merged = automated.merge_median_metrics(measurements)
     assert isinstance(merged["network"]["request_count"], int)
     assert merged["network"]["request_count"] == 16
-    assert isinstance(merged["lighthouse"]["performance"], int)
     assert isinstance(merged["main_thread"]["dom_nodes"], int)
     assert merged["main_thread"]["script_ms"] == 15.0  # floats keep precision
 
@@ -1015,17 +955,16 @@ def test_even_run_count_still_validates_against_schema():
 
 def test_merge_median_metrics_across_runs():
     measurements = [
-        {"cwp": {"lcp_ms": 1000, "cls": 0.1}, "lighthouse": {"performance": 50},
+        {"cwp": {"lcp_ms": 1000, "cls": 0.1},
          "network": {"request_count": 10}},
-        {"cwp": {"lcp_ms": 3000, "cls": 0.3}, "lighthouse": {"performance": 70},
+        {"cwp": {"lcp_ms": 3000, "cls": 0.3},
          "network": {"request_count": 30}},
-        {"cwp": {"lcp_ms": 2000, "cls": 0.2}, "lighthouse": {"performance": 60},
+        {"cwp": {"lcp_ms": 2000, "cls": 0.2},
          "network": {"request_count": 20}},
     ]
     merged = automated.merge_median_metrics(measurements)
     assert merged["cwp"]["lcp_ms"] == 2000
     assert merged["cwp"]["cls"] == 0.2
-    assert merged["lighthouse"]["performance"] == 60
     assert merged["network"]["request_count"] == 20
 
 
@@ -1369,6 +1308,90 @@ def test_blocked_main_document_still_closes_the_context(public_dns):
 
 
 # --------------------------------------------------------------------------- #
+# Optional third-party script blocking
+# --------------------------------------------------------------------------- #
+class _BlockRoute:
+    def __init__(self, url, resource_type):
+        self.request = type("Req", (), {"url": url, "resource_type": resource_type,
+                                        "headers": {}})()
+        self.outcome = None
+
+    def abort(self, reason=None):
+        self.outcome = ("abort", reason)
+
+    def continue_(self, **kwargs):
+        self.outcome = ("continue", kwargs)
+
+
+def _only_route(browser):
+    _, ctx = browser.contexts[0]
+    routes = getattr(ctx.pages[0], "routes", [])
+    assert len(routes) == 1
+    return routes[0]
+
+
+def test_blocking_matches_third_party_hosts_only(public_dns):
+    browser = FakeBrowser()
+    make_runner(browser).run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK, block_third_party=True)
+    matcher, _ = _only_route(browser)
+
+    for url in ("https://cdn0.forter.com/x.js", "https://unpkg.com/react@17/umd/r.js",
+                "https://oakley.com.evil.net/a.js"):
+        assert matcher(url), url
+    for url in ("https://www.oakley.com/_ui/main.js", "https://media.oakley.com/a.js",
+                "https://oakley.com/", "data:image/gif;base64,R0lGOD"):
+        assert not matcher(url), url
+
+
+def test_blocking_aborts_scripts_and_lets_everything_else_through(public_dns):
+    """Scripts are what cost main-thread time; images and styles are content."""
+    browser = FakeBrowser()
+    make_runner(browser).run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK, block_third_party=True)
+    _, handler = _only_route(browser)
+
+    script = _BlockRoute("https://cdn0.forter.com/x.js", "script")
+    style = _BlockRoute("https://cdn.jsdelivr.net/swiper.css", "stylesheet")
+    handler(script)
+    handler(style)
+
+    assert script.outcome == ("abort", "blockedbyclient")
+    assert style.outcome == ("continue", {})
+
+
+def test_blocked_scripts_are_counted_in_the_guard(public_dns):
+    """The guard reports the live counter the route handler increments."""
+    browser = FakeBrowser()
+    runner = make_runner(browser)
+    result = runner.run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK, block_third_party=True)
+    # The fake navigation issues no requests, so nothing was blocked - but
+    # blocking was on, which is not the same as None.
+    assert result["guard"]["third_party_scripts_blocked"] == 0
+
+
+def test_without_blocking_nothing_is_intercepted_and_the_guard_says_so(public_dns):
+    browser = FakeBrowser()
+    result = make_runner(browser).run_condition("https://example.com/", DEVICE, NETWORK)
+    _, ctx = browser.contexts[0]
+    assert not getattr(ctx.pages[0], "routes", [])
+    assert result["guard"]["third_party_scripts_blocked"] is None
+
+
+def test_headers_and_blocking_install_disjoint_routes(public_dns):
+    """The token goes to the site; blocking applies to everyone else."""
+    browser = FakeBrowser()
+    make_runner(browser).run_condition(
+        "https://www.oakley.com/en-us", DEVICE, NETWORK,
+        extra_http_headers={"X-Akamai-Bot": "tok"}, block_third_party=True)
+    _, ctx = browser.contexts[0]
+    (site, _), (third, _) = ctx.pages[0].routes
+    for url in ("https://www.oakley.com/", "https://cdn0.forter.com/x.js"):
+        assert site(url) != third(url), url
+
+
+# --------------------------------------------------------------------------- #
 # run_campaign
 # --------------------------------------------------------------------------- #
 class RecordingRunner:
@@ -1379,17 +1402,17 @@ class RecordingRunner:
 
     def run_condition(
         self, url, device, network, *, artifacts_dir=None, run_id=None,
-        extra_http_headers=None,
+        extra_http_headers=None, block_third_party=False,
     ):
         self.calls.append(
             {"url": url, "device": device.name, "network": network.name,
              "artifacts_dir": artifacts_dir, "run_id": run_id,
-             "extra_http_headers": extra_http_headers}
+             "extra_http_headers": extra_http_headers,
+             "block_third_party": block_third_party}
         )
         n = len(self.calls)
         return {
             "cwp": {"lcp_ms": 1000 * n, "cls": 0.1, "inp_ms": 100},
-            "lighthouse": {"performance": 50},
             "network": {"request_count": 10},
             "resource_timings": [],
             "captures": {"screenshot": f"{run_id}.png"},
@@ -1463,6 +1486,83 @@ def test_run_campaign_no_headers_flag_does_not_require_the_token():
     runner = RecordingRunner()
     runs = automated.run_campaign(cfg, runner, pages=["pdp"], no_headers=True, env={})
     assert len(runs) == 1
+
+
+def test_run_campaign_does_not_block_third_parties_by_default():
+    runner = RecordingRunner()
+    runs = automated.run_campaign(make_cfg(), runner, pages=["pdp"])
+    assert runner.calls[0]["block_third_party"] is False
+    assert runs[0].condition.network == "slow-4g"
+    assert runs[0].condition.third_party_scripts == "allowed"
+
+
+def test_a_blocked_run_is_recorded_as_its_own_condition():
+    """Trends and the newest-run-per-condition key on the network name.
+
+    A page without its third-party scripts under the plain network name would
+    extend the series of the page as visitors get it, and a report would read
+    the difference as an improvement the site made.
+    """
+    cfg = make_cfg()
+    cfg.block_third_party = True
+    runner = RecordingRunner()
+    runs = automated.run_campaign(cfg, runner, pages=["pdp"], artifacts_root="data/raw")
+
+    assert runner.calls[0]["block_third_party"] is True
+    assert runner.calls[0]["network"] == "slow-4g"      # the preset still applies
+    assert runs[0].condition.network == "slow-4g+no-3p"
+    assert runs[0].condition.third_party_scripts == "blocked"
+    path = runner.calls[0]["artifacts_dir"].replace("\\", "/")
+    assert path == "data/raw/pdp/mid-mobile__slow-4g_no-3p/run_1"  # safe_segment
+
+
+def test_a_page_can_override_the_project_block_setting():
+    cfg = make_cfg()
+    cfg.block_third_party = True
+    cfg.pages[1].block_third_party = False
+    runner = RecordingRunner()
+    automated.run_campaign(cfg, runner)
+    by_page = {c["url"]: c["block_third_party"] for c in runner.calls}
+    assert by_page == {"https://example.com/": True, "https://example.com/p/1": False}
+
+
+def test_the_campaign_argument_overrides_every_page():
+    cfg = make_cfg()
+    cfg.pages[1].block_third_party = True
+    runner = RecordingRunner()
+    automated.run_campaign(cfg, runner, block_third_party=False)
+    assert not any(c["block_third_party"] for c in runner.calls)
+
+
+def test_cli_block_third_party_flag(monkeypatch, tmp_path):
+    cfg = make_cfg()
+    monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
+    runner = RecordingRunner()
+    monkeypatch.setattr(automated, "_real_runner", lambda cfg=None: (None, None, runner))
+
+    assert automated.main(["--pages", "pdp", "--block-third-party", "--no-store",
+                           "--output-dir", str(tmp_path)]) == 0
+    assert runner.calls[0]["block_third_party"] is True
+
+
+def test_cli_allow_third_party_flag_beats_the_config(monkeypatch, tmp_path):
+    cfg = make_cfg()
+    cfg.block_third_party = True
+    monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
+    runner = RecordingRunner()
+    monkeypatch.setattr(automated, "_real_runner", lambda cfg=None: (None, None, runner))
+
+    assert automated.main(["--pages", "pdp", "--allow-third-party", "--no-store",
+                           "--output-dir", str(tmp_path)]) == 0
+    assert runner.calls[0]["block_third_party"] is False
+
+
+def test_cli_dry_run_shows_the_blocked_condition(monkeypatch, capsys):
+    cfg = make_cfg()
+    cfg.block_third_party = True
+    monkeypatch.setattr("config.load.load_config", lambda *a, **k: cfg)
+    assert automated.main(["--dry-run", "--pages", "pdp"]) == 0
+    assert "slow-4g+no-3p" in capsys.readouterr().out
 
 
 def test_run_campaign_respects_overrides():

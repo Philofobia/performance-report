@@ -45,7 +45,6 @@ def a_report(pages=("homepage",), *, recommendations=True, mode="llm",
             "metrics": {
                 "cwp": {"lcp_ms": 6200, "cls": 0.42, "inp_ms": 480,
                         "fcp_ms": 3100, "ttfb_ms": 1800, "tbt_ms": 620},
-                "lighthouse": {"performance": 54},
                 "network": {"total_transfer_kb": 4820, "request_count": 118,
                             "render_blocking_css": 6},
                 "main_thread": {"script_ms": 1820, "task_ms": 3100},

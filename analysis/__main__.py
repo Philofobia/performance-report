@@ -179,12 +179,13 @@ def rule_based_summary(pages: Sequence[PageAnalysis]) -> SimpleSummary:
 
 def load_har_evidence(har_args: Sequence[str],
                       tickets_path: Optional[str] = None) -> tuple:
-    """``--har`` values -> (captures, ticket outcomes); both empty with no HAR.
+    """``--har`` values -> (captures, ticket outcomes, proposed tickets).
 
-    Tickets are evaluated only when a HAR was supplied: with nothing to check
-    against, every ticket would read "no data", which says nothing.
+    All three are empty with no HAR. Tickets are evaluated only when a HAR was
+    supplied: with nothing to check against, every ticket would read "no
+    data", which says nothing.
     """
-    from analysis import har_checks, tickets as tk
+    from analysis import discovery, har_checks, tickets as tk
 
     captures = []
     for value in har_args:
@@ -194,9 +195,10 @@ def load_har_evidence(har_args: Sequence[str],
             raise ValueError(f"{path} holds no page loads")
         captures.append(tk.Capture(page=page, device=device, runs=runs))
     if not captures:
-        return [], []
+        return [], [], []
     catalog = tk.load_catalog(Path(tickets_path) if tickets_path else tk.TICKETS_FILE)
-    return captures, tk.evaluate(catalog, captures)
+    return (captures, tk.evaluate(catalog, captures),
+            discovery.discover(captures, catalog))
 
 
 def _degradation_reason(exc: Exception) -> str:
@@ -311,6 +313,7 @@ def run_analysis(
     no_field: bool = False,
     har_captures: Sequence[Any] = (),
     tickets: Sequence[Any] = (),
+    proposals: Sequence[Any] = (),
 ) -> Report:
     """Run the full analysis pipeline over a campaign's runs.
 
@@ -436,7 +439,7 @@ def run_analysis(
         generated_at=generated_at or datetime.now(timezone.utc),
         model=model, knowledge_digest=digest, trends=series, field=field,
         summary_degradation=summary_degradation,
-        har_captures=har_captures, tickets=tickets,
+        har_captures=har_captures, tickets=tickets, proposals=proposals,
     )
 
 
@@ -636,7 +639,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     try:
-        captures, outcomes = load_har_evidence(args.har, args.tickets)
+        captures, outcomes, proposals = load_har_evidence(args.har, args.tickets)
     except (OSError, ValueError, KeyError) as exc:
         print(f"Could not use the HAR captures: {exc}", file=sys.stderr)
         return 1
@@ -651,6 +654,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         settings=settings, use_priors=args.use_priors, top_k=args.top_k,
         page_analyses_out=collected, llm_disabled=args.no_llm,
         no_field=args.no_field, har_captures=captures, tickets=outcomes,
+        proposals=proposals,
     )
 
     target = output_dir / report.cover.campaign_id
@@ -677,6 +681,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"{len(report.pages)} page(s), verdict={report.cover.verdict}, "
         f"mode={report.meta.analysis_mode}"
     )
+    if captures:
+        confirmed = sum(1 for t in report.tickets if t.status == "confirmed")
+        print(f"tickets: {confirmed} of {len(report.tickets)} confirmed; "
+              f"{sum(1 for p in report.proposals if not p.tracked_by)} new "
+              "ticket(s) proposed")
     if budget is not None and llm_client is not None:
         print(budget.summary_line(), file=sys.stderr)
     return 0
