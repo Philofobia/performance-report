@@ -1,12 +1,12 @@
 # Core runtime (pinned for reproducibility per SECURITY_PLAN.md §2.7)
 # Versions marked "verified" match the project venv (pip freeze from Phase 0).
 # Packages not yet installed are pinned to current stable releases (verify on install).
-pydantic==2.14.1          # verified in venv
-PyYAML==6.0.3             # verified in venv
+pydantic==2.14.4          # verified in venv
+PyYAML==6.0.4             # verified in venv
 python-dotenv==1.2.4      # verified in venv
-numpy==2.5.4              # exact top-k cosine for RAG retrieval (store/vectordb.py);
+numpy==2.5.5              # exact top-k cosine for RAG retrieval (store/vectordb.py);
                           # replaces chromadb - see PROJECT_SPEC.md 8, decision #6
-google-genai==2.31.0      # sole LLM + embeddings client (litellm dropped: 19 CVEs
+google-genai==3.6.1      # sole LLM + embeddings client (litellm dropped: 19 CVEs
                           # at the pinned version, unused, and spec-optional)
 jinja2==3.1.6             # verified in venv
 matplotlib==3.11.2        # 3.10.4 was never published; broke CI install
@@ -19,7 +19,7 @@ matplotlib==3.11.2        # 3.10.4 was never published; broke CI install
                           # (ingest.manual, ingest.automated, analysis, report)
                           # and nothing ever imported it. Do not re-add without
                           # a caller.
-playwright==1.64.0        # verified in venv (chromium installed)
+playwright==1.65.2        # verified in venv (chromium installed)
 pillow==13.0.0            # verified in venv (arrived with matplotlib); now a
                           # direct dependency — report/images.py downscales
                           # screenshots for the appendix. Pinned explicitly
@@ -30,6 +30,6 @@ pytest==9.2.0             # verified in venv
 pytest-asyncio==1.5.0     # verified in venv
 pytest-mock==3.17.0       # verified in venv
 pytest-cov==7.1.0         # verified in venv
-pypdf==6.21.1             # reads the rendered PDF back in the live Oakley e2e
+pypdf==7.1.1             # reads the rendered PDF back in the live Oakley e2e
                           # test (tests/e2e/oakley_report_e2e_test.py); pure
                           # Python, no dependencies
